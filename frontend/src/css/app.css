@@ -152,6 +152,11 @@ a {
   margin-bottom: 18px;
 }
 
+.toolbar-row > .q-tabs {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .toolbar-actions {
   display: flex;
   flex-wrap: wrap;
@@ -290,6 +295,10 @@ a {
 
   .section-card {
     border-radius: 18px;
+  }
+
+  .toolbar-row > .q-tabs {
+    width: 100%;
   }
 }
 

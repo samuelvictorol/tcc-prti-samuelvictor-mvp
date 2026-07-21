@@ -1,3 +1,59 @@
+<script>
+const AUTOMATIC_CONTACT_VARIABLES = new Set(['displayName', 'email', 'phone', 'telegramUsername'])
+
+export function notificationTemplateVariableDefinitions(template = {}, channel = '') {
+  const definitions = new Map()
+  const add = (raw, fallback = {}) => {
+    const key = String(typeof raw === 'string' ? raw : raw?.key || raw?.name || '').trim()
+    if (!key || AUTOMATIC_CONTACT_VARIABLES.has(key)) return
+    const source = typeof raw === 'object' && raw ? raw : {}
+    const existing = definitions.get(key) || {}
+    definitions.set(key, {
+      key,
+      label: source.label || existing.label || fallback.label || key,
+      type: source.type || existing.type || fallback.type || 'text',
+      example: source.example ?? existing.example ?? fallback.example ?? '',
+      channels: [...new Set([...(existing.channels || []), channel].filter(Boolean))],
+    })
+  }
+
+  const declared = Array.isArray(template.variables)
+    ? template.variables
+    : String(template.variables || '').split(',').map((item) => item.trim()).filter(Boolean)
+  declared.forEach((item) => add(item))
+
+  const content = [template.subject, template.body, template.html]
+    .filter((item) => typeof item === 'string')
+    .join('\n')
+  for (const match of content.matchAll(/{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}/g)) add(match[1])
+
+  for (const component of template.payload?.builder?.components || []) {
+    for (const parameter of component.parameters || []) {
+      add(parameter, {
+        label: parameter.label,
+        type: parameter.type,
+        example: parameter.example,
+      })
+    }
+  }
+  return [...definitions.values()]
+}
+
+export function mergeNotificationVariableDefinitions(entries = []) {
+  const merged = new Map()
+  for (const { template, channel } of entries) {
+    for (const definition of notificationTemplateVariableDefinitions(template, channel)) {
+      const existing = merged.get(definition.key)
+      merged.set(definition.key, existing ? {
+        ...existing,
+        channels: [...new Set([...(existing.channels || []), ...(definition.channels || [])])],
+      } : definition)
+    }
+  }
+  return [...merged.values()]
+}
+</script>
+
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
@@ -24,48 +80,81 @@ const form = reactive({
   message: '',
   subject: '',
   templateId: null,
-  variablesJson: '{\n  "nome": "{{nome}}"\n}',
+  templateIds: { telegram: null, whatsapp_cloud: null, email: null },
+  variableValues: {},
 })
 
 const channels = computed(() => [
   { label: 'Telegram', value: 'telegram', icon: 'send_to_mobile', enabled: app.isChannelEnabled('telegram') },
-  { label: 'WhatsApp Web', value: 'whatsapp_web', icon: 'forum', enabled: app.isChannelEnabled('whatsappWeb') },
   { label: 'WhatsApp Cloud', value: 'whatsapp_cloud', icon: 'cloud_sync', enabled: app.isChannelEnabled('whatsappCloud') },
   { label: 'Email', value: 'email', icon: 'mail', enabled: app.isChannelEnabled('email') },
 ])
 
 const enabledChannelOptions = computed(() => channels.value.filter((channel) => channel.enabled))
 const enabledChannelNames = computed(() => enabledChannelOptions.value.map((channel) => channel.label).join(', '))
-const quickChannelOptions = computed(() => [
-  ...enabledChannelOptions.value,
-  {
-    label: 'Todos os canais disponíveis',
-    value: 'global',
-    icon: 'hub',
-    enabled: enabledChannelOptions.value.length > 0,
-    disable: enabledChannelOptions.value.length === 0,
-  },
-])
-const contactOptions = computed(() => contacts.value.map((item) => ({ label: item.name || item.email || item.phone, value: item.id || item._id })))
+const quickEnabledChannelOptions = computed(() => enabledChannelOptions.value.filter((channel) => channel.value !== 'whatsapp_cloud'))
+const templateEnabledChannelOptions = computed(() => enabledChannelOptions.value.filter((channel) => channel.value !== 'whatsapp_cloud'))
+const dispatchChannelOptions = computed(() => tab.value === 'quick'
+  ? quickEnabledChannelOptions.value
+  : tab.value === 'template'
+    ? templateEnabledChannelOptions.value
+    : enabledChannelOptions.value)
+const contactOptions = computed(() => contacts.value.map((item) => ({
+  label: item.displayName || item.name || item.email || item.phone || item.telegramUsername || 'Contato sem nome',
+  value: item.id || item._id,
+})))
 const groupOptions = computed(() => groups.value.map((item) => ({ label: item.name, value: item.id || item._id })))
 const templateOptions = computed(() => templates.value
   .filter((template) => {
-    if (tab.value === 'global') return (template.channel || template.type) === 'global'
     if (!form.channel) return true
     const channel = String(template.channel || template.type || '').replaceAll('-', '_')
-    return form.channel === channel
+    return template.active !== false && form.channel === channel
   })
   .map((item) => ({
     label: `${item.name || item.title} · ${item.channel || item.type}`,
     value: item.id || item._id,
   })))
 
+function templatesForChannel(channel) {
+  return templates.value
+    .filter((template) => template.active !== false && String(template.channel || template.type || '').replaceAll('-', '_') === channel)
+    .map((template) => ({
+      label: template.name || template.title || 'Template sem nome',
+      description: template.description || template.subject || String(template.body || '').slice(0, 90),
+      value: template.id || template._id,
+    }))
+}
+
+function templateById(id) {
+  return templates.value.find((template) => String(template.id || template._id) === String(id)) || null
+}
+
+const selectedTemplate = computed(() => templateById(form.templateId))
+const selectedGlobalTemplates = computed(() => enabledChannelOptions.value
+  .map((channel) => ({ channel: channel.value, template: templateById(form.templateIds[channel.value]) }))
+  .filter((entry) => entry.template))
+const variableDefinitions = computed(() => tab.value === 'global'
+  ? mergeNotificationVariableDefinitions(selectedGlobalTemplates.value)
+  : tab.value === 'template' && selectedTemplate.value
+    ? notificationTemplateVariableDefinitions(selectedTemplate.value, form.channel)
+    : [])
+
 const selectedRecipients = computed(() => form.contactIds.length + form.groupIds.length)
 
-watch([enabledChannelOptions, tab], ([options, currentTab]) => {
+function newIdempotencyKey(prefix) {
+  const value = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return `${prefix}-${value}`
+}
+
+watch([dispatchChannelOptions, tab], ([options, currentTab]) => {
   if (currentTab === 'global') return
-  if (currentTab === 'quick' && form.channel === 'global' && options.length) return
   if (!options.some((channel) => channel.value === form.channel)) form.channel = options[0]?.value || null
+})
+
+watch(() => form.channel, () => {
+  if (tab.value === 'template' && !templateOptions.value.some((option) => option.value === form.templateId)) {
+    form.templateId = null
+  }
 })
 
 const deliveryColumns = [
@@ -79,6 +168,7 @@ const deliveryColumns = [
 function statusColor(status = '') {
   return {
     delivered: 'positive',
+    read: 'positive',
     sent: 'positive',
     queued: 'info',
     processing: 'info',
@@ -87,6 +177,19 @@ function statusColor(status = '') {
     failed: 'negative',
     cancelled: 'grey-7',
   }[String(status).toLowerCase()] || 'grey-7'
+}
+
+function variableInputType(definition = {}) {
+  return ['image', 'video', 'document'].includes(definition.type) ? 'url' : 'text'
+}
+
+function variableHint(definition = {}) {
+  const channelNamesByValue = Object.fromEntries(channels.value.map((channel) => [channel.value, channel.label]))
+  const usedBy = (definition.channels || []).map((channel) => channelNamesByValue[channel] || channel).join(', ')
+  const example = definition.example === undefined || definition.example === null || definition.example === ''
+    ? ''
+    : `Exemplo: ${definition.example}`
+  return [usedBy ? `Usado em ${usedBy}` : '', example].filter(Boolean).join(' · ')
 }
 
 function formatDate(value) {
@@ -108,7 +211,7 @@ async function loadData() {
     groups.value = groupItems
     templates.value = templateItems
     deliveries.value = asList(unwrap(notificationResponse), 'notifications')
-    if (!form.channel && enabledChannelOptions.value.length) form.channel = enabledChannelOptions.value[0].value
+    if (!form.channel && dispatchChannelOptions.value.length) form.channel = dispatchChannelOptions.value[0].value
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível preparar o disparador.') })
   } finally {
@@ -117,20 +220,22 @@ async function loadData() {
 }
 
 function buildPayload() {
-  let variables = {}
-  if (tab.value !== 'quick' && form.variablesJson.trim()) {
-    try {
-      variables = JSON.parse(form.variablesJson)
-    } catch {
-      throw new Error('O JSON de variáveis é inválido.')
-    }
-  }
+  const variables = Object.fromEntries(variableDefinitions.value
+    .map((definition) => [definition.key, form.variableValues[definition.key]])
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== ''))
+  const templateIds = tab.value === 'global'
+    ? Object.fromEntries(enabledChannelOptions.value
+        .map((channel) => [channel.value, form.templateIds[channel.value]])
+        .filter(([, value]) => Boolean(value)))
+    : undefined
   return {
     kind: tab.value,
     contactIds: form.contactIds,
     groupIds: form.groupIds,
     channel: notificationChannel(tab.value, form.channel),
-    templateId: tab.value === 'quick' ? undefined : form.templateId,
+    idempotencyKey: newIdempotencyKey(`notification-${tab.value}`),
+    templateId: tab.value === 'template' ? form.templateId : undefined,
+    templateIds,
     content: {
       text: tab.value === 'quick' ? form.message : undefined,
       subject: tab.value === 'quick' ? form.subject || undefined : undefined,
@@ -150,14 +255,23 @@ async function send() {
     return
   }
   if (tab.value !== 'quick' && !form.templateId) {
-    $q.notify({ type: 'warning', message: 'Selecione um template.' })
-    return
+    if (tab.value === 'template') {
+      $q.notify({ type: 'warning', message: 'Selecione um template.' })
+      return
+    }
   }
-  if (sendsToAllAvailable && !enabledChannelOptions.value.length) {
+  if (tab.value === 'global') {
+    const missing = enabledChannelOptions.value.filter((channel) => !form.templateIds[channel.value])
+    if (missing.length) {
+      $q.notify({ type: 'warning', message: `Selecione o template de: ${missing.map((channel) => channel.label).join(', ')}.` })
+      return
+    }
+  }
+  if (sendsToAllAvailable && !dispatchChannelOptions.value.length) {
     $q.notify({ type: 'warning', message: 'Configure ao menos um canal antes do disparo global.' })
     return
   }
-  if (!sendsToAllAvailable && !enabledChannelOptions.value.some((channel) => channel.value === form.channel)) {
+  if (!sendsToAllAvailable && !dispatchChannelOptions.value.some((channel) => channel.value === form.channel)) {
     $q.notify({ type: 'warning', message: 'Escolha um canal configurado para este teste manual.' })
     return
   }
@@ -173,7 +287,7 @@ async function send() {
   $q.dialog({
     title: 'Confirmar disparo',
     message: sendsToAllAvailable
-      ? `A API tentará ${enabledChannelOptions.value.length} canal(is) configurado(s) para cada contato, enviando apenas onde houver autorização. Canais indisponíveis serão ignorados. Deseja continuar?`
+      ? `A API tentará ${dispatchChannelOptions.value.length} canal(is) configurado(s) para cada contato, enviando apenas onde houver autorização. Canais indisponíveis serão ignorados. Deseja continuar?`
       : `A API validará o consentimento no canal escolhido para ${selectedRecipients.value} seleção(ões). Deseja continuar?`,
     cancel: { flat: true, label: 'Revisar' },
     ok: { color: 'primary', label: 'Colocar na fila' },
@@ -201,6 +315,9 @@ async function send() {
       if (queued > 0) {
         form.message = ''
         form.templateId = null
+        if (tab.value === 'global') {
+          form.templateIds = { telegram: null, whatsapp_cloud: null, email: null }
+        }
       }
       await loadData()
     } catch (error) {
@@ -242,9 +359,15 @@ onMounted(loadData)
               <q-icon name="hub" size="24px" />
               <div>
                 <strong>Todos os canais disponíveis para cada contato</strong>
-                <span v-if="enabledChannelOptions.length">Ativos agora: {{ enabledChannelNames }}. Canais sem configuração ou sem autorização do contato serão ignorados sem bloquear os demais.</span>
+                <span v-if="enabledChannelOptions.length">Ativos agora: {{ enabledChannelNames }}. Escolha um template próprio para cada canal; contatos sem autorização serão ignorados sem bloquear os demais.</span>
                 <span v-else>Configure ao menos um canal. Os demais poderão continuar vazios.</span>
               </div>
+            </div>
+            <div v-else-if="panel === 'template' && app.isChannelEnabled('whatsappCloud')" class="global-note q-mb-md">
+              <q-icon name="cloud_sync" size="24px" />
+              <div><strong>WhatsApp oficial usa um formulário próprio</strong><span>Nome aprovado, componentes e permissões são montados sem JSON na tela do canal.</span></div>
+              <q-space />
+              <q-btn flat color="primary" no-caps label="Abrir WhatsApp oficial" to="/whatsapp-cloud" />
             </div>
 
             <div class="form-grid">
@@ -278,7 +401,7 @@ onMounted(loadData)
                 outlined
                 emit-value
                 map-options
-                :options="panel === 'quick' ? quickChannelOptions : enabledChannelOptions"
+                :options="panel === 'quick' ? quickEnabledChannelOptions : templateEnabledChannelOptions"
                 :label="panel === 'quick' ? 'Enviar por' : 'Canal do template'"
                 class="full-span"
               >
@@ -291,10 +414,62 @@ onMounted(loadData)
                 <q-input v-model="form.subject" outlined label="Assunto (email)" class="full-span" />
                 <q-input v-model="form.message" outlined type="textarea" autogrow label="Mensagem *" class="full-span" />
               </template>
-              <template v-else>
+              <template v-else-if="panel === 'template'">
                 <q-select v-model="form.templateId" outlined emit-value map-options :options="templateOptions" label="Template *" class="full-span" />
-                <q-input v-model="form.variablesJson" outlined type="textarea" label="Variáveis em JSON" class="full-span input-code" />
               </template>
+              <template v-else>
+                <section class="full-span global-template-grid" aria-label="Templates do envio global">
+                  <article v-for="channel in enabledChannelOptions" :key="channel.value" class="global-template-card">
+                    <header>
+                      <q-icon :name="channel.icon" color="primary" size="23px" />
+                      <div><strong>{{ channel.label }}</strong><span>Template deste canal</span></div>
+                    </header>
+                    <q-select
+                      v-model="form.templateIds[channel.value]"
+                      outlined
+                      clearable
+                      emit-value
+                      map-options
+                      :options="templatesForChannel(channel.value)"
+                      :label="`Template ${channel.label} *`"
+                      :hint="templatesForChannel(channel.value).length ? 'Somente templates ativos deste canal' : 'Cadastre um template para continuar'"
+                    >
+                      <template #option="scope">
+                        <q-item v-bind="scope.itemProps">
+                          <q-item-section>
+                            <q-item-label>{{ scope.opt.label }}</q-item-label>
+                            <q-item-label v-if="scope.opt.description" caption>{{ scope.opt.description }}</q-item-label>
+                          </q-item-section>
+                        </q-item>
+                      </template>
+                    </q-select>
+                  </article>
+                </section>
+              </template>
+
+              <section v-if="panel !== 'quick' && variableDefinitions.length" class="full-span variable-fields">
+                <div class="variable-fields__heading">
+                  <q-icon name="tune" color="primary" />
+                  <div><strong>Dados variáveis</strong><span>O sistema monta o payload; preencha somente os campos usados pelos templates escolhidos.</span></div>
+                </div>
+                <div class="variable-fields__grid">
+                  <q-input
+                    v-for="definition in variableDefinitions"
+                    :key="definition.key"
+                    v-model="form.variableValues[definition.key]"
+                    outlined
+                    clearable
+                    :type="variableInputType(definition)"
+                    :label="definition.label"
+                    :hint="variableHint(definition)"
+                    :placeholder="definition.example === undefined ? undefined : String(definition.example || '')"
+                  />
+                </div>
+              </section>
+              <q-banner v-else-if="panel !== 'quick' && (panel !== 'global' || selectedGlobalTemplates.length)" rounded class="full-span no-variable-banner">
+                <template #avatar><q-icon name="check_circle" color="positive" /></template>
+                Os templates escolhidos não exigem valores adicionais.
+              </q-banner>
             </div>
           </q-tab-panel>
         </q-tab-panels>
@@ -303,7 +478,7 @@ onMounted(loadData)
           <div><span>Destinos selecionados</span><strong>{{ selectedRecipients }}</strong></div>
           <div>
             <span>Canal</span>
-            <strong>{{ tab === 'global' || form.channel === 'global' ? `${enabledChannelOptions.length} disponível(is)` : (enabledChannelOptions.find((item) => item.value === form.channel)?.label || '—') }}</strong>
+            <strong>{{ tab === 'global' || form.channel === 'global' ? `${dispatchChannelOptions.length} disponível(is)` : (dispatchChannelOptions.find((item) => item.value === form.channel)?.label || '—') }}</strong>
           </div>
           <q-space />
           <q-btn color="dark" unelevated no-caps size="lg" icon-right="send" label="Revisar e enviar" :loading="sending" @click="send" />
@@ -378,9 +553,65 @@ onMounted(loadData)
   font-size: 0.78rem;
 }
 
-.input-code :deep(textarea) {
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 0.82rem;
+.global-template-grid,
+.variable-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.global-template-grid {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+
+.global-template-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(53, 188, 164, 0.2);
+  border-radius: 15px;
+  background: rgba(247, 254, 252, 0.76);
+}
+
+.global-template-card header,
+.variable-fields__heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.global-template-card header {
+  margin-bottom: 12px;
+}
+
+.global-template-card header strong,
+.global-template-card header span,
+.variable-fields__heading strong,
+.variable-fields__heading span {
+  display: block;
+}
+
+.global-template-card header span,
+.variable-fields__heading span {
+  color: #667a77;
+  font-size: 0.72rem;
+}
+
+.variable-fields {
+  padding: 15px;
+  border: 1px solid rgba(36, 123, 160, 0.16);
+  border-radius: 15px;
+  background: rgba(234, 249, 255, 0.5);
+}
+
+.variable-fields__grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.no-variable-banner {
+  border: 1px solid rgba(39, 183, 159, 0.18);
+  background: rgba(39, 183, 159, 0.07);
+  color: #385c56;
 }
 
 .send-summary {

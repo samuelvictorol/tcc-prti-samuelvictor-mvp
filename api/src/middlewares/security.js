@@ -49,6 +49,14 @@ const apiLimiter = rateLimit({
   windowMs: env.rateLimitWindowMs,
   limit: env.rateLimitMax,
   standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  skip: (req) => String(req.originalUrl || '').startsWith(env.apiPrefix + '/webhooks/')
+});
+
+const webhookLimiter = rateLimit({
+  windowMs: env.rateLimitWindowMs,
+  limit: env.webhookRateLimitMax,
+  standardHeaders: 'draft-7',
   legacyHeaders: false
 });
 
@@ -60,4 +68,4 @@ const authLimiter = rateLimit({
   skipSuccessfulRequests: true
 });
 
-module.exports = { requestContext, ipBlock, registerSecurityStrike, apiLimiter, authLimiter };
+module.exports = { requestContext, ipBlock, registerSecurityStrike, apiLimiter, webhookLimiter, authLimiter };

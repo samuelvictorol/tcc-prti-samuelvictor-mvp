@@ -1,6 +1,6 @@
 # Notify Flow
 
-Painel administrativo multicanal para cadastrar contatos, registrar consentimentos e enviar notificações por Telegram Bot API, WhatsApp Web, WhatsApp Cloud API e Gmail. O projeto separa o backend Express em `api/`, o frontend Quasar/Vue em `frontend/` e mantém a orquestração em `docker-compose.yml` na raiz.
+Painel administrativo multicanal para cadastrar contatos, registrar consentimentos e enviar notificações por Telegram Bot API, WhatsApp Cloud API e Gmail. O WhatsApp Web fica isolado como monitor de conversas e chat direto. O projeto separa o backend Express em `api/`, o frontend Quasar/Vue em `frontend/` e mantém a orquestração em `docker-compose.yml` na raiz.
 
 > **MVP operacional, não um serviço de spam.** O escopo de grupos é revalidado ao iniciar o job, e contato, canal e consentimento são revalidados em cada entrega. Clique em convite não é tratado como consentimento por si só. As limitações verificadas dos provedores estão em [`docs/CHANNELS.md`](docs/CHANNELS.md).
 
@@ -105,16 +105,18 @@ Controllers não acessam models e não chamam outros controllers. O autoloader p
 
 Na tela **Início**, cada provedor é salvo separadamente. Um canal incompleto ou vazio não impede configurar nem testar outro. Valores sensíveis são write-only: respostas da API informam somente se o valor está configurado e qual é sua origem (`environment` ou `runtime`). O menu e a rota do canal repetem a verificação no backend.
 
+O mesmo painel permite alterar `START_NOTIFY_WHATSAPP_PERMISSION` (`/notify-me` por padrão). WhatsApp Web e WhatsApp Cloud registram toda pessoa que envia uma mensagem para que o atendimento possa visualizar a conversa, mas as identidades começam sem autorização de envio. Quando a pessoa envia exatamente o comando configurado por qualquer uma das duas integrações, a aplicação correlaciona o contato e autoriza WhatsApp Web e WhatsApp Cloud em conjunto. A identidade real de origem é concedida imediatamente; a contraparte existente também é concedida e auditada. Se a contraparte ainda não existir, a intenção fica pendente e só é consumida quando o provedor identificar aquela identidade real, sem criar um destino sintético. As duas permissões continuam armazenadas separadamente e um administrador pode conceder ou revogar cada uma de forma individual. Telefones e IDs do provedor são correlacionados para atualizar o contato existente sem duplicá-lo.
+
 - **Telegram:** requer somente o token do bot para envios. Ao salvá-lo, a aplicação consulta `getMe` e mostra automaticamente o nome e o `@username` oficiais, sem campo manual. O webhook é opcional para outbound, mas necessário para receber `/start`, mensagens e mudanças de associação; ao registrá-lo, a API gera um segredo seguro se nenhum tiver sido informado. Uma URL HTTPS raiz do ngrok recebe automaticamente `/api/webhooks/telegram`.
 - **Gmail:** requer usuário, remetente e App Password.
 - **WhatsApp Cloud:** requer access token, phone number ID, verify token e app secret para assinatura do webhook.
-- **WhatsApp Web:** requer uma sessão realmente autenticada; a simples geração de QR não libera o menu.
+- **WhatsApp Web:** requer uma sessão realmente autenticada; a simples geração de QR não libera o monitor de chat.
 
 ### 3. WhatsApp Web
 
 1. O administrador solicita um novo QR.
 2. A API inicializa `whatsapp-web.js` e Chromium sob demanda, publica o QR por Socket.IO e mantém somente uma instância da sessão.
-3. Depois do scan e do evento `ready`, a UI libera chats, envio rápido/template e criação de grupo interno a partir dos chats.
+3. Depois do scan e do evento `ready`, a UI libera exclusivamente o monitor. Toda conversa recebida aparece no atendimento, mas o campo de resposta fica bloqueado até o contato enviar o comando configurado por WhatsApp Web ou Cloud, que autoriza ambas as integrações WhatsApp, ou até uma decisão administrativa confirmada para a permissão Web. WhatsApp Web não participa de templates, notificações ou disparos em massa.
 4. A sessão fica em volume persistente. `WHATSAPP_WEB_SESSION_MAX_AGE_DAYS` impõe a expiração local (90 dias por padrão); desconexão ou logout remoto também a invalida.
 
 ### 4. Convite público e consentimento
@@ -127,7 +129,7 @@ Na tela **Início**, cada provedor é salvo separadamente. Um canal incompleto o
 
 ### 5. Contatos, grupos e opt-out
 
-Um contato pode ter nenhum ou vários canais. Cada identidade possui endereço criptografado, blind index, origem da interação, autorização e estado de consentimento independentes. Grupos internos têm origem `manual`, `telegram`, `whatsapp_web`, `whatsapp_cloud` ou `email`, imagem quando disponível e podem armazenar um destino externo do canal.
+Um contato pode ter nenhum ou vários canais. Cada identidade possui endereço criptografado, blind index, origem da interação, autorização e estado de consentimento independentes. O comando automático do WhatsApp é uma regra coordenada que concede Web e Cloud ao mesmo tempo; depois disso, os estados continuam independentes para revogação ou concessão administrativa. Grupos internos têm origem `manual`, `telegram`, `whatsapp_web`, `whatsapp_cloud` ou `email`, imagem quando disponível e podem armazenar um destino externo do canal.
 
 Revogação, `/stop`, bloqueio do bot, exclusão ou `notificationDisabled` torna o destino inelegível imediatamente. Remover um grupo remove o agrupamento, não os contatos que pertenciam a ele. Remover um contato também retira suas referências dos grupos e mantém apenas a evidência mínima necessária de supressão/auditoria.
 
@@ -136,8 +138,9 @@ Revogação, `/stop`, bloqueio do bot, exclusão ou `notificationDisabled` torna
 - Templates são filtrados por canal e `templateType`.
 - Gmail aceita `subject`, texto e HTML; a UI mostra preview sanitizado.
 - WhatsApp Cloud pode guardar o nome externo, idioma e componentes de um template aprovado pela Meta.
-- O template global referencia variantes por canal; ele não tenta reutilizar o mesmo payload incompatível.
-- Envio rápido usa conteúdo informado na hora e permite escolher um canal ou **Todos os canais disponíveis**; envio por template resolve a variante do canal.
+- Telegram oferece templates de texto, foto, vídeo e menus hierárquicos construídos por formulário; mídia remota é validada e enviada pelo servidor. Somente o e-mail aceita HTML.
+- O disparo global não aceita mensagem rápida nem um payload genérico: o administrador escolhe separadamente um template de Telegram, um template oficial do WhatsApp Cloud e/ou um template de e-mail.
+- Envio rápido continua disponível apenas para um canal específico compatível. WhatsApp Web permanece fora desse fluxo.
 - Um disparo global expande contatos e grupos, remove duplicados e avalia separadamente cada combinação contato/canal. Apenas canais configurados, prontos e autorizados entram na fila; os demais ficam como `skipped` sem bloquear os envios elegíveis.
 - A fila Redis aplica tentativas com backoff. O worker recompõe os grupos ao iniciar o job e revalida contato, consentimento e configuração antes de cada chamada ao provedor.
 - `Idempotency-Key`/`idempotencyKey` evita criar a mesma campanha duas vezes.
@@ -145,12 +148,12 @@ Revogação, `/stop`, bloqueio do bot, exclusão ou `notificationDisabled` torna
 
 ## Menus do frontend
 
-- **Início:** status dos serviços, credenciais runtime, QR do WhatsApp Web e console paginado/realtime.
+- **Início:** status dos serviços, credenciais runtime, acesso à conexão do monitor WhatsApp Web e console paginado/realtime.
 - **Contatos:** busca, CRUD, canais/consentimentos e grupos.
 - **Templates:** CRUD por canal, payload específico e preview de e-mail.
 - **Notificações:** envio rápido/template/global e histórico das entregas.
 - **Telegram:** identidade oficial do bot, interações conhecidas, destinos de grupo, envio rápido/template e mensagens recentes atualizadas por Socket.IO enquanto a página estiver aberta. O botão de sincronização continua disponível para uma atualização manual.
-- **WhatsApp Web:** caixa responsiva de chats, avatar quando disponível e ações de envio/grupo.
+- **WhatsApp Web:** caixa responsiva para monitorar, responder e remover conversas diretas já autorizadas pelo comando; não envia notificações ou campanhas.
 - **WhatsApp Cloud:** configuração protegida, envio e eventos do webhook.
 - **Gmail:** texto/HTML, preview e envio.
 - **Convites:** CRUD, links e acesso à página pública.

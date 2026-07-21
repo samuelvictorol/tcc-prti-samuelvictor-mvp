@@ -3,6 +3,8 @@ const Template = require('../models/template.model');
 const ApiError = require('../utils/api-error');
 const { parsePagination, pageResult } = require('../utils/pagination');
 const { normalizeOfficialTemplateDefinition } = require('../utils/whatsapp-cloud-templates');
+const { telegramTemplateDefinition } = require('../dtos/templates.dto');
+const { telegramDefinitionFromTemplate, telegramTemplateBody, extractVariables } = require('../utils/telegram-templates');
 
 function clean(input) {
   const output = { ...input };
@@ -41,13 +43,32 @@ function clean(input) {
 }
 
 function validateTemplate(input) {
+  if (input.channel === 'whatsapp_web') {
+    throw new ApiError(422, 'WhatsApp Web possui somente chat direto e nao aceita templates', null, 'WHATSAPP_WEB_DIRECT_ONLY');
+  }
   if (input.channel === 'email' && !input.body && !input.html) throw new ApiError(422, 'Template de email exige body ou html');
+  if (input.channel !== 'email' && input.html) throw new ApiError(422, 'Somente templates de email aceitam HTML', null, 'HTML_EMAIL_ONLY');
   if (input.channel === 'global' && (!input.variants || typeof input.variants !== 'object')) throw new ApiError(422, 'Template global exige variants por canal');
+  if (input.channel === 'global') {
+    for (const [channel, variant] of Object.entries(input.variants || {})) {
+      if (channel !== 'email' && variant?.html) throw new ApiError(422, 'Somente a variante de email aceita HTML', { channel }, 'HTML_EMAIL_ONLY');
+    }
+  }
+  if (input.channel === 'telegram') {
+    const keys = Object.keys(input.payload || {});
+    if (keys.some((key) => key !== 'telegram')) throw new ApiError(422, 'Template Telegram aceita somente a definicao amigavel do canal', null, 'TELEGRAM_PAYLOAD_INVALID');
+    const parsed = telegramTemplateDefinition.safeParse(input.payload?.telegram);
+    if (!parsed.success) {
+      throw new ApiError(422, 'Template Telegram invalido', {
+        fields: parsed.error.issues.slice(0, 20).map((issue) => ({ path: issue.path.join('.'), message: issue.message }))
+      }, 'TELEGRAM_TEMPLATE_INVALID');
+    }
+  }
   if (input.channel === 'whatsapp_cloud' && !input.whatsappCloudPreset) {
     throw new ApiError(
       422,
-      'Selecione um dos tres modelos oficiais disponiveis para WhatsApp Cloud',
-      { allowedPresets: ['order_confirmation', 'plain_text', 'hello_world'] },
+      'Selecione um preset ou informe um template oficial personalizado',
+      { allowedPresets: ['order_confirmation', 'plain_text', 'hello_world', 'custom'] },
       'WHATSAPP_TEMPLATE_PRESET_REQUIRED'
     );
   }
@@ -57,6 +78,20 @@ function normalize(input) {
   if (input.channel === 'whatsapp_cloud') {
     const normalized = normalizeOfficialTemplateDefinition(input);
     return { ...normalized, templateType: normalized.templateType || 'approved_template' };
+  }
+  if (input.channel === 'telegram') {
+    const definition = telegramDefinitionFromTemplate(input);
+    const parsed = telegramTemplateDefinition.safeParse(definition);
+    const normalizedDefinition = parsed.success ? parsed.data : definition;
+    return {
+      ...input,
+      subject: null,
+      html: null,
+      templateType: 'telegram_' + String(normalizedDefinition.kind || 'text'),
+      body: telegramTemplateBody(normalizedDefinition),
+      payload: { telegram: normalizedDefinition },
+      variables: [...new Set([...(input.variables || []), ...extractVariables(normalizedDefinition)])]
+    };
   }
   return { ...input, templateType: input.templateType || 'text' };
 }
@@ -95,7 +130,7 @@ async function update(id, input, actorId) {
   const normalized = normalize(merged);
   validateTemplate(normalized);
   const changed = Object.fromEntries(Object.keys(input).map((key) => [key, normalized[key]]));
-  for (const derivedKey of ['templateType', 'whatsappCloudPreset', 'externalTemplateName', 'languageCode', 'body', 'payload']) {
+  for (const derivedKey of ['templateType', 'whatsappCloudPreset', 'externalTemplateName', 'languageCode', 'body', 'html', 'subject', 'payload', 'variables']) {
     if (normalized[derivedKey] !== existing[derivedKey]) changed[derivedKey] = normalized[derivedKey];
   }
   const template = await Template.findByIdAndUpdate(id, { $set: { ...clean(changed), updatedBy: actorId } }, { new: true, runValidators: true }).lean();

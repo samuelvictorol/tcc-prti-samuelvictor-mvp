@@ -47,8 +47,8 @@ export function notificationChannel(kind, selectedChannel) {
   return kind === 'global' ? 'global' : selectedChannel
 }
 
-export function sendsToAllAvailableChannels(kind, selectedChannel) {
-  return kind === 'global' || (kind === 'quick' && selectedChannel === 'global')
+export function sendsToAllAvailableChannels(kind, _selectedChannel) {
+  return kind === 'global'
 }
 
 export function notificationDeliveryCounts(result = {}) {

@@ -65,5 +65,19 @@ export const useAppStore = defineStore('app', {
       await this.fetchStatus(true)
       return result
     },
+    updateChannelStatus(channel, value = {}) {
+      const keys = aliases[channel] || [channel]
+      const canonical = keys[0]
+      this.status = {
+        ...this.status,
+        [canonical]: value,
+        channels: {
+          ...(this.status?.channels || {}),
+          [canonical]: value,
+        },
+      }
+      this.statusLoaded = true
+      return value
+    },
   },
 })

@@ -16,10 +16,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=dependencies /app/node_modules ./node_modules
-COPY . .
-RUN mkdir -p /app/.wwebjs_auth /app/.wwebjs_cache \
-    && chown -R node:node /app
+COPY --from=dependencies --chown=node:node /app/node_modules ./node_modules
+COPY --chown=node:node . .
+RUN install -d -o node -g node /app/.wwebjs_auth /app/.wwebjs_cache
 USER node
 EXPOSE 3000
 CMD ["node", "src/server.js"]

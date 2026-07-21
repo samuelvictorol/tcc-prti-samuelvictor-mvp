@@ -1,12 +1,20 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ContactDialog from '../components/ContactDialog.vue'
-import { errorMessage, fetchAll, http } from '../services/http.js'
+import { errorMessage, fetchAll, http, unwrap } from '../services/http.js'
+import {
+  automaticRegistrationSources,
+  contactIdentitySummaries,
+  identityConsentProvenance,
+} from '../services/contact-identities.js'
 
 const $q = useQuasar()
+const route = useRoute()
+const router = useRouter()
 const tab = ref('contacts')
 const loading = ref(false)
 const saving = ref(false)
@@ -16,24 +24,15 @@ const groups = ref([])
 const dialog = ref(false)
 const contactDialog = ref(false)
 const editingContact = ref(null)
-const mode = ref('contact')
 const editingId = ref(null)
+let openingQueryContact = false
 
-const emptyContact = () => ({
-  name: '',
-  email: '',
-  phone: '',
-  telegramUsername: '',
-  notes: '',
-  consents: { email: false, telegram: false, whatsappWeb: false, whatsappCloud: false },
-})
 const emptyGroup = () => ({ name: '', description: '', contactIds: [], source: 'manual' })
-const contactForm = reactive(emptyContact())
 const groupForm = reactive(emptyGroup())
 
 const contactColumns = [
   { name: 'name', label: 'Contato', field: 'name', align: 'left', sortable: true },
-  { name: 'channels', label: 'Canais autorizados', field: 'channels', align: 'left' },
+  { name: 'channels', label: 'Notificações e chat', field: 'channels', align: 'left' },
   { name: 'updatedAt', label: 'Atualizado', field: 'updatedAt', align: 'left', sortable: true },
   { name: 'actions', label: '', field: 'actions', align: 'right' },
 ]
@@ -54,7 +53,17 @@ const filteredContacts = computed(() => {
   const needle = search.value.trim().toLowerCase()
   if (!needle) return contacts.value
   return contacts.value.filter((contact) =>
-    [contact.displayName, contact.name, contact.email, contact.phone, contact.telegramUsername]
+    [
+      contact.displayName,
+      contact.name,
+      contact.email,
+      contact.phone,
+      contact.telegramUsername,
+      ...(Array.isArray(contact.channels) ? contact.channels.flatMap((identity) => [
+        identity?.address,
+        ...Object.values(identity?.metadata || {}),
+      ]) : []),
+    ]
       .some((value) => String(value || '').toLowerCase().includes(needle)),
   )
 })
@@ -76,14 +85,14 @@ function normalizeConsents(contact) {
   const source = contact.consents || contact.channels || {}
   if (Array.isArray(source)) {
     return {
-      email: source.some((item) => (typeof item === 'string' ? item === 'email' : item.channel === 'email' && (item.authorized || item.consentStatus === 'granted'))),
-      telegram: source.some((item) => (typeof item === 'string' ? item === 'telegram' : item.channel === 'telegram' && (item.authorized || item.consentStatus === 'granted'))),
+      email: source.some((item) => (typeof item === 'string' ? item === 'email' : item.channel === 'email' && item.authorized && item.consentStatus === 'granted')),
+      telegram: source.some((item) => (typeof item === 'string' ? item === 'telegram' : item.channel === 'telegram' && item.authorized && item.consentStatus === 'granted')),
       whatsappWeb: source.some((item) => typeof item === 'string'
         ? ['whatsappWeb', 'whatsapp-web', 'whatsapp_web'].includes(item)
-        : ['whatsappWeb', 'whatsapp-web', 'whatsapp_web'].includes(item.channel) && (item.authorized || item.consentStatus === 'granted')),
+        : ['whatsappWeb', 'whatsapp-web', 'whatsapp_web'].includes(item.channel) && item.authorized && item.consentStatus === 'granted'),
       whatsappCloud: source.some((item) => typeof item === 'string'
         ? ['whatsappCloud', 'whatsapp-cloud', 'whatsapp_cloud'].includes(item)
-        : ['whatsappCloud', 'whatsapp-cloud', 'whatsapp_cloud'].includes(item.channel) && (item.authorized || item.consentStatus === 'granted')),
+        : ['whatsappCloud', 'whatsapp-cloud', 'whatsapp_cloud'].includes(item.channel) && item.authorized && item.consentStatus === 'granted'),
     }
   }
   return {
@@ -104,6 +113,26 @@ function channelLabels(contact) {
   ].filter(([key]) => consent[key]).map(([, label]) => label)
 }
 
+function hasWhatsappWebChat(contact) {
+  const channels = Array.isArray(contact?.channels) ? contact.channels : []
+  return channels.some((item) => String(typeof item === 'string' ? item : item?.channel).replaceAll('-', '_') === 'whatsapp_web')
+}
+
+function whatsappWebIdentity(contact) {
+  const channels = Array.isArray(contact?.channels) ? contact.channels : []
+  return channels.find((item) => String(item?.channel || '').replaceAll('-', '_') === 'whatsapp_web') || null
+}
+
+function isIdentityAuthorized(identity) {
+  return Boolean(identity?.authorized && identity?.consentStatus === 'granted')
+}
+
+function visibleIdentitySummaries(contact) {
+  return contactIdentitySummaries(contact)
+    .filter((summary) => ['telegram', 'whatsapp_cloud', 'whatsapp_web'].includes(summary.channel))
+    .map((summary) => ({ ...summary, consent: identityConsentProvenance(summary.identity) }))
+}
+
 function memberCount(group) {
   return group.contactCount ?? group.memberCount ?? group.contacts?.length ?? group.contactIds?.length ?? group.members?.length ?? 0
 }
@@ -122,10 +151,33 @@ async function loadData() {
     ])
     contacts.value = contactItems
     groups.value = groupItems
+    await openContactFromQuery()
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível carregar contatos e grupos.') })
   } finally {
     loading.value = false
+  }
+}
+
+async function openContactFromQuery() {
+  const id = String(route.query.contactId || route.query.editContact || '').trim()
+  if (!id || openingQueryContact) return
+  openingQueryContact = true
+  try {
+    let contact = contacts.value.find((item) => String(recordId(item)) === id)
+    if (!contact) contact = unwrap(await http.get(`/contacts/${id}`))
+    if (contact) {
+      editingContact.value = contact
+      contactDialog.value = true
+    }
+    const query = { ...route.query }
+    delete query.contactId
+    delete query.editContact
+    await router.replace({ query })
+  } catch (error) {
+    $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível abrir o contato indicado.') })
+  } finally {
+    openingQueryContact = false
   }
 }
 
@@ -135,9 +187,7 @@ function openCreate(kind) {
     contactDialog.value = true
     return
   }
-  mode.value = kind
   editingId.value = null
-  Object.assign(contactForm, emptyContact())
   Object.assign(groupForm, emptyGroup())
   dialog.value = true
 }
@@ -148,25 +198,13 @@ function openEdit(kind, record) {
     contactDialog.value = true
     return
   }
-  mode.value = kind
   editingId.value = recordId(record)
-  if (kind === 'contact') {
-    Object.assign(contactForm, emptyContact(), {
-      name: record.name || '',
-      email: record.email || '',
-      phone: record.phone || '',
-      telegramUsername: record.telegramUsername || record.telegram_username || '',
-      notes: record.notes || '',
-      consents: normalizeConsents(record),
-    })
-  } else {
-    Object.assign(groupForm, emptyGroup(), {
-      name: record.name || '',
-      description: record.description || '',
-      source: record.source || 'manual',
-      contactIds: (record.contactIds || record.contacts || record.members || []).map((item) => typeof item === 'object' ? recordId(item) : item),
-    })
-  }
+  Object.assign(groupForm, emptyGroup(), {
+    name: record.name || '',
+    description: record.description || '',
+    source: record.source || 'manual',
+    contactIds: (record.contactIds || record.contacts || record.members || []).map((item) => typeof item === 'object' ? recordId(item) : item),
+  })
   dialog.value = true
 }
 
@@ -208,6 +246,7 @@ function remove(kind, record) {
 }
 
 onMounted(loadData)
+watch(() => route.query.contactId || route.query.editContact, openContactFromQuery)
 </script>
 
 <template>
@@ -264,6 +303,16 @@ onMounted(loadData)
                   <div>
                     <strong>{{ props.row.displayName || props.row.name || 'Sem nome' }}</strong>
                     <span>{{ props.row.email || props.row.phone || props.row.telegramUsername || 'Sem identificador' }}</span>
+                    <div v-if="automaticRegistrationSources(props.row).length" class="automatic-origin-badges">
+                      <q-badge
+                        v-for="source in automaticRegistrationSources(props.row)"
+                        :key="source"
+                        outline
+                        color="positive"
+                        icon="auto_awesome"
+                        :label="`Cadastro automático: ${source}`"
+                      />
+                    </div>
                   </div>
                 </div>
               </q-td>
@@ -272,7 +321,38 @@ onMounted(loadData)
               <q-td :props="props">
                 <div class="channel-badges">
                   <q-badge v-for="channel in channelLabels(props.row)" :key="channel" outline color="primary" :label="channel" />
-                  <span v-if="!channelLabels(props.row).length" class="text-muted">Nenhum consentimento</span>
+                  <q-badge
+                    v-if="hasWhatsappWebChat(props.row) && !isIdentityAuthorized(whatsappWebIdentity(props.row))"
+                    outline
+                    color="warning"
+                    text-color="dark"
+                    icon="visibility"
+                    label="WhatsApp Web: somente leitura"
+                  />
+                  <span v-if="!channelLabels(props.row).length && !hasWhatsappWebChat(props.row)" class="text-muted">Nenhuma autorização</span>
+                </div>
+                <div v-if="visibleIdentitySummaries(props.row).length" class="provider-id-list">
+                  <div
+                    v-for="summary in visibleIdentitySummaries(props.row)"
+                    :key="summary.identity.id || `${summary.channel}:${summary.identity.address}`"
+                    class="provider-id-row"
+                  >
+                    <span class="provider-id-row__channel">
+                      <q-icon :name="summary.icon" />{{ summary.label }}
+                      <q-badge
+                        dense
+                        outline
+                        :color="isIdentityAuthorized(summary.identity) ? 'positive' : 'grey-7'"
+                        :label="isIdentityAuthorized(summary.identity) ? 'Autorizado' : 'Identificado'"
+                      />
+                    </span>
+                    <div class="provider-id-row__values">
+                      <code v-for="identifier in summary.identifiers" :key="identifier.key">{{ identifier.label }}: {{ identifier.value }}</code>
+                    </div>
+                    <small v-if="summary.consent.changedByAdmin || summary.consent.automaticCommand" class="provider-id-row__consent">
+                      {{ summary.consent.label }}
+                    </small>
+                  </div>
                 </div>
               </q-td>
             </template>
@@ -313,31 +393,14 @@ onMounted(loadData)
     <q-dialog v-model="dialog" persistent>
       <q-card class="dialog-card">
         <q-card-section class="row items-center">
-          <div class="text-h6 text-weight-bold">{{ editingId ? 'Editar' : 'Novo' }} {{ mode === 'contact' ? 'contato' : 'grupo' }}</div>
+          <div class="text-h6 text-weight-bold">{{ editingId ? 'Editar grupo' : 'Novo grupo' }}</div>
           <q-space />
           <q-btn v-close-popup flat round dense icon="close" aria-label="Fechar" />
         </q-card-section>
         <q-separator />
         <q-form @submit.prevent="save">
           <q-card-section class="q-pa-lg">
-            <div v-if="mode === 'contact'" class="form-grid">
-              <q-input v-model.trim="contactForm.name" outlined label="Nome *" :rules="[(value) => Boolean(value) || 'Informe o nome']" />
-              <q-input v-model.trim="contactForm.email" outlined type="email" label="Email" />
-              <q-input v-model.trim="contactForm.phone" outlined label="Telefone" hint="Inclua o código do país" />
-              <q-input v-model.trim="contactForm.telegramUsername" outlined label="Usuário do Telegram" prefix="@" />
-              <q-input v-model="contactForm.notes" outlined type="textarea" label="Observações" class="full-span" />
-              <div class="full-span consent-box">
-                <div class="text-weight-bold">Consentimentos confirmados</div>
-                <div class="text-caption text-muted q-mb-sm">Marque apenas canais autorizados. Interações verificadas pela API podem atualizar estes campos.</div>
-                <div class="row q-gutter-md">
-                  <q-checkbox v-model="contactForm.consents.telegram" label="Telegram" />
-                  <q-checkbox v-model="contactForm.consents.whatsappWeb" label="WhatsApp Web" />
-                  <q-checkbox v-model="contactForm.consents.whatsappCloud" label="WhatsApp Cloud" />
-                  <q-checkbox v-model="contactForm.consents.email" label="Email" />
-                </div>
-              </div>
-            </div>
-            <div v-else class="form-grid">
+            <div class="form-grid">
               <q-input v-model.trim="groupForm.name" outlined label="Nome do grupo *" :rules="[(value) => Boolean(value) || 'Informe o nome']" />
               <q-input model-value="Manual" outlined label="Origem" disable />
               <q-input v-model="groupForm.description" outlined type="textarea" label="Descrição" class="full-span" />
@@ -383,10 +446,59 @@ onMounted(loadData)
   font-size: 0.77rem;
 }
 
+.automatic-origin-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
 .channel-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+}
+
+.provider-id-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.provider-id-row {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.provider-id-row__channel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #49645f;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.provider-id-row__consent {
+  color: #55706c;
+  font-size: 0.65rem;
+}
+
+.provider-id-row__values {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+}
+
+.provider-id-row code {
+  max-width: 310px;
+  overflow: hidden;
+  color: #607773;
+  font-size: 0.63rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .consent-box {
@@ -394,5 +506,11 @@ onMounted(loadData)
   border: 1px solid rgba(53, 188, 164, 0.2);
   border-radius: 15px;
   background: rgba(130, 248, 230, 0.09);
+}
+
+@media (max-width: 640px) {
+  .provider-id-row code {
+    max-width: 72vw;
+  }
 }
 </style>

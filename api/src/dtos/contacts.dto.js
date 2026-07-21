@@ -1,6 +1,17 @@
 const { z, idParams, booleanQuery, paginationQuery } = require('./common.dto');
 const { DELIVERY_CHANNELS } = require('../enums/channels');
 
+function publicIdentityMetadata(metadata) {
+  return Object.fromEntries(Object.entries(metadata || {}).filter(([key]) => {
+    const normalized = String(key).replace(/[_-]/g, '').toLowerCase();
+    return normalized !== 'consentsource'
+      && normalized !== 'consentcommand'
+      && !normalized.startsWith('consentchanged')
+      && normalized !== 'permissioncommandreceived'
+      && normalized !== 'autoregisteredvia';
+  }));
+}
+
 const channelIdentity = z.object({
   channel: z.enum(DELIVERY_CHANNELS),
   address: z.string().min(1).max(500),
@@ -9,6 +20,16 @@ const channelIdentity = z.object({
   source: z.string().max(80).optional(),
   interactedAt: z.coerce.date().optional(),
   metadata: z.record(z.unknown()).optional()
+});
+
+// Consentimento nunca nasce do payload de cadastro manual. Campos de permissao
+// enviados por clientes antigos sao removidos pelo Zod e a concessao segue pelo
+// endpoint dedicado, que tambem cria o evento de auditoria.
+const manualChannelIdentity = z.object({
+  channel: z.enum(DELIVERY_CHANNELS),
+  address: z.string().min(1).max(500),
+  interactedAt: z.coerce.date().optional(),
+  metadata: z.record(z.unknown()).transform(publicIdentityMetadata).optional()
 });
 
 const contactBody = z.object({
@@ -24,7 +45,9 @@ const contactBody = z.object({
   metadata: z.record(z.unknown()).optional()
 });
 
-const createContactSchema = z.object({ body: contactBody });
+const createContactSchema = z.object({
+  body: contactBody.extend({ channels: z.array(manualChannelIdentity).max(10).optional() })
+});
 const updateContactSchema = z.object({ params: idParams, body: contactBody.partial().refine((body) => Object.keys(body).length > 0) });
 const contactIdSchema = z.object({ params: idParams });
 const listContactsSchema = z.object({
@@ -36,4 +59,4 @@ const listContactsSchema = z.object({
   })
 });
 
-module.exports = { createContactSchema, updateContactSchema, contactIdSchema, listContactsSchema, channelIdentity };
+module.exports = { createContactSchema, updateContactSchema, contactIdSchema, listContactsSchema, channelIdentity, manualChannelIdentity };

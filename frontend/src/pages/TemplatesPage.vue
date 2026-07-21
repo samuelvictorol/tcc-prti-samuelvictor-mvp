@@ -33,7 +33,133 @@ export const WHATSAPP_CLOUD_PRESETS = Object.freeze([
   }),
 ])
 
+export const CUSTOM_WHATSAPP_CLOUD_TEMPLATE = Object.freeze({
+  value: 'custom',
+  label: 'Outro template oficial',
+  description: 'Cadastre pelo nome exato aprovado na Meta e monte os campos sem escrever JSON.',
+  templateName: '',
+  languageCode: 'pt_BR',
+  preview: 'Preencha a descrição e os campos do template oficial.',
+  parameters: Object.freeze([]),
+})
+
+export const META_COMPONENT_OPTIONS = Object.freeze([
+  Object.freeze({ label: 'Cabeçalho', value: 'header' }),
+  Object.freeze({ label: 'Corpo', value: 'body' }),
+  Object.freeze({ label: 'Botão', value: 'button' }),
+])
+
+export const META_PARAMETER_OPTIONS = Object.freeze([
+  Object.freeze({ label: 'Texto', value: 'text' }),
+  Object.freeze({ label: 'Moeda', value: 'currency' }),
+  Object.freeze({ label: 'Data e hora', value: 'date_time' }),
+  Object.freeze({ label: 'Imagem (URL)', value: 'image' }),
+  Object.freeze({ label: 'Documento (URL)', value: 'document' }),
+  Object.freeze({ label: 'Vídeo (URL)', value: 'video' }),
+  Object.freeze({ label: 'Payload do botão', value: 'payload' }),
+  Object.freeze({ label: 'Código do cupom', value: 'coupon_code' }),
+])
+
+let cloudBuilderSequence = 0
+
+function nextCloudBuilderId(prefix) {
+  cloudBuilderSequence += 1
+  return `${prefix}-${Date.now()}-${cloudBuilderSequence}`
+}
+
+export function normalizeCloudVariableKey(value, fallback = 'campo') {
+  let normalized = String(value || '')
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_]/g, '')
+  if (normalized && !/^[a-zA-Z]/.test(normalized)) normalized = `campo_${normalized}`
+  return normalized || fallback
+}
+
+export function createCloudParameter(overrides = {}) {
+  return {
+    id: overrides.id || nextCloudBuilderId('parameter'),
+    type: overrides.type || 'text',
+    key: overrides.key || '',
+    parameterName: overrides.parameterName || overrides.parameter_name || '',
+    label: overrides.label || '',
+    example: overrides.example || '',
+    currencyCode: overrides.currencyCode || 'BRL',
+    filename: overrides.filename || '',
+  }
+}
+
+export function createCloudComponent(overrides = {}) {
+  return {
+    id: overrides.id || nextCloudBuilderId('component'),
+    type: overrides.type || 'body',
+    subType: overrides.subType || 'url',
+    index: String(overrides.index ?? 0),
+    parameters: (overrides.parameters || []).map((parameter) => createCloudParameter(parameter)),
+  }
+}
+
+export function buildCustomWhatsAppCloudDefinition(input) {
+  const builderComponents = (input.components || []).map((component, componentIndex) => ({
+    id: component.id,
+    type: component.type,
+    ...(component.type === 'button' ? {
+      subType: component.subType,
+      index: String(component.index ?? 0),
+    } : {}),
+    parameters: (component.parameters || []).map((parameter, parameterIndex) => ({
+      id: parameter.id,
+      type: parameter.type,
+      key: normalizeCloudVariableKey(parameter.key || parameter.label, `campo_${componentIndex + 1}_${parameterIndex + 1}`),
+      parameterName: String(parameter.parameterName || '').trim() || undefined,
+      label: String(parameter.label || `Campo ${parameterIndex + 1}`).trim(),
+      example: String(parameter.example || '').trim(),
+      currencyCode: parameter.type === 'currency' ? String(parameter.currencyCode || 'BRL').toUpperCase() : undefined,
+      filename: parameter.type === 'document' ? String(parameter.filename || '').trim() || undefined : undefined,
+    })),
+  }))
+  const variables = builderComponents.flatMap((component) => component.parameters.map((parameter) => parameter.key))
+
+  return {
+    whatsappCloudPreset: 'custom',
+    templateType: 'approved_template',
+    externalTemplateName: String(input.templateName || '').trim(),
+    languageCode: String(input.languageCode || 'pt_BR').trim(),
+    description: String(input.description || '').trim(),
+    body: String(input.description || input.templateName || '').trim(),
+    variables,
+    payload: {
+      builder: { version: 1, components: builderComponents },
+    },
+  }
+}
+
+function placeholderKey(parameter, fallback) {
+  const candidate = parameter?.text || parameter?.payload || parameter?.coupon_code || parameter?.currency?.fallback_value || parameter?.date_time?.fallback_value || parameter?.image?.link || parameter?.document?.link || parameter?.video?.link || ''
+  return String(candidate).match(/{{\s*([a-zA-Z0-9_]+)\s*}}/)?.[1] || fallback
+}
+
+export function cloudBuilderFromTemplate(template = {}) {
+  const stored = template.payload?.builder?.components
+  if (Array.isArray(stored)) return stored.map((component) => createCloudComponent(component))
+  return (template.payload?.components || []).map((component, componentIndex) => createCloudComponent({
+    type: component.type,
+    subType: component.sub_type,
+    index: component.index,
+    parameters: (component.parameters || []).map((parameter, parameterIndex) => ({
+      type: parameter.type === 'payload' ? 'payload' : parameter.type,
+      key: placeholderKey(parameter, `campo_${componentIndex + 1}_${parameterIndex + 1}`),
+      parameterName: parameter.parameter_name || '',
+      label: `Campo ${parameterIndex + 1}`,
+      example: '',
+      currencyCode: parameter.currency?.code || 'BRL',
+      filename: parameter.document?.filename || '',
+    })),
+  }))
+}
+
 export function findWhatsAppCloudPreset(value) {
+  if (value === 'custom') return CUSTOM_WHATSAPP_CLOUD_TEMPLATE
   return WHATSAPP_CLOUD_PRESETS.find((preset) => (
     preset.value === value || preset.templateName === value
   )) || WHATSAPP_CLOUD_PRESETS[0]
@@ -77,7 +203,16 @@ import DOMPurify from 'dompurify'
 import { useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
+import TelegramTemplateBuilder from '../components/TelegramTemplateBuilder.vue'
 import { errorMessage, fetchAll, http } from '../services/http.js'
+import {
+  createTelegramDefinition,
+  normalizeTelegramDefinition,
+  telegramDefinitionBody,
+  telegramDefinitionError,
+  telegramDefinitionFromTemplate,
+  telegramVariables,
+} from '../services/telegram-templates.js'
 
 const $q = useQuasar()
 const loading = ref(false)
@@ -90,13 +225,11 @@ const templates = ref([])
 
 const channelOptions = [
   { label: 'Telegram', value: 'telegram', icon: 'send_to_mobile' },
-  { label: 'WhatsApp Web', value: 'whatsapp_web', icon: 'forum' },
   { label: 'WhatsApp Cloud', value: 'whatsapp_cloud', icon: 'cloud_sync' },
   { label: 'Email', value: 'email', icon: 'mail' },
-  { label: 'Global', value: 'global', icon: 'hub' },
 ]
 
-const cloudPresetOptions = WHATSAPP_CLOUD_PRESETS.map((preset) => ({
+const cloudPresetOptions = [...WHATSAPP_CLOUD_PRESETS, CUSTOM_WHATSAPP_CLOUD_TEMPLATE].map((preset) => ({
   label: preset.label,
   value: preset.value,
   description: preset.description,
@@ -108,15 +241,21 @@ const emptyForm = () => ({
   format: 'text',
   subject: '',
   body: '',
+  description: '',
   cloudPreset: 'order_confirmation',
-  payloadJson: '{}',
-  variantsJson: '{\n  "telegram": { "text": "", "body": "" },\n  "whatsapp_web": { "text": "", "body": "" },\n  "whatsapp_cloud": { "externalTemplateName": "", "components": [] },\n  "email": { "subject": "", "html": "" }\n}',
+  cloudComponents: [],
   variablesText: '',
   metadata: { approvedName: '', language: 'pt_BR' },
+  telegramDefinition: createTelegramDefinition('text'),
 })
 const form = reactive(emptyForm())
 const selectedCloudPreset = computed(() => findWhatsAppCloudPreset(form.cloudPreset))
-const cloudPreviewText = computed(() => renderWhatsAppCloudPreview(form.cloudPreset))
+const isCustomCloudTemplate = computed(() => form.channel === 'whatsapp_cloud' && form.cloudPreset === 'custom')
+const cloudPreviewText = computed(() => (
+  isCustomCloudTemplate.value
+    ? form.description || form.metadata.approvedName || 'Descreva o conteúdo aprovado na Meta.'
+    : renderWhatsAppCloudPreview(form.cloudPreset)
+))
 
 const columns = [
   { name: 'name', label: 'Template', field: 'name', align: 'left', sortable: true },
@@ -130,6 +269,7 @@ const filteredTemplates = computed(() => {
   const needle = search.value.toLowerCase().trim()
   return templates.value.filter((template) => {
     const channel = normalizedChannel(template.channel || template.type)
+    if (channel === 'whatsapp_web') return false
     const matchesTab = tab.value === 'all' || channel === tab.value
     const matchesSearch = !needle || [template.name, template.subject, template.body]
       .some((value) => String(value || '').toLowerCase().includes(needle))
@@ -141,11 +281,19 @@ const safePreview = computed(() => {
   if (form.channel === 'whatsapp_cloud') {
     return DOMPurify.sanitize(`<p>${cloudPreviewText.value}</p>`)
   }
-  const body = form.body || '<p class="text-muted">Comece a escrever para visualizar o conteúdo.</p>'
-  if (form.format === 'html' || form.channel === 'email') {
+  if (form.channel === 'telegram') {
+    const text = telegramDefinitionBody(form.telegramDefinition) || 'Comece a escrever para visualizar o conteúdo.'
+    const escaped = document.createElement('div')
+    escaped.textContent = text
+    return `<p>${escaped.innerHTML.replace(/\n/g, '<br>')}</p>`
+  }
+  const body = form.body || 'Comece a escrever para visualizar o conteúdo.'
+  if (form.channel === 'email' && form.format === 'html') {
     return DOMPurify.sanitize(body, { USE_PROFILES: { html: true } })
   }
-  return DOMPurify.sanitize(`<p>${body.replace(/\n/g, '<br>')}</p>`)
+  const escaped = document.createElement('div')
+  escaped.textContent = body
+  return `<p>${escaped.innerHTML.replace(/\n/g, '<br>')}</p>`
 })
 
 function recordId(record) {
@@ -161,10 +309,12 @@ function normalizedChannel(value = '') {
 }
 
 function channelLabel(value) {
+  if (normalizedChannel(value) === 'global') return 'Global (legado)'
   return channelOptions.find((option) => option.value === normalizedChannel(value))?.label || value || '—'
 }
 
 function channelIcon(value) {
+  if (normalizedChannel(value) === 'global') return 'hub'
   return channelOptions.find((option) => option.value === normalizedChannel(value))?.icon || 'description'
 }
 
@@ -188,6 +338,7 @@ function openCreate(channel = tab.value) {
   editingId.value = null
   Object.assign(form, emptyForm(), { channel: channel === 'all' ? 'telegram' : channel })
   if (form.channel === 'email') form.format = 'html'
+  if (form.channel === 'telegram') form.format = 'telegram_text'
   if (form.channel === 'whatsapp_cloud') applyCloudPreset('order_confirmation', { suggestName: true })
   dialog.value = true
 }
@@ -198,6 +349,16 @@ function applyCloudPreset(value, { suggestName = false } = {}) {
   const canSuggestName = suggestName || !form.name || form.name === previousPreset.label
   form.cloudPreset = preset.value
   form.format = 'approved_template'
+  if (preset.value === 'custom') {
+    form.metadata.approvedName = ''
+    form.metadata.language = form.metadata.language || 'pt_BR'
+    form.description = ''
+    form.body = preset.preview
+    form.variablesText = ''
+    form.cloudComponents = []
+    if (canSuggestName) form.name = preset.label
+    return
+  }
   form.metadata.approvedName = preset.templateName
   form.metadata.language = preset.languageCode
   form.body = preset.preview
@@ -208,6 +369,11 @@ function applyCloudPreset(value, { suggestName = false } = {}) {
 function onChannelChange(value) {
   if (value === 'email') {
     form.format = 'html'
+    return
+  }
+  if (value === 'telegram') {
+    form.format = 'telegram_text'
+    form.telegramDefinition = createTelegramDefinition('text')
     return
   }
   if (value === 'whatsapp_cloud') {
@@ -221,11 +387,107 @@ function onCloudPresetChange(value) {
   applyCloudPreset(value, { suggestName: true })
 }
 
+function addCloudComponent() {
+  const usedTypes = new Set(form.cloudComponents.map((component) => component.type))
+  const type = !usedTypes.has('body') ? 'body' : !usedTypes.has('header') ? 'header' : 'button'
+  form.cloudComponents.push(createCloudComponent({ type, parameters: [] }))
+}
+
+function removeCloudComponent(index) {
+  form.cloudComponents.splice(index, 1)
+}
+
+function moveItem(list, index, direction) {
+  const target = index + direction
+  if (target < 0 || target >= list.length) return
+  const [item] = list.splice(index, 1)
+  list.splice(target, 0, item)
+}
+
+function addCloudParameter(component) {
+  if (['header', 'button'].includes(component.type) && component.parameters.length >= 1) {
+    $q.notify({ type: 'warning', message: component.type === 'header' ? 'O cabeçalho aceita somente um parâmetro.' : 'Cada botão aceita somente um parâmetro.' })
+    return
+  }
+  const usedKeys = new Set(form.cloudComponents.flatMap((item) => item.parameters.map((parameter) => parameter.key)))
+  let position = usedKeys.size + 1
+  while (usedKeys.has(`campo_${position}`)) position += 1
+  component.parameters.push(createCloudParameter({
+    type: component.type === 'button' && component.subType === 'copy_code'
+      ? 'coupon_code'
+      : component.type === 'button' && component.subType === 'quick_reply'
+        ? 'payload'
+        : 'text',
+    key: `campo_${position}`,
+    label: `Campo ${position}`,
+    example: '',
+  }))
+}
+
+function parameterOptionsFor(component) {
+  if (component.type === 'button') {
+    const allowed = component.subType === 'url'
+      ? ['text']
+      : component.subType === 'copy_code'
+        ? ['coupon_code']
+        : ['payload']
+    return META_PARAMETER_OPTIONS.filter((option) => allowed.includes(option.value))
+  }
+  if (component.type === 'body') return META_PARAMETER_OPTIONS.filter((option) => ['text', 'currency', 'date_time'].includes(option.value))
+  return META_PARAMETER_OPTIONS.filter((option) => ['text', 'image', 'document', 'video'].includes(option.value))
+}
+
+function onCloudComponentTypeChange(component) {
+  const allowed = new Set(parameterOptionsFor(component).map((option) => option.value))
+  const fallbackType = parameterOptionsFor(component)[0]?.value || 'text'
+  for (const parameter of component.parameters) {
+    if (!allowed.has(parameter.type)) parameter.type = fallbackType
+  }
+}
+
+function onCloudButtonSubTypeChange(component) {
+  onCloudComponentTypeChange(component)
+}
+
+function removeCloudParameter(component, index) {
+  component.parameters.splice(index, 1)
+}
+
+function customCloudValidationError() {
+  if (!form.metadata.approvedName.trim()) return 'Informe o nome exato aprovado na Meta.'
+  if (!/^[a-z0-9_]{1,512}$/.test(form.metadata.approvedName.trim())) return 'O nome Meta aceita somente letras minúsculas, números e sublinhado.'
+  if (!form.metadata.language.trim()) return 'Informe o idioma aprovado na Meta.'
+  if (!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(form.metadata.language.trim())) return 'Use um idioma Meta válido, como pt_BR ou en_US.'
+  const parameters = form.cloudComponents.flatMap((component) => component.parameters)
+  if (form.cloudComponents.filter((component) => component.type === 'header').length > 1) return 'Use no máximo um componente de cabeçalho.'
+  if (form.cloudComponents.filter((component) => component.type === 'body').length > 1) return 'Use no máximo um componente de corpo.'
+  if (form.cloudComponents.some((component) => ['header', 'button'].includes(component.type) && component.parameters.length > 1)) return 'Cabeçalhos e botões aceitam somente um parâmetro por componente.'
+  const buttonIndexes = form.cloudComponents.filter((component) => component.type === 'button').map((component) => String(component.index))
+  if (new Set(buttonIndexes).size !== buttonIndexes.length) return 'Cada botão deve usar um índice diferente.'
+  const keys = parameters.map((parameter, index) => normalizeCloudVariableKey(parameter.key || parameter.label, `campo_${index + 1}`))
+  if (keys.some((key) => !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key))) return 'As variáveis devem começar com letra e ter no máximo 64 caracteres.'
+  if (new Set(keys).size !== keys.length) return 'Cada parâmetro deve usar uma variável diferente.'
+  if (parameters.some((parameter) => !String(parameter.label || '').trim())) return 'Informe um rótulo para cada parâmetro.'
+  for (const component of form.cloudComponents) {
+    const metaNames = component.parameters.map((parameter) => String(parameter.parameterName || '').trim())
+    if (component.type === 'button' && metaNames.some(Boolean)) return 'Botões usam parâmetros posicionais; remova o nome Meta do botão.'
+    if (metaNames.some((name) => name && !/^[a-z][a-z0-9_]{0,63}$/.test(name))) return 'O nome do parâmetro na Meta aceita letras minúsculas, números e sublinhado.'
+    if (metaNames.some(Boolean) && !metaNames.every(Boolean)) return 'Em cada componente, use todos os parâmetros nomeados ou todos posicionais.'
+  }
+  if (parameters.some((parameter) => parameter.type === 'currency' && !/^[A-Za-z]{3}$/.test(parameter.currencyCode || ''))) return 'Parâmetros de moeda exigem um código ISO de três letras, como BRL.'
+  if (form.cloudComponents.some((component) => component.type === 'button' && !/^[0-9]$/.test(String(component.index)))) return 'O índice de cada botão deve estar entre 0 e 9.'
+  return null
+}
+
 function openEdit(template) {
+  const channel = normalizedChannel(template.channel || template.type)
+  if (channel === 'global') {
+    $q.notify({ type: 'info', message: 'Templates globais antigos ficam disponíveis apenas para consulta. Crie um template separado por canal.' })
+    return
+  }
   editingId.value = recordId(template)
   const metadata = template.metadata || {}
   const variables = template.variables || []
-  const channel = normalizedChannel(template.channel || template.type)
   const cloudPreset = findWhatsAppCloudPreset(template.whatsappCloudPreset || template.externalTemplateName).value
   Object.assign(form, emptyForm(), {
     name: template.name || template.title || '',
@@ -234,56 +496,57 @@ function openEdit(template) {
     format: template.templateType || template.format || (channel === 'email' && template.html ? 'html' : 'text'),
     subject: template.subject || '',
     body: template.html || template.body || template.content || template.message || '',
-    payloadJson: JSON.stringify(template.payload || {}, null, 2),
-    variantsJson: JSON.stringify(template.variants || {}, null, 2),
+    description: template.description || '',
+    cloudComponents: channel === 'whatsapp_cloud' && cloudPreset === 'custom' ? cloudBuilderFromTemplate(template) : [],
     variablesText: Array.isArray(variables) ? variables.join(', ') : String(variables || ''),
     metadata: {
       approvedName: template.externalTemplateName || metadata.approvedName || template.approvedName || '',
       language: template.languageCode || metadata.language || template.language || 'pt_BR',
     },
+    telegramDefinition: channel === 'telegram' ? telegramDefinitionFromTemplate(template) : createTelegramDefinition('text'),
   })
-  if (channel === 'whatsapp_cloud') applyCloudPreset(cloudPreset)
+  if (channel === 'whatsapp_cloud' && cloudPreset !== 'custom') applyCloudPreset(cloudPreset)
   dialog.value = true
 }
 
 async function save() {
   saving.value = true
-  let payloadJson = {}
-  let variants = {}
-  try {
-    if (form.channel === 'global') {
-      variants = JSON.parse(form.variantsJson || '{}')
-      if (!Object.keys(variants).length) throw new Error('Defina ao menos uma variante para o template global.')
-    } else if (form.channel !== 'whatsapp_cloud') {
-      payloadJson = JSON.parse(form.payloadJson || '{}')
-    }
-  } catch (error) {
-    $q.notify({ type: 'negative', message: `JSON inválido: ${error.message}` })
+  const validationError = isCustomCloudTemplate.value ? customCloudValidationError() : null
+  if (validationError) {
+    $q.notify({ type: 'warning', message: validationError })
     saving.value = false
     return
   }
-  if (form.channel === 'global') {
-    for (const channel of ['telegram', 'whatsapp_web']) {
-      if (!variants[channel]) continue
-      const text = variants[channel].text ?? variants[channel].body ?? ''
-      variants[channel] = { ...variants[channel], text, body: variants[channel].body ?? text }
-    }
+  const telegramDefinition = form.channel === 'telegram'
+    ? normalizeTelegramDefinition(form.telegramDefinition)
+    : null
+  const telegramError = telegramDefinition ? telegramDefinitionError(telegramDefinition) : null
+  if (telegramError) {
+    $q.notify({ type: 'warning', message: telegramError })
+    saving.value = false
+    return
   }
-  const nonEmptyPayload = Object.keys(payloadJson).length ? payloadJson : undefined
   const cloudDefinition = form.channel === 'whatsapp_cloud'
-    ? buildWhatsAppCloudTemplateDefinition(form.cloudPreset)
+    ? (isCustomCloudTemplate.value
+        ? buildCustomWhatsAppCloudDefinition({
+            templateName: form.metadata.approvedName,
+            languageCode: form.metadata.language,
+            description: form.description,
+            components: form.cloudComponents,
+          })
+        : buildWhatsAppCloudTemplateDefinition(form.cloudPreset))
     : null
   const payload = {
     name: form.name,
     channel: form.channel,
-    templateType: cloudDefinition?.templateType || form.format,
-    format: cloudDefinition?.templateType || form.format,
-    subject: form.subject || undefined,
-    body: cloudDefinition?.body || form.body,
+    templateType: cloudDefinition?.templateType || (telegramDefinition ? `telegram_${telegramDefinition.kind}` : form.format),
+    format: cloudDefinition?.templateType || (telegramDefinition ? `telegram_${telegramDefinition.kind}` : form.format),
+    subject: form.channel === 'email' ? form.subject || undefined : undefined,
+    description: cloudDefinition?.description || form.description || undefined,
+    body: cloudDefinition?.body || (telegramDefinition ? telegramDefinitionBody(telegramDefinition) : form.body),
     html: form.channel === 'email' && form.format === 'html' ? form.body : undefined,
-    variables: cloudDefinition?.variables || form.variablesText.split(',').map((item) => item.trim()).filter(Boolean),
-    payload: cloudDefinition?.payload || nonEmptyPayload,
-    variants: form.channel === 'global' ? variants : undefined,
+    variables: cloudDefinition?.variables || (telegramDefinition ? telegramVariables(telegramDefinition) : form.variablesText.split(',').map((item) => item.trim()).filter(Boolean)),
+    payload: cloudDefinition?.payload || (telegramDefinition ? { telegram: telegramDefinition } : null),
     whatsappCloudPreset: cloudDefinition?.whatsappCloudPreset,
     externalTemplateName: cloudDefinition?.externalTemplateName,
     languageCode: cloudDefinition?.languageCode,
@@ -353,7 +616,7 @@ onMounted(loadTemplates)
           <q-td :props="props">
             <div class="template-name">
               <span class="template-icon"><q-icon :name="channelIcon(props.row.channel || props.row.type)" /></span>
-              <div><strong>{{ props.row.name || props.row.title }}</strong><span>{{ props.row.subject || String(props.row.body || props.row.content || '').slice(0, 78) || 'Sem prévia' }}</span></div>
+              <div><strong>{{ props.row.name || props.row.title }}</strong><span>{{ props.row.description || props.row.subject || String(props.row.body || props.row.content || '').slice(0, 78) || 'Sem descrição' }}</span></div>
             </div>
           </q-td>
         </template>
@@ -366,7 +629,18 @@ onMounted(loadTemplates)
         <template #body-cell-updatedAt="props"><q-td :props="props">{{ formatDate(props.row.updatedAt) }}</q-td></template>
         <template #body-cell-actions="props">
           <q-td :props="props">
-            <q-btn flat round dense icon="edit" aria-label="Editar template" @click="openEdit(props.row)" />
+            <q-btn
+              v-if="normalizedChannel(props.row.channel || props.row.type) !== 'global'"
+              flat
+              round
+              dense
+              icon="edit"
+              aria-label="Editar template"
+              @click="openEdit(props.row)"
+            />
+            <q-icon v-else name="history" color="grey-6" size="20px">
+              <q-tooltip>Template global legado: somente leitura</q-tooltip>
+            </q-icon>
             <q-btn flat round dense color="negative" icon="delete" aria-label="Remover template" @click="remove(props.row)" />
           </q-td>
         </template>
@@ -419,7 +693,7 @@ onMounted(loadTemplates)
                     @update:model-value="onChannelChange"
                   />
                   <q-select
-                    v-if="form.channel !== 'whatsapp_cloud'"
+                    v-if="form.channel === 'email'"
                     v-model="form.format"
                     outlined
                     stack-label
@@ -440,13 +714,31 @@ onMounted(loadTemplates)
                 </div>
               </section>
 
-              <template v-if="form.channel === 'whatsapp_cloud'">
+              <template v-if="form.channel === 'telegram'">
+                <section class="builder-section telegram-template-section">
+                  <div class="section-heading">
+                    <span class="step-number">1</span>
+                    <div>
+                      <strong>Escolha a experiência no Telegram</strong>
+                      <span>Monte texto, mídia ou um fluxo de páginas sem escrever JSON.</span>
+                    </div>
+                  </div>
+                  <TelegramTemplateBuilder v-model="form.telegramDefinition" />
+                </section>
+                <q-banner rounded class="automatic-payload-banner">
+                  <template #avatar><q-icon name="auto_awesome" color="primary" /></template>
+                  <strong>Payload protegido e automático.</strong>
+                  O servidor converte este formulário para a Bot API, valida links e cria os callbacks dos submenus.
+                </q-banner>
+              </template>
+
+              <template v-else-if="form.channel === 'whatsapp_cloud'">
                 <section class="builder-section cloud-builder-section">
                   <div class="section-heading">
                     <span class="step-number">1</span>
                     <div>
                       <strong>Escolha o modelo oficial</strong>
-                      <span>Estes são os três modelos habilitados no ambiente de testes da Meta.</span>
+                      <span>Use um dos três exemplos de teste ou cadastre outro template já aprovado na Meta.</span>
                     </div>
                   </div>
 
@@ -472,7 +764,7 @@ onMounted(loadTemplates)
                     </template>
                   </q-select>
 
-                  <div class="official-fields">
+                  <div v-if="!isCustomCloudTemplate" class="official-fields">
                     <q-input
                       :model-value="selectedCloudPreset.templateName"
                       outlined
@@ -492,19 +784,136 @@ onMounted(loadTemplates)
                       class="template-field language-field"
                     />
                   </div>
+                  <div v-else class="custom-official-fields">
+                    <q-input
+                      v-model.trim="form.metadata.approvedName"
+                      outlined
+                      stack-label
+                      label="Nome exato aprovado na Meta *"
+                      hint="Exemplo: confirmacao_pagamento_v2"
+                      class="template-field full-span official-name-field"
+                      :rules="[(value) => Boolean(value) || 'Informe o nome oficial']"
+                    >
+                      <template #prepend><q-icon name="verified" color="primary" /></template>
+                    </q-input>
+                    <q-input
+                      v-model.trim="form.metadata.language"
+                      outlined
+                      stack-label
+                      label="Código do idioma *"
+                      hint="Exemplo: pt_BR ou en_US"
+                      class="template-field language-field"
+                      :rules="[(value) => Boolean(value) || 'Informe o idioma']"
+                    />
+                    <q-input
+                      v-model.trim="form.description"
+                      outlined
+                      stack-label
+                      type="textarea"
+                      autogrow
+                      label="Descrição para o operador"
+                      hint="Explique quando usar este template. A descrição aparecerá no disparo."
+                      class="template-field full-span"
+                    />
+                    <q-banner rounded class="meta-approved-reminder full-span">
+                      <template #avatar><q-icon name="info" color="primary" /></template>
+                      O Notify App envia templates existentes; a criação e aprovação do conteúdo continuam no painel da Meta.
+                    </q-banner>
+                  </div>
                 </section>
 
                 <section class="builder-section cloud-builder-section">
                   <div class="section-heading">
                     <span class="step-number">2</span>
                     <div>
-                      <strong>Campos da notificação</strong>
-                      <span v-if="selectedCloudPreset.parameters.length">O usuário preencherá estes valores na tela de disparo.</span>
+                      <strong>{{ isCustomCloudTemplate ? 'Componentes e parâmetros de envio' : 'Campos da notificação' }}</strong>
+                      <span v-if="isCustomCloudTemplate">Represente os componentes aprovados na mesma ordem da Meta; o sistema monta o payload de envio.</span>
+                      <span v-else-if="selectedCloudPreset.parameters.length">O usuário preencherá estes valores na tela de disparo.</span>
                       <span v-else>Este modelo não possui campos variáveis.</span>
                     </div>
                   </div>
 
-                  <div v-if="selectedCloudPreset.parameters.length" class="parameter-list">
+                  <div v-if="isCustomCloudTemplate" class="custom-components">
+                    <div class="component-toolbar">
+                      <span>{{ form.cloudComponents.length }} componente(s)</span>
+                      <q-btn outline color="primary" no-caps icon="add" label="Adicionar componente" @click="addCloudComponent" />
+                    </div>
+
+                    <q-banner v-if="!form.cloudComponents.length" rounded class="no-parameters-banner">
+                      <template #avatar><q-icon name="view_agenda" color="primary" /></template>
+                      Este template não envia componentes variáveis. Adicione somente se o modelo aprovado exigir parâmetros.
+                    </q-banner>
+
+                    <article v-for="(component, componentIndex) in form.cloudComponents" :key="component.id" class="component-card">
+                      <header class="component-card-header">
+                        <span class="component-order">{{ componentIndex + 1 }}</span>
+                        <div><strong>Componente</strong><span>Ordem idêntica ao template aprovado</span></div>
+                        <q-space />
+                        <q-btn flat round dense icon="arrow_upward" :disable="componentIndex === 0" aria-label="Mover componente para cima" @click="moveItem(form.cloudComponents, componentIndex, -1)" />
+                        <q-btn flat round dense icon="arrow_downward" :disable="componentIndex === form.cloudComponents.length - 1" aria-label="Mover componente para baixo" @click="moveItem(form.cloudComponents, componentIndex, 1)" />
+                        <q-btn flat round dense color="negative" icon="delete" aria-label="Remover componente" @click="removeCloudComponent(componentIndex)" />
+                      </header>
+
+                      <div class="component-fields">
+                        <q-select
+                          v-model="component.type"
+                          outlined
+                          stack-label
+                          emit-value
+                          map-options
+                          :options="META_COMPONENT_OPTIONS"
+                          label="Tipo do componente *"
+                          class="template-field"
+                          @update:model-value="onCloudComponentTypeChange(component)"
+                        />
+                        <template v-if="component.type === 'button'">
+                          <q-select
+                            v-model="component.subType"
+                            outlined
+                            stack-label
+                            emit-value
+                            map-options
+                            :options="[{ label: 'URL dinâmica', value: 'url' }, { label: 'Resposta rápida', value: 'quick_reply' }, { label: 'Copiar código', value: 'copy_code' }]"
+                            label="Tipo do botão"
+                            class="template-field"
+                            @update:model-value="onCloudButtonSubTypeChange(component)"
+                          />
+                          <q-input v-model="component.index" outlined stack-label type="number" min="0" label="Índice do botão" class="template-field" />
+                        </template>
+                      </div>
+
+                      <div class="parameters-heading">
+                        <div><strong>Parâmetros</strong><span>Valores que serão solicitados no disparo.</span></div>
+                        <q-btn flat color="primary" no-caps icon="add" label="Adicionar parâmetro" @click="addCloudParameter(component)" />
+                      </div>
+
+                      <div v-if="component.parameters.length" class="custom-parameter-list">
+                        <div v-for="(parameter, parameterIndex) in component.parameters" :key="parameter.id" class="custom-parameter-card">
+                          <div class="parameter-card-actions">
+                            <span>{{ componentIndex + 1 }}.{{ parameterIndex + 1 }}</span>
+                            <q-space />
+                            <q-btn flat round dense icon="arrow_upward" :disable="parameterIndex === 0" aria-label="Mover parâmetro para cima" @click="moveItem(component.parameters, parameterIndex, -1)" />
+                            <q-btn flat round dense icon="arrow_downward" :disable="parameterIndex === component.parameters.length - 1" aria-label="Mover parâmetro para baixo" @click="moveItem(component.parameters, parameterIndex, 1)" />
+                            <q-btn flat round dense color="negative" icon="close" aria-label="Remover parâmetro" @click="removeCloudParameter(component, parameterIndex)" />
+                          </div>
+                          <div class="parameter-fields-grid">
+                            <q-select v-model="parameter.type" outlined stack-label emit-value map-options :options="parameterOptionsFor(component)" label="Tipo Meta *" class="template-field" />
+                            <q-input v-model.trim="parameter.key" outlined stack-label maxlength="64" label="Variável interna *" hint="Exemplo: nome_cliente" class="template-field" @blur="parameter.key = normalizeCloudVariableKey(parameter.key)" />
+                            <q-input v-if="component.type !== 'button'" v-model.trim="parameter.parameterName" outlined stack-label maxlength="64" label="Nome do parâmetro na Meta" hint="Opcional. Preencha se o modelo usa {{nome_cliente}} em vez de {{1}}" class="template-field" />
+                            <q-input v-model.trim="parameter.label" outlined stack-label label="Rótulo no disparo *" hint="Exemplo: Nome do cliente" class="template-field" />
+                            <q-input v-model.trim="parameter.example" outlined stack-label label="Valor de exemplo" hint="Ajuda quem fará o envio" class="template-field" />
+                            <template v-if="parameter.type === 'currency'">
+                              <q-input v-model.trim="parameter.currencyCode" outlined stack-label maxlength="3" label="Código da moeda" hint="Exemplo: BRL" class="template-field" />
+                            </template>
+                            <q-input v-if="parameter.type === 'document'" v-model.trim="parameter.filename" outlined stack-label label="Nome do arquivo" hint="Opcional: comprovante.pdf" class="template-field" />
+                          </div>
+                        </div>
+                      </div>
+                      <div v-else class="no-component-parameters">Nenhum parâmetro neste componente.</div>
+                    </article>
+                  </div>
+
+                  <div v-else-if="selectedCloudPreset.parameters.length" class="parameter-list">
                     <div v-for="parameter in selectedCloudPreset.parameters" :key="parameter.key" class="parameter-row">
                       <span class="parameter-position">{{ parameter.position }}</span>
                       <div class="parameter-copy">
@@ -544,29 +953,11 @@ onMounted(loadTemplates)
                       hint="Separe por vírgula: nome, protocolo"
                       class="full-span template-field"
                     />
-                    <q-input
-                      v-if="form.channel !== 'global'"
-                      v-model="form.payloadJson"
-                      outlined
-                      stack-label
-                      type="textarea"
-                      label="Payload adicional (JSON)"
-                      class="full-span json-input template-field"
-                    />
-                    <q-input
-                      v-else
-                      v-model="form.variantsJson"
-                      outlined
-                      stack-label
-                      type="textarea"
-                      label="Variantes por canal (JSON) *"
-                      class="full-span json-input template-field"
-                    />
                   </div>
 
                   <div class="content-editor">
                     <div class="field-heading">Conteúdo *</div>
-                    <q-editor v-if="form.format === 'html'" v-model="form.body" min-height="260px" :toolbar="[['bold', 'italic', 'underline'], ['quote', 'unordered', 'ordered'], ['link'], ['undo', 'redo']]" />
+                    <q-editor v-if="form.channel === 'email' && form.format === 'html'" v-model="form.body" min-height="260px" :toolbar="[['bold', 'italic', 'underline'], ['quote', 'unordered', 'ordered'], ['link'], ['undo', 'redo']]" />
                     <q-input v-else v-model="form.body" outlined stack-label type="textarea" autogrow label="Mensagem" class="template-field" :rules="[(value) => Boolean(value) || 'Escreva a mensagem']" />
                   </div>
                 </section>
@@ -579,13 +970,17 @@ onMounted(loadTemplates)
                 <div v-if="form.channel === 'email'" class="preview-subject"><strong>Assunto:</strong> {{ form.subject || 'Sem assunto' }}</div>
                 <div v-if="form.channel === 'whatsapp_cloud'" class="preview-meta-header">
                   <q-icon name="verified" color="primary" />
-                  <div><strong>{{ selectedCloudPreset.label }}</strong><span>{{ selectedCloudPreset.templateName }}</span></div>
+                  <div>
+                    <strong>{{ isCustomCloudTemplate ? form.name || 'Template oficial' : selectedCloudPreset.label }}</strong>
+                    <span>{{ isCustomCloudTemplate ? form.metadata.approvedName || 'nome_exato_na_meta' : selectedCloudPreset.templateName }}</span>
+                  </div>
                 </div>
                 <div class="preview-frame" v-html="safePreview" />
               </div>
               <div class="preview-warning" :class="{ 'cloud-preview-note': form.channel === 'whatsapp_cloud' }">
                 <q-icon :name="form.channel === 'whatsapp_cloud' ? 'info' : 'security'" color="primary" />
                 <span v-if="form.channel === 'whatsapp_cloud'">A Meta controla o texto e o layout final. Esta prévia mostra apenas a posição dos valores do disparo.</span>
+                <span v-else-if="form.channel === 'telegram'">Somente texto simples é exibido; menus usam botões inline e mídias são validadas pelo servidor.</span>
                 <span v-else>HTML perigoso é removido da prévia. A API ainda deve sanitizar antes do envio.</span>
               </div>
             </aside>
@@ -750,6 +1145,23 @@ onMounted(loadTemplates)
   gap: 14px;
 }
 
+.custom-official-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 190px;
+  gap: 16px;
+}
+
+.custom-official-fields > .full-span {
+  grid-column: 1 / -1;
+}
+
+.meta-approved-reminder {
+  border: 1px solid rgba(22, 134, 111, 0.17);
+  background: rgba(255, 255, 255, 0.74);
+  color: #3d625c;
+  font-size: 0.84rem;
+}
+
 .official-fields :deep(.q-field--readonly .q-field__control) {
   background: rgba(255, 255, 255, 0.76);
 }
@@ -766,6 +1178,116 @@ onMounted(loadTemplates)
 .parameter-list {
   display: grid;
   gap: 10px;
+}
+
+.custom-components {
+  display: grid;
+  gap: 16px;
+}
+
+.component-toolbar,
+.component-card-header,
+.parameters-heading,
+.parameter-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.component-toolbar {
+  justify-content: space-between;
+  color: #55716c;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.component-card {
+  padding: 16px;
+  border: 1px solid rgba(18, 104, 89, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.component-card-header {
+  margin-bottom: 15px;
+}
+
+.component-card-header > div,
+.parameters-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.component-card-header strong,
+.parameters-heading strong {
+  color: #183c35;
+  font-size: 0.92rem;
+}
+
+.component-card-header span:not(.component-order),
+.parameters-heading span {
+  color: #71837f;
+  font-size: 0.76rem;
+}
+
+.component-order {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  flex: none;
+  border-radius: 9px;
+  background: #1c8d79;
+  color: #fff;
+  font-weight: 800;
+  place-items: center;
+}
+
+.component-fields,
+.parameter-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.parameters-heading {
+  margin: 17px 0 10px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(3, 21, 21, 0.08);
+}
+
+.custom-parameter-list {
+  display: grid;
+  gap: 12px;
+}
+
+.custom-parameter-card {
+  padding: 13px;
+  border: 1px solid rgba(3, 21, 21, 0.08);
+  border-radius: 13px;
+  background: #f8fcfb;
+}
+
+.parameter-card-actions {
+  min-height: 30px;
+  margin-bottom: 10px;
+}
+
+.parameter-card-actions > span {
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(39, 183, 159, 0.12);
+  color: #126f60;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.no-component-parameters {
+  padding: 13px;
+  border: 1px dashed rgba(3, 21, 21, 0.13);
+  border-radius: 12px;
+  color: #71837f;
+  font-size: 0.82rem;
+  text-align: center;
 }
 
 .parameter-row {
@@ -945,6 +1467,20 @@ onMounted(loadTemplates)
 
   .official-fields {
     grid-template-columns: 1fr;
+  }
+
+  .custom-official-fields,
+  .component-fields,
+  .parameter-fields-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .custom-official-fields > .full-span {
+    grid-column: auto;
+  }
+
+  .component-card-header {
+    flex-wrap: wrap;
   }
 
   .parameter-row {

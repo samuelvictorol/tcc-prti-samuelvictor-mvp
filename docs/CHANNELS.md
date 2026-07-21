@@ -13,14 +13,16 @@ Verificado em **20 de julho de 2026**. Este documento registra as limitações q
 - `/stop`, revogação administrativa, `my_chat_member` indicando bloqueio, ou resposta `403` do provedor removem a elegibilidade daquele destino.
 - O token do bot basta para testar envios a `chat_id` já autorizado. O webhook é uma configuração independente para receber novos updates: exige HTTPS, usa `/api/webhooks/telegram` e sempre valida `X-Telegram-Bot-Api-Secret-Token`; se o administrador não informar um segredo, a aplicação gera e armazena um valor aleatório.
 - A aplicação identifica o bot automaticamente com `getMe` e expõe somente `id`, nome e `@username`, nunca o token. Enquanto a página Telegram estiver aberta, updates processados com sucesso são enviados aos administradores autenticados por Socket.IO e aparecem como mensagens recentes; esse painel de sessão não é um histórico permanente de conteúdo.
+- Templates Telegram são montados por formulário como texto simples, foto, vídeo ou menu hierárquico. O menu usa teclado inline, `callback_query`, `answerCallbackQuery` e `editMessageText`; a cada reinício, um webhook já registrado é atualizado de forma idempotente para incluir callbacks.
+- URLs de foto e vídeo precisam usar HTTPS público. O servidor fixa o DNS resolvido, bloqueia redes privadas/reservadas, revalida redirecionamentos, limita tempo/tamanho e confere o conteúdo real antes de fazer upload. O `file_id` devolvido pelo Telegram pode ser reutilizado nos próximos envios.
 
-Referências oficiais: [introdução a bots](https://core.telegram.org/bots#how-are-bots-different-from-users), [tutorial de envio](https://core.telegram.org/bots/tutorial#sending-messages), [deep links](https://core.telegram.org/api/links#bot-links), [Mini Apps](https://core.telegram.org/bots/webapps), [Bot API 10.2](https://core.telegram.org/bots/api), [limites de broadcast](https://core.telegram.org/bots/faq#broadcasting-to-users), [broadcast pago](https://core.telegram.org/bots/api#paid-broadcasts) e [Termos para desenvolvedores](https://telegram.org/tos/bot-developers#5-2-operation).
+Referências oficiais: [introdução a bots](https://core.telegram.org/bots#how-are-bots-different-from-users), [tutorial de envio](https://core.telegram.org/bots/tutorial#sending-messages), [teclados inline](https://core.telegram.org/bots/api#inlinekeyboardmarkup), [botão de menu persistente](https://core.telegram.org/bots/api#setchatmenubutton), [fotos](https://core.telegram.org/bots/api#sendphoto), [vídeos](https://core.telegram.org/bots/api#sendvideo), [deep links](https://core.telegram.org/api/links#bot-links), [Mini Apps](https://core.telegram.org/bots/webapps), [Bot API](https://core.telegram.org/bots/api), [limites de broadcast](https://core.telegram.org/bots/faq#broadcasting-to-users), [broadcast pago](https://core.telegram.org/bots/api#paid-broadcasts) e [Termos para desenvolvedores](https://telegram.org/tos/bot-developers#5-2-operation).
 
 ## Orquestração multicanal
 
 - Cada provedor pode permanecer vazio e ser configurado/testado isoladamente.
-- O envio rápido aceita um canal específico ou todos os canais disponíveis para o contato.
-- “Disponível” significa configurado no momento do lote; para WhatsApp Web, a sessão também precisa estar pronta. Consentimento e disponibilidade são revalidados antes de cada chamada.
+- O envio rápido aceita somente um canal específico compatível. O modo global exige um template escolhido separadamente para Telegram, WhatsApp Cloud e/ou e-mail; WhatsApp Web não participa desse conjunto.
+- “Disponível” significa configurado e autorizado no momento do lote. Consentimento e disponibilidade são revalidados antes de cada chamada.
 - Combinações sem configuração, sessão pronta, autorização ou variante de template são registradas como `skipped` e não impedem as demais. Uma falha real em um provedor produz resultado `partial` quando outro canal foi enviado com sucesso.
 
 ## WhatsApp Cloud API (oficial/Meta)
@@ -29,16 +31,19 @@ Referências oficiais: [introdução a bots](https://core.telegram.org/bots#how-
 - Texto livre, mídia e templates são payloads diferentes. Iniciações proativas podem exigir um template criado e aprovado pela Meta; o painel não transforma texto livre em um template aprovado.
 - A API cria entregas individuais. IDs e estados posteriores chegam pelo webhook e devem ser correlacionados com a entrega registrada.
 - O webhook de produção precisa de HTTPS público. O desafio `GET` usa o verify token; requisições `POST` devem ter sua assinatura verificada com o app secret antes de atualizar contatos ou consentimentos.
-- Um contato inbound é criado/atualizado a partir do `wa_id` e do perfil recebidos, sem duplicar o blind index do telefone.
+- Toda mensagem inbound identifica ou atualiza o contato para que o atendimento consiga visualizar a conversa. As identidades permanecem sem autorização de envio até o texto corresponder exatamente ao comando configurado em `START_NOTIFY_WHATSAPP_PERMISSION` (`/notify-me` por padrão), ou até uma alteração administrativa confirmada. O comando recebido pela Cloud ou pelo WhatsApp Web autoriza **ambas** as integrações WhatsApp no contato correlacionado: a origem e uma contraparte já existente são concedidas e auditadas imediatamente; uma contraparte ainda inexistente ganha somente uma intenção pendente, consumida quando aquela identidade real aparecer. Nenhum destino sintético é criado. Web e Cloud continuam como estados separados e podem ser revogados individualmente pelo administrador.
+- A aplicação correlaciona `from`, `wa_id`, `user_id`/`from_user_id` e aliases brasileiros de telefone, atualiza um contato existente quando possível e preserva esses identificadores criptografados como metadata da identidade. A origem e o instante da última concessão ou revogação também ficam registrados.
 
 Referências oficiais: [início da WhatsApp Business Platform](https://developers.facebook.com/documentation/business-messaging/whatsapp/get-started), [coleção oficial da Meta](https://www.postman.com/meta/whatsapp-business-platform/overview), [endpoint de mensagens](https://www.postman.com/meta/whatsapp-business-platform/folder/13382743-ba8d099d-007e-4b52-b9f2-3cf3c60e4fbc) e [payload de webhook](https://www.postman.com/meta/whatsapp-business-platform/folder/tduohwq/webhook-payload-reference).
 
 ## WhatsApp Web (`whatsapp-web.js`)
 
 - É uma automação **não oficial** do cliente Web, sujeita a mudanças, desconexões e medidas do WhatsApp. Para operações críticas, prefira a Cloud API oficial.
+- Nesta aplicação, ela serve **somente** para monitorar conversas e responder chats diretos. Toda nova mensagem recebida entra no monitor, mas responder fica bloqueado até a pessoa enviar o comando configurado em `START_NOTIFY_WHATSAPP_PERMISSION` pelo Web ou pela Cloud, o que concede as duas permissões WhatsApp, ou um administrador conceder a permissão Web com confirmação. A sincronização importa somente conversas reais dentro do escopo definido e não concede consentimento. Não é um canal de templates, notificações ou disparos em massa.
 - A sessão só libera o menu após o evento real de autenticação/ready. O TTL configurável (90 dias por padrão) é uma política desta aplicação: não garante que a sessão remota permanecerá válida durante todo o período.
 - Apenas uma instância deve controlar a mesma sessão. O Compose mantém um volume persistente e a integração é inicializada sob demanda para evitar abrir o Chromium antes do QR.
-- Remoção de contato ou revogação é conferida novamente no momento da entrega; jobs antigos não podem contornar o opt-out.
+- QR, estado, mensagens e desconexão são publicados por Socket.IO. O QR fica na tela **Início**; o menu WhatsApp Web permanece bloqueado até o evento `ready`.
+- Remover uma conversa limpa o histórico local e a oculta do monitor; uma nova mensagem real pode reabri-la. Remover o contato também elimina os artefatos locais relacionados.
 
 Referência do projeto: [`whatsapp-web.js`](https://github.com/pedroslopez/whatsapp-web.js).
 

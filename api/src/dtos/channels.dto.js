@@ -1,4 +1,5 @@
 const { z, objectId, inviteUrl } = require('./common.dto');
+const { whatsappBuilder } = require('./templates.dto');
 
 const whatsappOfficialTemplateSchema = z.discriminatedUnion('preset', [
   z.object({
@@ -34,8 +35,37 @@ const channelSendSchema = z.object({
     languageCode: z.string().max(20).optional(),
     components: z.array(z.record(z.unknown())).optional(),
     officialTemplate: whatsappOfficialTemplateSchema.optional(),
+    customTemplate: z.object({
+      name: z.string().min(1).max(512).regex(/^[a-z0-9_]+$/),
+      languageCode: z.string().min(2).max(20),
+      builder: whatsappBuilder,
+      variables: z.record(z.unknown())
+    }).optional(),
     payload: z.record(z.unknown()).optional()
-  }).refine((body) => body.contactId || body.groupId || body.destination, 'Informe contactId, groupId ou destination')
+  }).superRefine((body, context) => {
+    const destinations = [body.contactId, body.groupId, body.destination].filter(Boolean);
+    if (destinations.length !== 1) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Informe exatamente um destino: contactId, groupId ou destination'
+      });
+    }
+  })
+});
+
+const whatsappWebSendSchema = z.object({
+  body: z.object({
+    contactId: objectId.optional(),
+    destination: z.string().min(1).max(500).optional(),
+    text: z.string().min(1).max(100000)
+  }).strict().superRefine((body, context) => {
+    if (!body.contactId && !body.destination) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Informe contactId ou destination' });
+    }
+    if (body.contactId && body.destination) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Informe somente um chat direto' });
+    }
+  })
 });
 
 const telegramWebhookSchema = z.object({ body: z.record(z.unknown()) });
@@ -81,16 +111,8 @@ const whatsappWebMessagesSchema = z.object({
   query: z.object({ limit: z.coerce.number().int().min(1).max(100).optional() }).passthrough()
 });
 
-const whatsappWebGroupSchema = z.object({
-  body: z.object({
-    name: z.string().min(1).max(200),
-    description: z.string().max(1000).nullish(),
-    chatIds: z.array(z.string().min(1).max(500)).min(1).max(1000)
-  })
-});
-
 module.exports = {
-  channelSendSchema, whatsappOfficialTemplateSchema, telegramWebhookSchema, cloudWebhookSchema, registerWebhookSchema,
+  channelSendSchema, whatsappWebSendSchema, whatsappOfficialTemplateSchema, telegramWebhookSchema, cloudWebhookSchema, registerWebhookSchema,
   telegramSendSchema, createTelegramGroupSchema, updateTelegramGroupSchema,
-  whatsappWebMessagesSchema, whatsappWebGroupSchema
+  whatsappWebMessagesSchema
 };

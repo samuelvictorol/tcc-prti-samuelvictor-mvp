@@ -1,7 +1,8 @@
 import axios from 'axios'
-import { clearStoredSession, getAccessToken, setAccessToken } from './tokens.js'
+import { getAccessToken } from './tokens.js'
+import { API_BASE_URL, expireSession, refreshAccessToken } from './auth-refresh.js'
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+export { API_BASE_URL }
 
 export const http = axios.create({
   baseURL: API_BASE_URL,
@@ -9,8 +10,6 @@ export const http = axios.create({
   withCredentials: true,
   headers: { Accept: 'application/json' },
 })
-
-let refreshRequest = null
 
 http.interceptors.request.use((config) => {
   const token = getAccessToken()
@@ -31,21 +30,11 @@ http.interceptors.response.use(
 
     request._retried = true
     try {
-      refreshRequest ??= axios
-        .post(`${API_BASE_URL}/auth/refresh`, {}, { withCredentials: true })
-        .then((response) => response.data?.data?.accessToken || response.data?.accessToken || response.data?.token)
-        .finally(() => {
-          refreshRequest = null
-        })
-
-      const token = await refreshRequest
-      if (!token) throw new Error('Refresh sem novo token')
-      setAccessToken(token, Boolean(localStorage.getItem('notify.accessToken')))
+      const token = await refreshAccessToken()
       request.headers.Authorization = `Bearer ${token}`
       return http(request)
     } catch (refreshError) {
-      clearStoredSession()
-      window.dispatchEvent(new CustomEvent('auth:expired'))
+      expireSession()
       return Promise.reject(refreshError)
     }
   },

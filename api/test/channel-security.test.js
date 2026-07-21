@@ -5,11 +5,49 @@ const contactsManager = require('../src/managers/contacts.manager');
 const groupsManager = require('../src/managers/groups.manager');
 const logsManager = require('../src/managers/logs.manager');
 const socketService = require('../src/services/socket.service');
+const conversationsManager = require('../src/managers/conversations.manager');
 const whatsappCloudManager = require('../src/managers/whatsapp-cloud.manager');
+const gmailManager = require('../src/managers/gmail.manager');
 const telegramManager = require('../src/managers/telegram.manager');
 const settingsController = require('../src/controllers/settings.controller');
 
-test('WhatsApp Cloud impede payload de sobrescrever destino e produto', async (context) => {
+test('Gmail e WhatsApp Cloud rejeitam destination junto de contactId sem bypass', async () => {
+  const contactId = '507f1f77bcf86cd799439011';
+  for (const manager of [gmailManager, whatsappCloudManager]) {
+    await assert.rejects(
+      () => manager.send({
+        contactId,
+        destination: 'attacker@example.com',
+        text: 'Oi',
+        officialTemplate: { preset: 'hello_world' }
+      }),
+      (error) => error.code === 'INVALID_DESTINATION_SELECTION' && error.statusCode === 422
+    );
+  }
+});
+
+test('Gmail e WhatsApp Cloud resolvem contactId pelo consentimento antes do provedor', async (context) => {
+  const original = contactsManager.getDestination;
+  context.after(() => { contactsManager.getDestination = original; });
+  contactsManager.getDestination = async (_contactId, channel) => {
+    const error = new Error('canal sem permissao: ' + channel);
+    error.code = 'CHANNEL_NOT_AUTHORIZED';
+    throw error;
+  };
+
+  for (const manager of [gmailManager, whatsappCloudManager]) {
+    await assert.rejects(
+      () => manager.send({
+        contactId: '507f1f77bcf86cd799439011',
+        text: 'Oi',
+        officialTemplate: { preset: 'hello_world' }
+      }),
+      (error) => error.code === 'CHANNEL_NOT_AUTHORIZED'
+    );
+  }
+});
+
+test('WhatsApp Cloud rejeita texto livre e payload cru no envio direto', async (context) => {
   const originals = { getValue: settingsManager.getValue, log: logsManager.create, fetch: global.fetch };
   context.after(() => { settingsManager.getValue = originals.getValue; logsManager.create = originals.log; global.fetch = originals.fetch; });
   const values = {
@@ -21,20 +59,24 @@ test('WhatsApp Cloud impede payload de sobrescrever destino e produto', async (c
   };
   settingsManager.getValue = async (key) => values[key];
   logsManager.create = async () => ({});
-  let sentBody;
-  global.fetch = async (_url, options) => {
-    sentBody = JSON.parse(options.body);
-    return { ok: true, json: async () => ({ messages: [{ id: 'wamid.1' }] }) };
-  };
+  let fetchCalled = false;
+  global.fetch = async () => { fetchCalled = true; throw new Error('fetch nao deveria ser chamado'); };
 
-  await whatsappCloudManager.send({
-    destination: '5511999999999',
-    allowUnconsented: true,
-    payload: { messaging_product: 'evil', recipient_type: 'group', to: 'attacker', type: 'text', text: { body: 'Oi' } }
-  });
-  assert.equal(sentBody.messaging_product, 'whatsapp');
-  assert.equal(sentBody.recipient_type, 'individual');
-  assert.equal(sentBody.to, '5511999999999');
+  for (const input of [
+    { text: 'Oi' },
+    { payload: { messaging_product: 'evil', recipient_type: 'group', to: 'attacker', type: 'text', text: { body: 'Oi' } } }
+  ]) {
+    await assert.rejects(
+      () => whatsappCloudManager.send({ destination: '5511999999999', allowUnconsented: true, ...input }),
+      (error) => {
+        assert.equal(error.statusCode, 422);
+        assert.equal(error.code, 'WHATSAPP_CLOUD_TEMPLATE_ONLY');
+        assert.match(error.message, /apenas template oficial/i);
+        return true;
+      }
+    );
+  }
+  assert.equal(fetchCalled, false);
 });
 
 test('Telegram libera retry do mesmo update apos falha e aceita write_access_allowed', async (context) => {
@@ -47,7 +89,8 @@ test('Telegram libera retry do mesmo update apos falha e aceita write_access_all
     log: logsManager.create,
     emit: socketService.emit,
     upsertGroup: groupsManager.upsertExternal,
-    findGroup: groupsManager.findByExternalId
+    findGroup: groupsManager.findByExternalId,
+    recordInbound: conversationsManager.recordInbound
   };
   context.after(() => {
     settingsManager.getValue = originals.getValue;
@@ -59,6 +102,7 @@ test('Telegram libera retry do mesmo update apos falha e aceita write_access_all
     socketService.emit = originals.emit;
     groupsManager.upsertExternal = originals.upsertGroup;
     groupsManager.findByExternalId = originals.findGroup;
+    conversationsManager.recordInbound = originals.recordInbound;
   });
   settingsManager.getValue = async () => 'webhook-secret';
   contactsManager.findByChannelAddress = async () => ({ channels: [{ channel: 'telegram', consentStatus: 'revoked' }] });
@@ -75,6 +119,7 @@ test('Telegram libera retry do mesmo update apos falha e aceita write_access_all
   logsManager.create = async () => ({});
   const socketEvents = [];
   socketService.emit = (event, payload) => socketEvents.push({ event, payload });
+  conversationsManager.recordInbound = async () => ({ conversation: { id: '507f1f77bcf86cd799439012' } });
 
   const update = {
     update_id: 987654321,
@@ -106,6 +151,37 @@ test('Telegram libera retry do mesmo update apos falha e aceita write_access_all
   groupsManager.upsertExternal = async () => { groupChanges += 1; };
   await telegramManager.webhook({ update_id: 987654322, chat_member: { chat: { id: -1, type: 'supergroup' } } }, 'webhook-secret');
   assert.equal(groupChanges, 0);
+});
+
+test('Telegram busca e incorpora foto de perfil sem expor o token do bot', async (context) => {
+  const originals = { getValue: settingsManager.getValue, fetch: global.fetch };
+  context.after(() => {
+    settingsManager.getValue = originals.getValue;
+    global.fetch = originals.fetch;
+  });
+  const botToken = '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd';
+  settingsManager.getValue = async (key) => key === 'TELEGRAM_BOT_TOKEN' ? botToken : null;
+  const requested = [];
+  global.fetch = async (url) => {
+    requested.push(String(url));
+    if (String(url).includes('/getUserProfilePhotos')) {
+      return { ok: true, json: async () => ({ ok: true, result: { photos: [[{ file_id: 'small', width: 80, height: 80 }, { file_id: 'large', width: 320, height: 320 }]] } }) };
+    }
+    if (String(url).includes('/getFile')) {
+      return { ok: true, json: async () => ({ ok: true, result: { file_path: 'photos/avatar.jpg' } }) };
+    }
+    return {
+      ok: true,
+      headers: { get: (name) => name === 'content-type' ? 'image/jpeg' : '4' },
+      arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]).buffer
+    };
+  };
+
+  const avatar = await telegramManager.fetchTelegramProfileAvatar('telegram-avatar-test-user');
+
+  assert.match(avatar, /^data:image\/jpeg;base64,/);
+  assert.equal(requested.length, 3);
+  assert.doesNotMatch(avatar, new RegExp(botToken.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('Telegram gera segredo de webhook quando apenas token e URL foram informados', async (context) => {

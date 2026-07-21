@@ -2,11 +2,12 @@ const crypto = require('node:crypto');
 const settingsManager = require('./settings.manager');
 const contactsManager = require('./contacts.manager');
 const logsManager = require('./logs.manager');
+const adminNotificationsManager = require('./admin-notifications.manager');
 const { timingSafeEqual } = require('../services/crypto.service');
 const { env } = require('../config/env');
 const { emit } = require('../services/socket.service');
 const ApiError = require('../utils/api-error');
-const { buildOfficialTemplateMessage, listTemplatePresets } = require('../utils/whatsapp-cloud-templates');
+const { buildOfficialTemplateMessage, buildCustomTemplateMessage, listTemplatePresets } = require('../utils/whatsapp-cloud-templates');
 
 async function sendConfiguration() {
   const [accessToken, phoneNumberId, version] = await Promise.all([
@@ -72,30 +73,246 @@ async function verifySignature(rawBody, signature) {
   if (!timingSafeEqual(signature, expected)) throw new ApiError(401, 'Assinatura Meta invalida');
 }
 
+function cloudIdentity(source = {}, fallback = {}) {
+  const raw = source.wa_id ?? source.from ?? source.from_user_id ?? source.user_id
+    ?? fallback.wa_id ?? fallback.from_user_id ?? fallback.user_id;
+  let digits = String(raw ?? '').replace(/\D/g, '');
+  const countryCode = String(source.country_code ?? fallback.country_code ?? '').replace(/\D/g, '');
+  if (digits && countryCode && !digits.startsWith(countryCode)) digits = countryCode + digits;
+  return digits || null;
+}
+
+function cloudProfile(source = {}) {
+  const profile = source.profile || {};
+  const avatarCandidate = profile.picture_url || profile.profile_pic_url || profile.avatar_url || profile.picture || profile.photo
+    || source.picture_url || source.profile_pic_url || source.avatar_url || source.picture || source.photo;
+  return {
+    displayName: profile.name || source.name || source.display_name || null,
+    avatarUrl: typeof avatarCandidate === 'string' && /^https:\/\//i.test(avatarCandidate) ? avatarCandidate : null
+  };
+}
+
+function sameCloudIdentity(left, right) {
+  if (!left || !right) return false;
+  const leftAliases = contactsManager.mergePhoneIdentity('whatsapp_cloud', left)?.aliases || [left];
+  const rightAliases = new Set(contactsManager.mergePhoneIdentity('whatsapp_cloud', right)?.aliases || [right]);
+  return leftAliases.some((alias) => rightAliases.has(alias));
+}
+
+function sameProviderUser(left = {}, right = {}) {
+  const leftIds = new Set([
+    left.user_id,
+    left.from_user_id,
+    left.logical_id,
+    left.from_logical_id
+  ].map((value) => String(value || '').trim()).filter(Boolean));
+  return [right.user_id, right.from_user_id, right.logical_id, right.from_logical_id]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .some((value) => leftIds.has(value));
+}
+
+function matchingCloudContact(contacts = [], message = {}) {
+  const messageAddress = cloudIdentity(message);
+  return contacts.find((contact) => (
+    sameCloudIdentity(cloudIdentity(contact), messageAddress)
+    || sameProviderUser(contact, message)
+  )) || null;
+}
+
+async function upsertCloudContact(source, value, fallback = {}, options = {}) {
+  const address = cloudIdentity(source, fallback);
+  if (!address) return null;
+  const profile = cloudProfile(source);
+  const existingChannelContact = await contactsManager.findByChannelAddress('whatsapp_cloud', address);
+  const existing = existingChannelContact
+    || await contactsManager.findByChannelOrPhone('whatsapp_cloud', address, address);
+  const existingIdentity = existing?.channels?.find((item) => item.channel === 'whatsapp_cloud');
+  const alreadyGranted = Boolean(existingIdentity?.authorized && existingIdentity?.consentStatus === 'granted');
+  const permissionGranted = options.permissionGranted === true;
+  const contact = await contactsManager.upsertFromChannel({
+    channel: 'whatsapp_cloud',
+    address,
+    phone: address,
+    displayName: profile.displayName || address,
+    avatarUrl: profile.avatarUrl,
+    source: permissionGranted ? 'whatsapp_cloud_permission_command' : 'whatsapp_cloud_webhook',
+    authorize: permissionGranted,
+    consentStatus: permissionGranted ? 'granted' : undefined,
+    consentSource: permissionGranted ? 'automatic_permission_command' : undefined,
+    consentCommand: permissionGranted ? options.permissionCommand : undefined,
+    consentEvidence: permissionGranted ? { providerMessageId: source.id || fallback.id || null, address } : undefined,
+    shareWhatsappConsent: permissionGranted,
+    metadata: {
+      waId: source.wa_id || fallback.wa_id || null,
+      userId: source.user_id || fallback.user_id || null,
+      fromUserId: source.from_user_id || fallback.from_user_id || null,
+      countryCode: source.country_code || fallback.country_code || null,
+      phoneNumberId: value.metadata?.phone_number_id || null,
+      displayPhoneNumber: value.metadata?.display_phone_number || null,
+      businessAccountId: value.businessAccountId || null,
+      chatId: address,
+      logicalId: source.logical_id || fallback.logical_id || null,
+      fromLogicalId: source.from_logical_id || fallback.from_logical_id || null,
+      messageType: source.type || fallback.type || null,
+      autoRegisteredVia: 'whatsapp_cloud',
+      ...(permissionGranted ? {
+        permissionCommandReceived: true,
+        permissionCommandReceivedVia: 'whatsapp_cloud',
+        sharedWhatsappConsent: true
+      } : {})
+    }
+  });
+  const created = contact.upsertState?.created ?? !existing;
+  const identityAdded = contact.upsertState?.identityAdded ?? !existing;
+  const authorizedAfterUpsert = contact.channels?.some((identity) => (
+    identity.channel === 'whatsapp_cloud'
+    && identity.authorized
+    && identity.consentStatus === 'granted'
+  ));
+  if (created) {
+    const context = {
+      contactId: contact.id,
+      channel: 'whatsapp_cloud',
+      source: permissionGranted ? 'permission_command' : 'inbound_message',
+      permissionGranted
+    };
+    await logsManager.create({
+      channel: 'whatsapp_cloud',
+      action: 'contact.auto_created',
+      message: 'Contato criado automaticamente pelo WhatsApp Cloud',
+      context
+    });
+    await adminNotificationsManager.create({
+      kind: 'contact_auto_created',
+      channel: 'whatsapp_cloud',
+      title: 'Novo contato no WhatsApp Cloud',
+      message: (contact.displayName || 'Contato') + (permissionGranted
+        ? ' foi cadastrado e autorizou WhatsApp Web e Cloud ao enviar o comando de permissão.'
+        : ' foi cadastrado pelo webhook e aguarda permissão para notificações.'),
+      contactId: contact.id,
+      context
+    }).catch(() => undefined);
+  }
+  emit('contact:auto_upserted', {
+    channel: 'whatsapp_cloud',
+    contactId: contact.id,
+    created,
+    identityAdded,
+    displayName: contact.displayName,
+    at: new Date().toISOString()
+  });
+  return {
+    contact,
+    created,
+    identityAdded,
+    address,
+    permissionGranted,
+    permissionRequired: !permissionGranted && !alreadyGranted && !authorizedAfterUpsert
+  };
+}
+
 async function webhook(payload, rawBody, signature) {
   await verifySignature(rawBody, signature);
   let receivedMessages = 0;
   let receivedStatuses = 0;
+  let createdContacts = 0;
+  let updatedContacts = 0;
   for (const entry of payload.entry || []) {
     for (const change of entry.changes || []) {
       const value = change.value || {};
       for (const message of value.messages || []) {
         receivedMessages += 1;
-        const profile = (value.contacts || []).find((item) => item.wa_id === message.from)?.profile;
-        const contact = await contactsManager.upsertFromChannel({
-          channel: 'whatsapp_cloud', address: message.from, displayName: profile?.name || message.from,
-          source: 'whatsapp_cloud_webhook', metadata: { messageType: message.type, phoneNumberId: value.metadata?.phone_number_id }
+        const messageAddress = message?.id ? cloudIdentity(message) : null;
+        const matchedProviderContact = matchingCloudContact(value.contacts || [], message) || {};
+        const address = messageAddress;
+        if (!address) continue;
+        const permissionGranted = await settingsManager.isWhatsappPermissionCommand(message.text?.body);
+        const permissionCommand = permissionGranted ? String(message.text?.body || '').trim() : null;
+        const result = await upsertCloudContact(
+          { ...matchedProviderContact, ...message },
+          { ...value, businessAccountId: entry.id || null },
+          matchedProviderContact,
+          { permissionGranted, permissionCommand }
+        );
+        if (!result) continue;
+        if (result.permissionRequired) {
+          emit('whatsapp_cloud:permission_required', {
+            contactId: result.contact.id,
+            providerMessageId: message.id || null,
+            at: new Date().toISOString()
+          });
+        }
+        const { contact } = result;
+        if (result.created) createdContacts += 1;
+        else updatedContacts += 1;
+        await logsManager.create({
+          channel: 'whatsapp_cloud',
+          action: permissionGranted ? 'contact.permission_granted' : 'message.received',
+          message: permissionGranted
+            ? 'Permissao de notificacao para WhatsApp Web e Cloud recebida pelo WhatsApp Cloud'
+            : 'Mensagem WhatsApp Cloud recebida',
+          context: {
+            contactId: contact.id,
+            providerMessageId: message.id,
+            type: message.type,
+            ...(permissionGranted ? {
+              permissionChannels: ['whatsapp_web', 'whatsapp_cloud'],
+              permissionCommand,
+              permissionReceivedVia: 'whatsapp_cloud'
+            } : {})
+          }
         });
-        await logsManager.create({ channel: 'whatsapp_cloud', action: 'message.received', message: 'Mensagem WhatsApp Cloud recebida', context: { contactId: contact.id, providerMessageId: message.id, type: message.type } });
+        const timestampMs = Number(message.timestamp) * 1000;
+        emit('whatsapp_cloud:message', {
+          contactId: contact.id,
+          providerMessageId: message.id || null,
+          from: address,
+          type: message.type || 'unknown',
+          text: message.text?.body ? String(message.text.body).slice(0, 2000) : null,
+          sentAt: Number.isFinite(timestampMs) && timestampMs > 0 ? new Date(timestampMs).toISOString() : new Date().toISOString()
+        });
       }
       for (const receipt of value.statuses || []) {
         receivedStatuses += 1;
-        await logsManager.create({ channel: 'whatsapp_cloud', action: 'message.status', message: 'Status de mensagem WhatsApp atualizado', context: { providerMessageId: receipt.id, status: receipt.status } });
+        const notificationsManager = require('./notifications.manager');
+        const storedReceipt = await notificationsManager.storeCloudReceipt(receipt);
+        let reconciliation;
+        try {
+          reconciliation = await notificationsManager.reconcileCloudReceipt({
+            ...receipt,
+            revisionToken: storedReceipt?.revisionToken
+          });
+        } catch (error) {
+          if (error.code !== 'WHATSAPP_CLOUD_RECEIPT_PROCESSING') throw error;
+          reconciliation = { matched: false, deferred: true, providerStatus: receipt.status };
+        }
+        if (reconciliation.matched) {
+          await notificationsManager.markCloudReceiptProcessed(receipt.id, storedReceipt?.revisionToken);
+        }
+        await logsManager.create({
+          level: receipt.status === 'failed' ? 'error' : 'info',
+          channel: 'whatsapp_cloud',
+          action: receipt.status === 'failed' ? 'notification.provider_failed' : 'message.status',
+          message: receipt.status === 'failed'
+            ? 'A Meta informou falha na entrega da mensagem'
+            : 'Status de mensagem WhatsApp atualizado',
+          context: {
+            providerMessageId: receipt.id,
+            status: receipt.status,
+            notificationId: reconciliation.notificationId || null,
+            deliveryStatus: reconciliation.deliveryStatus || null,
+            deferred: Boolean(reconciliation.deferred),
+            retryScheduled: Boolean(reconciliation.retryScheduled),
+            errors: reconciliation.errors || []
+          }
+        });
       }
     }
   }
-  emit('whatsapp_cloud:webhook', { receivedMessages, receivedStatuses, at: new Date().toISOString() });
-  return { received: true };
+  const summary = { receivedMessages, receivedStatuses, createdContacts, updatedContacts, at: new Date().toISOString() };
+  emit('whatsapp_cloud:webhook', summary);
+  return { received: true, ...summary };
 }
 
 function templatePresets() {
@@ -111,9 +328,18 @@ function normalizeMetaDestination(value) {
 }
 
 async function send(input) {
-  const config = await sendConfiguration();
-  let destination = input.destination;
-  if (!destination && input.contactId) destination = (await contactsManager.getDestination(input.contactId, 'whatsapp_cloud')).address;
+  const destinationCount = [input.contactId, input.groupId, input.destination].filter(Boolean).length;
+  if (destinationCount !== 1) {
+    throw new ApiError(422, 'Informe exatamente um destino', null, 'INVALID_DESTINATION_SELECTION');
+  }
+  if (input.groupId) throw new ApiError(422, 'Envio direto do WhatsApp Cloud nao aceita groupId', null, 'GROUP_DESTINATION_UNSUPPORTED');
+
+  let destination;
+  if (input.contactId) {
+    destination = (await contactsManager.getDestination(input.contactId, 'whatsapp_cloud')).address;
+  } else {
+    destination = input.destination;
+  }
   if (destination && !input.contactId && !input.allowUnconsented) {
     const known = await contactsManager.findByChannelAddress('whatsapp_cloud', destination);
     if (!known) throw new ApiError(403, 'Destino WhatsApp nao cadastrado/autorizado', null, 'UNKNOWN_DESTINATION');
@@ -122,7 +348,9 @@ async function send(input) {
   if (!destination) throw new ApiError(422, 'Destino WhatsApp obrigatorio');
   destination = normalizeMetaDestination(destination);
   let message;
-  if (input.officialTemplate) {
+  if (input.customTemplate) {
+    message = buildCustomTemplateMessage(input.customTemplate);
+  } else if (input.officialTemplate) {
     message = buildOfficialTemplateMessage(input.officialTemplate);
   } else if (input.templateName) {
     const template = { name: input.templateName, language: { code: input.languageCode || 'pt_BR' } };
@@ -131,12 +359,15 @@ async function send(input) {
       type: 'template',
       template
     };
-  } else if (input.payload) {
-    message = input.payload;
   } else {
-    if (!input.text) throw new ApiError(422, 'Texto ou template obrigatorio');
-    message = { type: 'text', text: { body: input.text, preview_url: false } };
+    throw new ApiError(
+      422,
+      'WhatsApp Cloud aceita apenas template oficial',
+      null,
+      'WHATSAPP_CLOUD_TEMPLATE_ONLY'
+    );
   }
+  const config = await sendConfiguration();
   const response = await fetch('https://graph.facebook.com/' + config.version + '/' + config.phoneNumberId + '/messages', {
     method: 'POST',
     headers: { authorization: 'Bearer ' + config.accessToken, 'content-type': 'application/json' },
@@ -144,10 +375,28 @@ async function send(input) {
     signal: AbortSignal.timeout(20_000)
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new ApiError(502, body.error?.message || 'Falha na API do WhatsApp', body.error, 'WHATSAPP_CLOUD_ERROR');
+  if (!response.ok) {
+    throw new ApiError(
+      502,
+      body.error?.message || 'Falha na API do WhatsApp',
+      { ...(body.error || {}), providerHttpStatus: response.status },
+      'WHATSAPP_CLOUD_ERROR'
+    );
+  }
   const messageId = body.messages?.[0]?.id;
   await logsManager.create({ channel: 'whatsapp_cloud', action: 'message.sent', message: 'Mensagem WhatsApp Cloud enviada', context: { contactId: input.contactId, providerMessageId: messageId } });
   return { providerMessageId: messageId, raw: body };
 }
 
-module.exports = { status, templatePresets, verifyChallenge, webhook, send, normalizeMetaDestination };
+module.exports = {
+  status,
+  templatePresets,
+  verifyChallenge,
+  webhook,
+  send,
+  normalizeMetaDestination,
+  cloudIdentity,
+  cloudProfile,
+  matchingCloudContact,
+  sameProviderUser
+};

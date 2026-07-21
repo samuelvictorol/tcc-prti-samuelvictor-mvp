@@ -18,11 +18,11 @@ const history = ref([])
 const form = reactive({ contactIds: [], subject: '', body: '', format: 'html', templateId: null })
 
 function emailIdentity(contact) {
-  return contact.channels?.find((item) => item.channel === 'email' && (item.authorized || item.consentStatus === 'granted'))
+  return contact.channels?.find((item) => item.channel === 'email' && item.authorized && item.consentStatus === 'granted')
 }
 
 const contactOptions = computed(() => contacts.value
-  .filter((item) => emailIdentity(item) || item.email)
+  .filter((item) => emailIdentity(item))
   .map((item) => ({ label: `${item.displayName || item.name || 'Sem nome'} · ${emailIdentity(item)?.address || item.email}`, value: item.id || item._id })))
 const templateOptions = computed(() => templates.value.map((item) => ({ label: item.name || item.title, value: item.id || item._id })))
 const safePreview = computed(() => DOMPurify.sanitize(

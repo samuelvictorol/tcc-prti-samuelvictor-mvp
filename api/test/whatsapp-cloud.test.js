@@ -4,17 +4,20 @@ const crypto = require('node:crypto');
 const Setting = require('../src/models/setting.model');
 const settingsManager = require('../src/managers/settings.manager');
 const logsManager = require('../src/managers/logs.manager');
+const contactsManager = require('../src/managers/contacts.manager');
+const adminNotificationsManager = require('../src/managers/admin-notifications.manager');
 const whatsappCloudManager = require('../src/managers/whatsapp-cloud.manager');
 const whatsappCloudController = require('../src/controllers/whatsapp-cloud.controller');
 const templatesManager = require('../src/managers/templates.manager');
 const notificationsManager = require('../src/managers/notifications.manager');
 const { channelSendSchema } = require('../src/dtos/channels.dto');
 const { createTemplateSchema } = require('../src/dtos/templates.dto');
+const { buildCustomTemplateMessage, normalizeBuilder } = require('../src/utils/whatsapp-cloud-templates');
 
 function restoreAfter(context, overrides) {
-  const originals = Object.fromEntries(overrides.map(([target, key]) => [key, target[key]]));
+  const originals = overrides.map(([target, key]) => [target, key, target[key]]);
   context.after(() => {
-    for (const [target, key] of overrides) target[key] = originals[key];
+    for (const [target, key, original] of originals) target[key] = original;
   });
 }
 
@@ -108,7 +111,12 @@ test('POST do webhook valida somente com App Secret', async (context) => {
     return key === 'WHATSAPP_CLOUD_APP_SECRET' ? appSecret : null;
   };
 
-  assert.deepEqual(await whatsappCloudManager.webhook({ entry: [] }, rawBody, signature), { received: true });
+  const result = await whatsappCloudManager.webhook({ entry: [] }, rawBody, signature);
+  assert.equal(result.received, true);
+  assert.deepEqual(
+    { receivedMessages: result.receivedMessages, receivedStatuses: result.receivedStatuses, createdContacts: result.createdContacts, updatedContacts: result.updatedContacts },
+    { receivedMessages: 0, receivedStatuses: 0, createdContacts: 0, updatedContacts: 0 }
+  );
   assert.deepEqual(requested, ['WHATSAPP_CLOUD_APP_SECRET']);
 });
 
@@ -234,7 +242,7 @@ test('template salvo por preset deriva contrato Meta e variaveis da notificacao'
   });
 });
 
-test('cadastro WhatsApp Cloud aceita os tres nomes legados e rejeita templates arbitrarios', () => {
+test('cadastro WhatsApp Cloud aceita nomes legados e custom oficial com builder', () => {
   const inferred = templatesManager.normalizeTemplateInput({
     name: 'Ola mundo existente',
     channel: 'whatsapp_cloud',
@@ -243,16 +251,389 @@ test('cadastro WhatsApp Cloud aceita os tres nomes legados e rejeita templates a
   });
   assert.equal(inferred.whatsappCloudPreset, 'hello_world');
 
-  const arbitrary = templatesManager.normalizeTemplateInput({
-    name: 'Nao aprovado no fluxo atual',
+  const custom = templatesManager.normalizeTemplateInput({
+    name: 'Template aprovado personalizado',
     channel: 'whatsapp_cloud',
-    templateType: 'approved_template',
-    externalTemplateName: 'qualquer_outro_template'
+    whatsappCloudPreset: 'custom',
+    externalTemplateName: 'pedido_aprovado_v2',
+    languageCode: 'pt_BR',
+    description: 'Confirmacao aprovada na Meta',
+    payload: {
+      builder: {
+        version: 1,
+        components: [{
+          id: 'body-main',
+          type: 'body',
+          parameters: [{ id: 'customer', type: 'text', key: 'customerName', label: 'Cliente', example: 'Ana' }]
+        }]
+      }
+    }
   });
-  assert.throws(
-    () => templatesManager.validateTemplateInput(arbitrary),
-    (error) => error.code === 'WHATSAPP_TEMPLATE_PRESET_REQUIRED'
-  );
+  assert.doesNotThrow(() => templatesManager.validateTemplateInput(custom));
+  assert.equal(custom.externalTemplateName, 'pedido_aprovado_v2');
+  assert.equal(custom.payload.builder.version, 1);
+  assert.deepEqual(custom.payload.components, [{
+    type: 'body',
+    parameters: [{ type: 'text', text: '{{customerName}}' }]
+  }]);
+
+  assert.throws(() => templatesManager.normalizeTemplateInput({
+    name: 'Incompleto', channel: 'whatsapp_cloud', whatsappCloudPreset: 'custom',
+    externalTemplateName: 'nome_valido', languageCode: 'pt_BR', payload: {}
+  }), (error) => error.code === 'WHATSAPP_TEMPLATE_BUILDER_INVALID');
+});
+
+test('builder custom gera somente schema de envio Meta e suporta tipos comuns', () => {
+  const message = buildCustomTemplateMessage({
+    name: 'pedido_aprovado_v2',
+    languageCode: 'pt_BR',
+    builder: {
+      version: 1,
+      components: [
+        { id: 'header', type: 'header', parameters: [{ id: 'hero', type: 'image', key: 'heroUrl', label: 'Imagem', example: 'https://example.com/hero.jpg' }] },
+        { id: 'body', type: 'body', parameters: [
+          { id: 'name', type: 'text', key: 'customerName', label: 'Cliente', example: 'Ana' },
+          { id: 'price', type: 'currency', key: 'total', label: 'Total', currencyCode: 'BRL', example: 'R$ 25,90' },
+          { id: 'date', type: 'date_time', key: 'deliveryDate', label: 'Data', example: '21/07/2026' }
+        ] },
+        { id: 'button', type: 'button', subType: 'quick_reply', index: 0, parameters: [{ id: 'action', type: 'payload', key: 'actionId', label: 'Acao' }] },
+        { id: 'coupon', type: 'button', subType: 'copy_code', index: 1, parameters: [{ id: 'coupon-code', type: 'coupon_code', key: 'couponCode', label: 'Cupom' }] }
+      ]
+    },
+    variables: {
+      heroUrl: 'https://example.com/hero.jpg',
+      customerName: 'Ana',
+      total: { fallbackValue: 'R$ 25,90', code: 'BRL', amount1000: 25900 },
+      deliveryDate: '21/07/2026',
+      actionId: 'confirm-order-123',
+      couponCode: 'PROMO2026'
+    }
+  });
+
+  assert.deepEqual(message, {
+    type: 'template',
+    template: {
+      name: 'pedido_aprovado_v2',
+      language: { code: 'pt_BR' },
+      components: [
+        { type: 'header', parameters: [{ type: 'image', image: { link: 'https://example.com/hero.jpg' } }] },
+        { type: 'body', parameters: [
+          { type: 'text', text: 'Ana' },
+          { type: 'currency', currency: { fallback_value: 'R$ 25,90', code: 'BRL', amount_1000: 25900 } },
+          { type: 'date_time', date_time: { fallback_value: '21/07/2026' } }
+        ] },
+        { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'confirm-order-123' }] },
+        { type: 'button', sub_type: 'copy_code', index: '1', parameters: [{ type: 'coupon_code', coupon_code: 'PROMO2026' }] }
+      ]
+    }
+  });
+  assert.doesNotMatch(JSON.stringify(message), /"builder"|"customerName"|"label"|"example"|"id"/);
+});
+
+test('builder custom omite componentes vazios do payload final sem perder o metadata do editor', () => {
+  const builder = {
+    version: 1,
+    components: [{ id: 'body-static', type: 'body', parameters: [] }]
+  };
+  const normalized = normalizeBuilder(builder);
+  assert.deepEqual(normalized.components, [{ id: 'body-static', type: 'body', parameters: [] }]);
+
+  assert.deepEqual(buildCustomTemplateMessage({
+    name: 'mensagem_estatica_v1',
+    languageCode: 'pt_BR',
+    builder,
+    variables: {}
+  }), {
+    type: 'template',
+    template: {
+      name: 'mensagem_estatica_v1',
+      language: { code: 'pt_BR' }
+    }
+  });
+});
+
+test('builder custom envia parameter_name para templates Meta com parametros nomeados', () => {
+  const message = buildCustomTemplateMessage({
+    name: 'pedido_nomeado_v1',
+    languageCode: 'pt_BR',
+    builder: {
+      version: 1,
+      components: [{ type: 'body', parameters: [
+        { type: 'text', key: 'customerName', parameterName: 'customer_name', label: 'Nome do cliente' },
+        { type: 'text', key: 'orderNumber', parameterName: 'order_number', label: 'Pedido' }
+      ] }]
+    },
+    variables: { customerName: 'Ana', orderNumber: '1234' }
+  });
+  assert.deepEqual(message.template.components[0].parameters, [
+    { type: 'text', text: 'Ana', parameter_name: 'customer_name' },
+    { type: 'text', text: '1234', parameter_name: 'order_number' }
+  ]);
+  assert.throws(() => normalizeBuilder({
+    version: 1,
+    components: [{ type: 'body', parameters: [
+      { type: 'text', key: 'one', parameterName: 'one', label: 'Um' },
+      { type: 'text', key: 'two', label: 'Dois' }
+    ] }]
+  }), /Nao misture parametros nomeados e posicionais/);
+});
+
+test('builder aplica cardinalidade e matriz de parametros da Meta', () => {
+  const invalidBuilders = [
+    {
+      message: /Header aceita apenas text, image, document e video/,
+      components: [{ type: 'header', parameters: [{ type: 'currency', key: 'total', label: 'Total' }] }]
+    },
+    {
+      message: /no maximo um componente header/,
+      components: [{ type: 'header', parameters: [] }, { type: 'header', parameters: [] }]
+    },
+    {
+      message: /no maximo um componente body/,
+      components: [{ type: 'body', parameters: [] }, { type: 'body', parameters: [] }]
+    },
+    {
+      message: /header aceita no maximo um parametro/i,
+      components: [{ type: 'header', parameters: [
+        { type: 'text', key: 'title', label: 'Titulo' },
+        { type: 'text', key: 'subtitle', label: 'Subtitulo' }
+      ] }]
+    },
+    {
+      message: /button aceita no maximo um parametro/i,
+      components: [{ type: 'button', subType: 'url', index: 0, parameters: [
+        { type: 'text', key: 'path', label: 'Caminho' },
+        { type: 'text', key: 'query', label: 'Query' }
+      ] }]
+    },
+    {
+      message: /Indices de button devem ser unicos/,
+      components: [
+        { type: 'button', subType: 'url', index: 0, parameters: [] },
+        { type: 'button', subType: 'quick_reply', index: 0, parameters: [] }
+      ]
+    }
+  ];
+
+  for (const invalid of invalidBuilders) {
+    assert.throws(() => normalizeBuilder({ version: 1, components: invalid.components }), invalid.message);
+  }
+
+  const dto = createTemplateSchema.safeParse({ body: {
+    name: 'Header invalido',
+    channel: 'whatsapp_cloud',
+    whatsappCloudPreset: 'custom',
+    externalTemplateName: 'header_invalido_v1',
+    languageCode: 'pt_BR',
+    payload: { builder: { version: 1, components: invalidBuilders[0].components } }
+  } });
+  assert.equal(dto.success, false);
+});
+
+test('copy_code exige coupon_code enquanto quick_reply preserva payload', () => {
+  const dto = createTemplateSchema.safeParse({ body: {
+    name: 'Cupom aprovado',
+    channel: 'whatsapp_cloud',
+    whatsappCloudPreset: 'custom',
+    externalTemplateName: 'cupom_aprovado_v1',
+    languageCode: 'pt_BR',
+    payload: { builder: { version: 1, components: [{
+      id: 'copy', type: 'button', subType: 'copy_code', index: 0,
+      parameters: [{ id: 'coupon', type: 'coupon_code', key: 'couponCode', label: 'Cupom' }]
+    }] } }
+  } });
+  assert.equal(dto.success, true);
+
+  assert.throws(() => templatesManager.normalizeTemplateInput({
+    name: 'Invalido', channel: 'whatsapp_cloud', whatsappCloudPreset: 'custom',
+    externalTemplateName: 'cupom_invalido_v1', languageCode: 'pt_BR',
+    payload: { builder: { version: 1, components: [{
+      id: 'copy', type: 'button', subType: 'copy_code', index: 0,
+      parameters: [{ id: 'wrong', type: 'payload', key: 'couponCode', label: 'Cupom' }]
+    }] } }
+  }), /copy_code aceita parametro coupon_code/);
+});
+
+test('webhook Cloud vincula payload Meta e concede somente ao receber o comando', async (context) => {
+  restoreAfter(context, [
+    [settingsManager, 'getValue'], [settingsManager, 'isWhatsappPermissionCommand'], [contactsManager, 'findByChannelAddress'], [contactsManager, 'findByChannelOrPhone'], [contactsManager, 'upsertFromChannel'],
+    [logsManager, 'create'], [adminNotificationsManager, 'create'], [notificationsManager, 'reconcileCloudReceipt']
+  ]);
+  const appSecret = 'cloud-secret';
+  settingsManager.getValue = async (key) => key === 'WHATSAPP_CLOUD_APP_SECRET' ? appSecret : null;
+  settingsManager.isWhatsappPermissionCommand = async (value) => value === '/notify-me';
+  contactsManager.findByChannelAddress = async () => null;
+  contactsManager.findByChannelOrPhone = async () => null;
+  let upsertInput;
+  contactsManager.upsertFromChannel = async (input) => {
+    upsertInput = input;
+    return { id: '507f1f77bcf86cd799439011', displayName: input.displayName, upsertState: { created: true, identityAdded: true } };
+  };
+  const actions = [];
+  logsManager.create = async (input) => { actions.push(input.action); return {}; };
+  let adminNotification;
+  adminNotificationsManager.create = async (input) => { adminNotification = input; return {}; };
+  const payload = {
+    entry: [{ id: '4424939574412010', changes: [{ value: {
+      metadata: { display_phone_number: '15551822496', phone_number_id: '1273327629189888' },
+      contacts: [{ user_id: 'BR.28770155782584312', country_code: 'BR', profile: { name: 'Samuel', avatar_url: 'https://example.com/avatar.jpg' } }],
+      messages: [{ id: 'wamid.inbound', from: '556181748795', from_user_id: 'BR.28770155782584312', from_logical_id: '274985348251713', type: 'text', text: { body: '/notify-me' }, timestamp: '1784605483' }]
+    } }] }]
+  };
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256=' + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+  const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
+  assert.equal(result.createdContacts, 1);
+  assert.equal(result.receivedMessages, 1);
+  assert.equal(upsertInput.address, '556181748795');
+  assert.equal(upsertInput.phone, '556181748795');
+  assert.equal(upsertInput.displayName, 'Samuel');
+  assert.equal(upsertInput.avatarUrl, 'https://example.com/avatar.jpg');
+  assert.equal(upsertInput.authorize, true);
+  assert.equal(upsertInput.consentStatus, 'granted');
+  assert.equal(upsertInput.consentSource, 'automatic_permission_command');
+  assert.equal(upsertInput.consentCommand, '/notify-me');
+  assert.equal(upsertInput.shareWhatsappConsent, true);
+  assert.equal(upsertInput.metadata.permissionCommandReceivedVia, 'whatsapp_cloud');
+  assert.equal(upsertInput.metadata.sharedWhatsappConsent, true);
+  assert.equal(upsertInput.metadata.userId, 'BR.28770155782584312');
+  assert.equal(upsertInput.metadata.fromUserId, 'BR.28770155782584312');
+  assert.equal(upsertInput.metadata.fromLogicalId, '274985348251713');
+  assert.equal(upsertInput.metadata.businessAccountId, '4424939574412010');
+  assert.equal(upsertInput.metadata.phoneNumberId, '1273327629189888');
+  assert.ok(actions.includes('contact.auto_created'));
+  assert.ok(actions.includes('contact.permission_granted'));
+  assert.equal(adminNotification.channel, 'whatsapp_cloud');
+  assert.equal(adminNotification.contactId, '507f1f77bcf86cd799439011');
+});
+
+test('webhook Cloud salva novo usuario como unknown sem o comando de permissao', async (context) => {
+  restoreAfter(context, [
+    [settingsManager, 'getValue'], [settingsManager, 'isWhatsappPermissionCommand'],
+    [contactsManager, 'findByChannelAddress'], [contactsManager, 'findByChannelOrPhone'], [contactsManager, 'upsertFromChannel'],
+    [logsManager, 'create'], [adminNotificationsManager, 'create']
+  ]);
+  const appSecret = 'cloud-secret';
+  settingsManager.getValue = async (key) => key === 'WHATSAPP_CLOUD_APP_SECRET' ? appSecret : null;
+  settingsManager.isWhatsappPermissionCommand = async () => false;
+  contactsManager.findByChannelAddress = async () => null;
+  contactsManager.findByChannelOrPhone = async () => null;
+  let upsertInput;
+  contactsManager.upsertFromChannel = async (input) => {
+    upsertInput = input;
+    return {
+      id: '507f1f77bcf86cd799439099',
+      displayName: input.displayName,
+      upsertState: { created: true, identityAdded: true }
+    };
+  };
+  let adminNotifications = 0;
+  adminNotificationsManager.create = async () => { adminNotifications += 1; return {}; };
+  const actions = [];
+  logsManager.create = async (input) => { actions.push(input.action); return {}; };
+  const payload = {
+    entry: [{ changes: [{ value: {
+      contacts: [{ wa_id: '556181748795', profile: { name: 'Samuel' } }],
+      messages: [{ id: 'wamid.without-permission', from: '556181748795', type: 'text', text: { body: 'Ola' } }]
+    } }] }]
+  };
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256=' + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+  const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
+
+  assert.equal(result.receivedMessages, 1);
+  assert.equal(result.createdContacts, 1);
+  assert.equal(result.updatedContacts, 0);
+  assert.equal(upsertInput.authorize, false);
+  assert.equal(upsertInput.consentStatus, undefined);
+  assert.equal(upsertInput.source, 'whatsapp_cloud_webhook');
+  assert.equal(adminNotifications, 1);
+  assert.deepEqual(actions, ['contact.auto_created', 'message.received']);
+});
+
+test('webhook Cloud contact-only nao cadastra contato nem concede opt-in', async (context) => {
+  restoreAfter(context, [
+    [settingsManager, 'getValue'], [contactsManager, 'findByChannelAddress'], [contactsManager, 'upsertFromChannel'],
+    [logsManager, 'create'], [adminNotificationsManager, 'create'], [notificationsManager, 'reconcileCloudReceipt']
+  ]);
+  const appSecret = 'cloud-secret';
+  settingsManager.getValue = async (key) => key === 'WHATSAPP_CLOUD_APP_SECRET' ? appSecret : null;
+  contactsManager.findByChannelAddress = async () => null;
+  let upsertInput;
+  contactsManager.upsertFromChannel = async (input) => {
+    upsertInput = input;
+    return {
+      id: '507f1f77bcf86cd799439011',
+      displayName: input.displayName,
+      upsertState: { created: true, identityAdded: true }
+    };
+  };
+  const actions = [];
+  logsManager.create = async (input) => { actions.push(input.action); return {}; };
+  let adminNotifications = 0;
+  adminNotificationsManager.create = async () => { adminNotifications += 1; return {}; };
+  notificationsManager.reconcileCloudReceipt = async (receipt) => ({ matched: false, providerStatus: receipt.status });
+  const payload = {
+    entry: [{ changes: [{ value: {
+      metadata: { phone_number_id: 'phone-id' },
+      contacts: [{ wa_id: '556181748795', profile: { name: 'Samuel' } }],
+      statuses: [{ id: 'wamid.status', status: 'delivered' }]
+    } }] }]
+  };
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256=' + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+  const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
+
+  assert.equal(upsertInput, undefined);
+  assert.equal(result.receivedMessages, 0);
+  assert.equal(result.createdContacts, 0);
+  assert.equal(adminNotifications, 0);
+  assert.equal(actions.includes('contact.auto_created'), false);
+});
+
+test('webhook Cloud trata canal anexado por telefone como identidade nova, nao contato novo', async (context) => {
+  restoreAfter(context, [
+    [settingsManager, 'getValue'], [settingsManager, 'isWhatsappPermissionCommand'], [contactsManager, 'findByChannelAddress'], [contactsManager, 'findByChannelOrPhone'], [contactsManager, 'upsertFromChannel'],
+    [logsManager, 'create'], [adminNotificationsManager, 'create']
+  ]);
+  const appSecret = 'cloud-secret';
+  settingsManager.getValue = async (key) => key === 'WHATSAPP_CLOUD_APP_SECRET' ? appSecret : null;
+  settingsManager.isWhatsappPermissionCommand = async (value) => value === '/notify-me';
+  contactsManager.findByChannelAddress = async () => null;
+  contactsManager.findByChannelOrPhone = async () => ({
+    id: '507f1f77bcf86cd799439011',
+    channels: [{ channel: 'whatsapp_web', address: '556181748795@c.us', authorized: true, consentStatus: 'granted' }]
+  });
+  contactsManager.upsertFromChannel = async (input) => ({
+    id: '507f1f77bcf86cd799439011',
+    displayName: 'Contato Web existente',
+    upsertState: { created: false, identityAdded: true },
+    channels: [{ channel: 'whatsapp_web' }, { channel: input.channel }]
+  });
+  const actions = [];
+  logsManager.create = async (input) => { actions.push(input.action); return {}; };
+  let adminNotifications = 0;
+  adminNotificationsManager.create = async () => { adminNotifications += 1; return {}; };
+  const payload = {
+    entry: [{ changes: [{ value: {
+      contacts: [{ wa_id: '556181748795', profile: { name: 'Samuel' } }],
+      messages: [{ id: 'wamid.inbound', from: '556181748795', type: 'text', text: { body: '/notify-me' } }]
+    } }] }]
+  };
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256=' + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+  const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
+
+  assert.equal(result.createdContacts, 0);
+  assert.equal(result.updatedContacts, 1);
+  assert.equal(result.receivedMessages, 1);
+  assert.equal(adminNotifications, 0);
+  assert.equal(actions.includes('contact.auto_created'), false);
+  assert.ok(actions.includes('contact.permission_granted'));
 });
 
 test('numero Meta rejeita destino sem DDI ou acima do limite E.164', () => {

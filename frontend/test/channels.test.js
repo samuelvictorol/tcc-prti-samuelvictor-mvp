@@ -38,9 +38,9 @@ describe('configuração independente dos canais', () => {
     expect(() => normalizeTelegramWebhookUrl('http://localhost:8080')).toThrow('HTTPS')
   })
 
-  it('mantém o envio rápido global separado do template global', () => {
+  it('reserva o envio global exclusivamente para templates por canal', () => {
     expect(notificationChannel('quick', 'global')).toBe('global')
-    expect(sendsToAllAvailableChannels('quick', 'global')).toBe(true)
+    expect(sendsToAllAvailableChannels('quick', 'global')).toBe(false)
     expect(notificationChannel('template', 'telegram')).toBe('telegram')
     expect(sendsToAllAvailableChannels('template', 'telegram')).toBe(false)
     expect(notificationChannel('global', 'telegram')).toBe('global')

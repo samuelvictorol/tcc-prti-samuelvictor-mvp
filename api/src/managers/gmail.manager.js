@@ -42,8 +42,18 @@ async function status(options = {}) {
 }
 
 async function send(input) {
-  let destination = input.destination;
-  if (!destination && input.contactId) destination = (await contactsManager.getDestination(input.contactId, 'email')).address;
+  const destinationCount = [input.contactId, input.groupId, input.destination].filter(Boolean).length;
+  if (destinationCount !== 1) {
+    throw new ApiError(422, 'Informe exatamente um destino', null, 'INVALID_DESTINATION_SELECTION');
+  }
+  if (input.groupId) throw new ApiError(422, 'Envio direto do Gmail nao aceita groupId', null, 'GROUP_DESTINATION_UNSUPPORTED');
+
+  let destination;
+  if (input.contactId) {
+    destination = (await contactsManager.getDestination(input.contactId, 'email')).address;
+  } else {
+    destination = input.destination;
+  }
   if (destination && !input.contactId && !input.allowUnconsented) {
     const known = await contactsManager.findByChannelAddress('email', destination);
     if (!known) throw new ApiError(403, 'Email nao cadastrado/autorizado', null, 'UNKNOWN_DESTINATION');

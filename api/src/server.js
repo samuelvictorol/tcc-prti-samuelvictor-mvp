@@ -7,6 +7,7 @@ const { initializeSocket } = require('./services/socket.service');
 const queueService = require('./services/queue.service');
 const authManager = require('./managers/auth.manager');
 const notificationsManager = require('./managers/notifications.manager');
+const telegramManager = require('./managers/telegram.manager');
 
 let server;
 let shuttingDown = false;
@@ -16,7 +17,7 @@ async function start() {
   await connectDatabase();
   await authManager.bootstrapAdmins();
   await connectRedis();
-  queueService.registerNotificationProcessor(notificationsManager.processJob);
+  queueService.registerNotificationProcessor(notificationsManager.processJob, notificationsManager.recoverStale);
   await queueService.initializeQueue();
   await notificationsManager.recoverStale();
 
@@ -28,9 +29,12 @@ async function start() {
   await new Promise((resolve) => server.listen(env.port, '0.0.0.0', resolve));
   console.log('[api] ouvindo em 0.0.0.0:' + env.port);
 
+  telegramManager.refreshWebhookRegistration()
+    .catch((error) => console.error('[telegram webhook refresh]', error.message));
+
   if (env.whatsappWebAutoInit) {
     const whatsappWebManager = require('./managers/whatsapp-web.manager');
-    whatsappWebManager.initialize().catch((error) => console.error('[whatsapp-web auto-init]', error.message));
+    whatsappWebManager.resume().catch((error) => console.error('[whatsapp-web resume]', error.message));
   }
   return server;
 }
@@ -39,6 +43,8 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('[api] encerrando por ' + signal);
+  const whatsappWebManager = require('./managers/whatsapp-web.manager');
+  await whatsappWebManager.shutdown().catch((error) => console.error('[whatsapp-web shutdown]', error.message));
   if (server) await new Promise((resolve) => server.close(resolve));
   await queueService.closeQueue();
   await disconnectRedis();

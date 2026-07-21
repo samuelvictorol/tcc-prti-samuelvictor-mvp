@@ -1,59 +1,139 @@
+<script>
+function messageTime(value = {}) {
+  const raw = value.sentAt || value.createdAt || value.timestamp
+  if (typeof raw === 'number' || /^\d+$/.test(String(raw || ''))) {
+    const numeric = Number(raw)
+    return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric
+  }
+  const parsed = new Date(raw || 0).getTime()
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function historyKey(value = {}) {
+  const providerId = value.providerMessageId || value.provider_message_id || value.id?._serialized
+    || (typeof value.id === 'string' && !/^[a-f0-9]{24}$/i.test(value.id) ? value.id : null)
+  if (providerId) return `provider:${providerId}`
+  const direction = value.direction || (value.fromMe ? 'outbound' : 'inbound')
+  return `fallback:${direction}:${messageTime(value)}:${String(value.body || value.text || value.message || '')}`
+}
+
+export function normalizeWhatsappWebProviderMessage(value = {}) {
+  const timestamp = messageTime(value)
+  return {
+    ...value,
+    providerMessageId: value.providerMessageId || value.id || null,
+    direction: value.direction || (value.fromMe ? 'outbound' : 'inbound'),
+    sentAt: value.sentAt || (timestamp ? new Date(timestamp).toISOString() : null),
+  }
+}
+
+export function mergeWhatsappWebHistory(localMessages = [], providerMessages = []) {
+  const merged = new Map()
+  for (const raw of providerMessages) {
+    const message = normalizeWhatsappWebProviderMessage(raw)
+    merged.set(historyKey(message), message)
+  }
+  for (const message of localMessages) {
+    const key = historyKey(message)
+    const provider = merged.get(key)
+    merged.set(key, provider ? {
+      ...provider,
+      ...message,
+      fromMe: message.fromMe ?? provider.fromMe,
+      direction: message.direction || provider.direction,
+      providerMessageId: message.providerMessageId || provider.providerMessageId,
+    } : message)
+  }
+  return [...merged.values()].sort((left, right) => messageTime(left) - messageTime(right))
+}
+
+export function canReplyToWhatsappWebConversation(conversation, identityOrContact) {
+  if (!conversation || conversation.isGroup) return false
+  const identity = identityOrContact?.channel
+    ? identityOrContact
+    : (Array.isArray(identityOrContact?.channels) ? identityOrContact.channels : [])
+        .find((item) => String(item?.channel || '').replaceAll('-', '_') === 'whatsapp_web')
+  return Boolean(identity?.authorized && identity?.consentStatus === 'granted')
+}
+
+export function whatsappWebConversationId(conversation) {
+  if (!conversation) return ''
+  return String(conversation.chatId || conversation.id || conversation._id || conversation.wid || '')
+}
+
+export function upsertWhatsappWebConversation(current = [], conversation = {}) {
+  const channel = String(conversation.channel || '').replaceAll('-', '_')
+  const id = whatsappWebConversationId(conversation)
+  if (channel !== 'whatsapp_web' || !id) return current
+  return [conversation, ...current.filter((item) => whatsappWebConversationId(item) !== id)]
+}
+</script>
+
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ContactDialog from '../components/ContactDialog.vue'
 import { asList, errorMessage, fetchAll, http, unwrap } from '../services/http.js'
 import { connectSocket, getSocket } from '../services/socket.js'
+import { useAppStore } from '../stores/app.js'
+import {
+  DEFAULT_WHATSAPP_PERMISSION_COMMAND,
+  normalizeWhatsappWebStatus,
+  whatsappPermissionCommandFromSettings,
+} from '../services/whatsapp-web.js'
+import {
+  contactIdentity,
+  identityIdentifiers,
+  identityRegistrationSource,
+} from '../services/contact-identities.js'
 
 const $q = useQuasar()
+const app = useAppStore()
 const loading = ref(false)
 const loadingMessages = ref(false)
 const syncing = ref(false)
+const liveConnected = ref(false)
 const historyNote = ref('')
 const sending = ref(false)
 const chats = ref([])
 const messages = ref([])
-const templates = ref([])
 const selected = ref(null)
 const search = ref('')
 const message = ref('')
-const templateId = ref(null)
-const sendMode = ref('quick')
-const groupDialog = ref(false)
 const contactDialog = ref(false)
-const savingGroup = ref(false)
+const contactForDialog = ref(null)
+const selectedContactRecord = ref(null)
 const messagesPanel = ref(null)
-const groupForm = reactive({ name: '', description: '', chatIds: [] })
+const sessionStatus = ref(normalizeWhatsappWebStatus(app.channelStatus('whatsappWeb')))
+const permissionCommand = ref(whatsappPermissionCommandFromSettings(app.settings) || DEFAULT_WHATSAPP_PERMISSION_COMMAND)
+let realtimeRefreshTimer = null
+let realtimeRefreshSelected = false
+let dataRequestSequence = 0
 
-const contactInitial = computed(() => selected.value ? {
-  displayName: chatName(selected.value),
-  phone: selected.value.phone || '',
-  channels: [{
-    channel: 'whatsapp_web',
-    address: selected.value.phone || chatId(selected.value),
-    authorized: false,
-    consentStatus: 'unknown',
-    source: 'whatsapp_web',
-  }],
-} : {})
+const monitorReady = computed(() => Boolean(sessionStatus.value.ready))
+const selectedWebIdentity = computed(() => contactIdentity(selectedContactRecord.value || {}, 'whatsapp_web') || {
+  channel: 'whatsapp_web',
+  address: selected.value?.externalId || selected.value?.chatId || '',
+  source: 'conversation',
+})
+const selectedIdentifiers = computed(() => identityIdentifiers(selectedWebIdentity.value))
+const selectedRegistration = computed(() => identityRegistrationSource(selectedWebIdentity.value))
+const selectedReplyAllowed = computed(() => canReplyToWhatsappWebConversation(selected.value, selectedWebIdentity.value))
 
 const filteredChats = computed(() => {
   const needle = search.value.trim().toLowerCase()
-  return chats.value.filter((chat) => !needle || [chat.name, chat.pushName, chat.phone, chat.id, chat.chatId]
+  return chats.value.filter((chat) => !needle || [chat.displayName, chat.externalId, chat.name, chat.pushName, chat.phone, chat.id, chat.chatId]
     .some((value) => String(value || '').toLowerCase().includes(needle)))
 })
 
-const templateOptions = computed(() => templates.value.map((item) => ({ label: item.name || item.title, value: item.id || item._id })))
-const chatOptions = computed(() => chats.value.map((item) => ({ label: chatName(item), value: chatId(item) })))
-
 function chatId(chat) {
-  return chat?.chatId || chat?.id || chat?._id || chat?.wid
+  return whatsappWebConversationId(chat)
 }
 
 function chatName(chat) {
-  return chat?.name || chat?.pushName || chat?.contact?.name || chat?.phone || 'Conversa sem nome'
+  return chat?.displayName || chat?.name || chat?.pushName || chat?.contact?.name || chat?.phone || 'Conversa sem nome'
 }
 
 function initials(value) {
@@ -65,30 +145,104 @@ function formatTime(value) {
   return new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }
 
-async function loadData() {
-  loading.value = true
+async function loadData({ background = false, refreshSelected = false } = {}) {
+  if (!monitorReady.value) {
+    dataRequestSequence += 1
+    chats.value = []
+    messages.value = []
+    selected.value = null
+    selectedContactRecord.value = null
+    return
+  }
+  const requestSequence = ++dataRequestSequence
+  if (!background) loading.value = true
   try {
-    const [chatItems, templateItems] = await Promise.all([
-      fetchAll('/whatsapp-web/chats', { preferredKey: 'chats' }),
-      fetchAll('/templates', { params: { channel: 'whatsapp_web' }, preferredKey: 'templates' }),
-    ])
+    const chatItems = await fetchAll('/conversations', { params: { channel: 'whatsapp_web', isGroup: false, limit: 100 }, preferredKey: 'items' })
+    if (requestSequence !== dataRequestSequence) return
     chats.value = chatItems
-    templates.value = templateItems
-    if (!selected.value && chats.value.length) await selectChat(chats.value[0])
+    const selectedId = chatId(selected.value)
+    const refreshedSelection = selectedId
+      ? chats.value.find((chat) => chatId(chat) === selectedId)
+      : null
+    if (refreshedSelection) {
+      selected.value = refreshedSelection
+      void loadSelectedContact(refreshedSelection)
+      if (refreshSelected) await selectChat(refreshedSelection)
+    } else if (selectedId) {
+      selected.value = null
+      selectedContactRecord.value = null
+      messages.value = []
+    } else if (chats.value.length) {
+      await selectChat(chats.value[0])
+    }
   } catch (error) {
-    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível carregar os chats do WhatsApp Web.') })
+    if (!background) $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível carregar os chats do WhatsApp Web.') })
   } finally {
-    loading.value = false
+    if (requestSequence === dataRequestSequence) loading.value = false
+  }
+}
+
+async function loadSessionStatus() {
+  try {
+    return applySessionStatus(unwrap(await http.get('/whatsapp-web/status')) || {})
+  } catch {
+    if (monitorReady.value) return sessionStatus.value
+    return applySessionStatus({ state: 'disconnected', ready: false, attemptActive: false })
+  }
+}
+
+function applySessionStatus(payload = {}) {
+  const previousReady = monitorReady.value
+  const status = normalizeWhatsappWebStatus(payload, sessionStatus.value)
+  sessionStatus.value = status
+  app.updateChannelStatus('whatsappWeb', status)
+  if (previousReady && !status.ready) {
+    dataRequestSequence += 1
+    chats.value = []
+    messages.value = []
+    selected.value = null
+    selectedContactRecord.value = null
+  }
+  return status
+}
+
+async function loadSelectedContact(chat) {
+  const selectedId = String(chatId(chat) || '')
+  selectedContactRecord.value = null
+  if (!chat?.contactId) return null
+  try {
+    const contact = unwrap(await http.get(`/contacts/${chat.contactId}`)) || null
+    if (String(chatId(selected.value) || '') === selectedId) selectedContactRecord.value = contact
+    return contact
+  } catch {
+    return null
   }
 }
 
 async function selectChat(chat) {
   selected.value = chat
+  loadSelectedContact(chat)
+  const selectedId = String(chatId(chat))
   loadingMessages.value = true
   historyNote.value = ''
   try {
-    messages.value = asList(unwrap(await http.get(`/whatsapp-web/chats/${encodeURIComponent(chatId(chat))}/messages`, { params: { limit: 100 } })), 'messages')
+    const localRequest = http.get(`/conversations/${selectedId}/messages`, { params: { limit: 100 } })
+    const providerRequest = monitorReady.value && chat.externalId
+      ? http.get(`/whatsapp-web/chats/${encodeURIComponent(chat.externalId)}/messages`, { params: { limit: 100 } })
+      : Promise.resolve(null)
+    const [localResult, providerResult] = await Promise.allSettled([localRequest, providerRequest])
+    if (String(chatId(selected.value)) !== selectedId) return
+    if (localResult.status === 'rejected' && providerResult.status === 'rejected') throw localResult.reason
+    const localItems = localResult.status === 'fulfilled'
+      ? asList(unwrap(localResult.value), 'items').reverse()
+      : []
+    const providerItems = providerResult.status === 'fulfilled' && providerResult.value
+      ? asList(unwrap(providerResult.value), 'items')
+      : []
+    messages.value = mergeWhatsappWebHistory(localItems, providerItems)
     if (!messages.value.length) historyNote.value = 'Ainda não há histórico armazenado para esta conversa.'
+    else if (providerResult.status === 'rejected') historyNote.value = 'Exibindo o histórico armazenado; a sessão ao vivo está temporariamente indisponível.'
+    await http.patch(`/conversations/${selectedId}/read`).catch(() => undefined)
     await scrollToBottom()
   } catch (error) {
     messages.value = []
@@ -99,18 +253,40 @@ async function selectChat(chat) {
       $q.notify({ type: 'warning', message: errorMessage(error, historyNote.value) })
     }
   } finally {
-    loadingMessages.value = false
+    if (String(chatId(selected.value)) === selectedId) loadingMessages.value = false
   }
 }
 
 async function syncChats() {
   syncing.value = true
   try {
-    await http.post('/whatsapp-web/sync')
-    await loadData()
-    $q.notify({ type: 'positive', message: 'Chats sincronizados com a sessão ativa.' })
+    const status = await loadSessionStatus()
+    if (!status.ready) {
+      $q.notify({ type: 'warning', message: 'A sessão do WhatsApp Web não está pronta. Reconecte o QR Code na tela Início.' })
+      return
+    }
+    const result = unwrap(await http.post('/whatsapp-web/sync')) || {}
+    await loadData({ background: true, refreshSelected: true })
+    const count = Number(result.contacts) || 0
+    const recovered = Number(result.recoveredMessages) || 0
+    const failures = Number(result.failures) || 0
+    const partial = Boolean(result.degraded || failures)
+    const details = [`${count} conversa(s) sincronizada(s)`]
+    if (recovered) details.push(`${recovered} mensagem(ns) recuperada(s)`)
+    if (failures) details.push(`${failures} chat(s) com falha`)
+    $q.notify({
+      type: partial ? 'warning' : 'positive',
+      message: `${details.join(' · ')}.`,
+    })
   } catch (error) {
-    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível sincronizar os chats.') })
+    const status = await loadSessionStatus()
+    if (status.ready) await loadData({ background: true, refreshSelected: true })
+    $q.notify({
+      type: status.ready ? 'negative' : 'warning',
+      message: status.ready
+        ? errorMessage(error, 'Não foi possível sincronizar os chats.')
+        : 'A sessão deixou de estar disponível. Reconecte o QR Code na tela Início.',
+    })
   } finally {
     syncing.value = false
   }
@@ -124,24 +300,21 @@ async function scrollToBottom() {
 
 async function send() {
   if (!selected.value) return
-  if (sendMode.value === 'quick' && !message.value.trim()) return
-  if (sendMode.value === 'template' && !templateId.value) return
+  if (!selectedReplyAllowed.value) {
+    $q.notify({
+      type: 'warning',
+      message: selected.value.isGroup
+        ? 'Grupos ficam disponíveis somente para monitoramento.'
+        : `Este contato ainda não autorizou respostas. Ele pode enviar ${permissionCommand.value} ou o administrador pode revisar a permissão.`,
+    })
+    return
+  }
+  if (!message.value.trim()) return
   sending.value = true
   try {
-    const selectedTemplate = templates.value.find((item) => (item.id || item._id) === templateId.value)
-    const text = sendMode.value === 'quick'
-      ? message.value
-      : (selectedTemplate?.body || selectedTemplate?.content || selectedTemplate?.html || '')
-    if (!text) throw new Error('O template selecionado não possui conteúdo compatível com o WhatsApp Web.')
-    const result = unwrap(await http.post('/whatsapp-web/send', { destination: chatId(selected.value), text })) || {}
-    messages.value.push(result.message || {
-      id: result.id || `optimistic-${Date.now()}`,
-      body: sendMode.value === 'quick' ? message.value : 'Template enviado',
-      fromMe: true,
-      createdAt: new Date().toISOString(),
-      status: 'queued',
-    })
+    await http.post('/whatsapp-web/send', { destination: selected.value.externalId, text: message.value })
     message.value = ''
+    await selectChat(selected.value)
     await scrollToBottom()
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível enviar pelo WhatsApp Web.') })
@@ -150,72 +323,209 @@ async function send() {
   }
 }
 
-function onRealtimeMessage(event) {
-  const incomingChatId = event.chatId || event.chat_id || event.message?.chatId
-  if (String(incomingChatId) === String(chatId(selected.value))) {
-    messages.value.push(event.message || event)
-    scrollToBottom()
-  }
-  const chat = chats.value.find((item) => String(chatId(item)) === String(incomingChatId))
-  if (chat) {
-    chat.lastMessage = event.message?.body || event.body || event.message
-    chat.updatedAt = new Date().toISOString()
+function scheduleRealtimeRefresh({ refreshSelected = false } = {}) {
+  realtimeRefreshSelected ||= refreshSelected
+  if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer)
+  realtimeRefreshTimer = window.setTimeout(() => {
+    realtimeRefreshTimer = null
+    const shouldRefreshSelected = realtimeRefreshSelected
+    realtimeRefreshSelected = false
+    void loadData({ background: true, refreshSelected: shouldRefreshSelected })
+  }, 180)
+}
+
+function onConversationMessage(payload = {}) {
+  const conversation = payload?.conversation
+  const messageItem = payload?.message
+  if (!conversation || String(conversation.channel || '').replaceAll('-', '_') !== 'whatsapp_web') return
+  chats.value = upsertWhatsappWebConversation(chats.value, conversation)
+  if (messageItem && chatId(selected.value) === chatId(conversation)) {
+    selected.value = conversation
+    void loadSelectedContact(conversation)
+    messages.value = mergeWhatsappWebHistory([...messages.value, messageItem], [])
+    http.patch(`/conversations/${conversation.id}/read`).catch(() => undefined)
+    void scrollToBottom()
   }
 }
 
-function openGroupDialog() {
-  Object.assign(groupForm, { name: '', description: '', chatIds: selected.value ? [chatId(selected.value)] : [] })
-  groupDialog.value = true
+function onConversationsUpdated(payload = {}) {
+  const conversation = payload.conversation || payload
+  if (String(conversation?.channel || '').replaceAll('-', '_') !== 'whatsapp_web') return
+  chats.value = upsertWhatsappWebConversation(chats.value, conversation)
+  if (chatId(selected.value) === chatId(conversation)) selected.value = conversation
 }
 
-async function saveGroup() {
-  savingGroup.value = true
+function onWhatsappProviderMessage(payload = {}) {
+  const activeId = chatId(selected.value)
+  const eventId = String(payload.conversationId || payload.chatId || '')
+  scheduleRealtimeRefresh({ refreshSelected: Boolean(activeId && (!eventId || activeId === eventId)) })
+}
+
+async function onSocketConnected() {
+  liveConnected.value = true
+  const status = await loadSessionStatus()
+  if (status.ready) await loadData({ background: true, refreshSelected: true })
+}
+
+function onSocketDisconnected() {
+  liveConnected.value = false
+}
+
+async function onConversationRemoved(payload = {}) {
+  const removedId = String(payload.conversationId || '')
+  if (!removedId || !chats.value.some((chat) => String(chatId(chat)) === removedId)) return
+  const selectedWasRemoved = String(chatId(selected.value)) === removedId
+  if (selectedWasRemoved) {
+    selected.value = null
+    messages.value = []
+  }
+  await loadData()
+}
+
+function onConversationHistoryRemoved(payload = {}) {
+  if (String(payload.conversationId || '') !== chatId(selected.value)) return
+  messages.value = []
+  historyNote.value = 'O histórico armazenado desta conversa foi removido.'
+}
+
+function onWhatsappContactChanged(payload = {}) {
+  if (String(payload.channel || '').replaceAll('-', '_') !== 'whatsapp_web') return
+  scheduleRealtimeRefresh({ refreshSelected: true })
+}
+
+function onWhatsappStatus(payload = {}) {
+  const wasReady = monitorReady.value
+  const status = applySessionStatus(payload)
+  if (!wasReady && status.ready) {
+    void loadData({ background: true, refreshSelected: true })
+  }
+}
+
+function onWhatsappReady(payload = {}) {
+  onWhatsappStatus({ ...payload, state: 'ready', ready: true, attemptActive: false, qrCode: '' })
+}
+
+function onWhatsappDisconnected(payload = {}) {
+  onWhatsappStatus({ ...payload, state: 'disconnected', ready: false, attemptActive: false, qrCode: '' })
+}
+
+async function openContact() {
+  if (!selected.value) return
   try {
-    await http.post('/whatsapp-web/groups', groupForm)
-    groupDialog.value = false
-    $q.notify({ type: 'positive', message: 'Grupo de contatos criado a partir dos chats.' })
+    contactForDialog.value = selectedContactRecord.value || (selected.value.contactId
+      ? unwrap(await http.get(`/contacts/${selected.value.contactId}`))
+      : {
+          displayName: chatName(selected.value),
+          phone: String(selected.value.externalId || '').replace(/@.+$/, ''),
+          avatarUrl: selected.value.avatarUrl,
+        })
+    contactDialog.value = true
   } catch (error) {
-    $q.notify({ type: 'negative', message: errorMessage(error) })
-  } finally {
-    savingGroup.value = false
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível abrir o contato.') })
   }
+}
+
+function removeConversation(chat) {
+  $q.dialog({
+    title: 'Remover conversa?',
+    message: 'As mensagens armazenadas serão removidas. O contato continuará cadastrado.',
+    cancel: { flat: true, label: 'Cancelar' },
+    ok: { color: 'negative', label: 'Remover conversa' },
+    persistent: true,
+  }).onOk(async () => {
+    try {
+      await http.delete(`/conversations/${chatId(chat)}`)
+      messages.value = []
+      selected.value = null
+      await loadData()
+      $q.notify({ type: 'positive', message: 'Conversa removida; contato preservado.' })
+    } catch (error) {
+      $q.notify({ type: 'negative', message: errorMessage(error) })
+    }
+  })
 }
 
 onMounted(() => {
-  loadData()
-  const socket = connectSocket()
-  socket.on('whatsapp-web:message', onRealtimeMessage)
-  socket.on('whatsapp:message', onRealtimeMessage)
-  socket.on('whatsapp_web:message', onRealtimeMessage)
-  socket.on('whatsapp-web:chats', loadData)
+  const socket = getSocket()
+  socket.on('connect', onSocketConnected)
+  socket.on('disconnect', onSocketDisconnected)
+  socket.on('system:ready', onSocketConnected)
+  socket.on('conversation:message', onConversationMessage)
+  socket.on('conversations:updated', onConversationsUpdated)
+  socket.on('conversation:removed', onConversationRemoved)
+  socket.on('conversation:history-removed', onConversationHistoryRemoved)
+  socket.on('whatsapp_web:message', onWhatsappProviderMessage)
+  socket.on('whatsapp_web:chats', scheduleRealtimeRefresh)
+  socket.on('contact:auto_upserted', onWhatsappContactChanged)
+  socket.on('admin_notification:created', onWhatsappContactChanged)
+  socket.on('whatsapp_web:status', onWhatsappStatus)
+  socket.on('whatsapp_web:qr', onWhatsappStatus)
+  socket.on('whatsapp_web:ready', onWhatsappReady)
+  socket.on('whatsapp_web:disconnected', onWhatsappDisconnected)
+  connectSocket()
+  liveConnected.value = socket.connected
+  app.fetchSettings()
+    .then((settings) => { permissionCommand.value = whatsappPermissionCommandFromSettings(settings) })
+    .catch(() => undefined)
+  loadSessionStatus().then((status) => status.ready && loadData())
 })
 
 onBeforeUnmount(() => {
   const socket = getSocket()
-  socket.off('whatsapp-web:message', onRealtimeMessage)
-  socket.off('whatsapp:message', onRealtimeMessage)
-  socket.off('whatsapp_web:message', onRealtimeMessage)
-  socket.off('whatsapp-web:chats', loadData)
+  socket.off('connect', onSocketConnected)
+  socket.off('disconnect', onSocketDisconnected)
+  socket.off('system:ready', onSocketConnected)
+  socket.off('conversation:message', onConversationMessage)
+  socket.off('conversations:updated', onConversationsUpdated)
+  socket.off('conversation:removed', onConversationRemoved)
+  socket.off('conversation:history-removed', onConversationHistoryRemoved)
+  socket.off('whatsapp_web:message', onWhatsappProviderMessage)
+  socket.off('whatsapp_web:chats', scheduleRealtimeRefresh)
+  socket.off('contact:auto_upserted', onWhatsappContactChanged)
+  socket.off('admin_notification:created', onWhatsappContactChanged)
+  socket.off('whatsapp_web:status', onWhatsappStatus)
+  socket.off('whatsapp_web:qr', onWhatsappStatus)
+  socket.off('whatsapp_web:ready', onWhatsappReady)
+  socket.off('whatsapp_web:disconnected', onWhatsappDisconnected)
+  if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer)
+  realtimeRefreshTimer = null
+  realtimeRefreshSelected = false
 })
 </script>
 
 <template>
   <q-page class="page-container">
     <PageHeader
-      eyebrow="Sessão autenticada"
+      eyebrow="Monitor de conversas"
       title="WhatsApp Web"
-      description="Visualize chats sincronizados, acompanhe mensagens em tempo real e dispare conteúdo autorizado."
+      description="Acompanhe todas as conversas. A resposta direta só é liberada após autorização do contato, sem incluir este canal em disparos em massa."
       icon="forum"
     >
       <template #actions>
-        <q-btn outline color="primary" no-caps icon="group_add" label="Criar grupo" @click="openGroupDialog" />
-        <q-btn color="primary" unelevated no-caps icon="refresh" label="Sincronizar chats" :loading="syncing" @click="syncChats" />
+        <q-badge
+          v-if="monitorReady"
+          outline
+          :color="liveConnected ? 'positive' : 'warning'"
+          :icon="liveConnected ? 'sync' : 'sync_problem'"
+          :label="liveConnected ? 'Tempo real ativo' : 'Reconectando tempo real'"
+        />
+        <q-btn v-if="monitorReady" color="primary" unelevated no-caps icon="refresh" label="Sincronizar chats" :loading="syncing" @click="syncChats" />
       </template>
     </PageHeader>
 
-    <q-card flat class="glass-card whatsapp-shell">
+    <q-card v-if="!monitorReady" flat class="glass-card monitor-unavailable">
+      <EmptyState
+        icon="phonelink_off"
+        title="WhatsApp Web desconectado"
+        description="A autenticação e o QR Code ficam centralizados na tela Início. Depois de conectar, este monitor será liberado automaticamente."
+      >
+        <q-btn color="primary" unelevated no-caps icon="space_dashboard" label="Conectar na tela Início" to="/" />
+      </EmptyState>
+    </q-card>
+
+    <q-card v-else flat class="glass-card whatsapp-shell">
       <aside class="chat-sidebar">
-        <div class="sidebar-title"><div><span class="status-dot status-dot--online" /><strong> Conectado</strong></div><span>{{ chats.length }} chats</span></div>
+        <div class="sidebar-title"><div><span class="status-dot" :class="monitorReady ? 'status-dot--online' : 'status-dot--warning'" /><strong> {{ monitorReady ? 'Conectado' : 'Desconectado' }}</strong></div><span>{{ chats.length }} chats</span></div>
         <q-input v-model="search" dense outlined clearable placeholder="Buscar conversa" class="q-ma-md">
           <template #prepend><q-icon name="search" /></template>
         </q-input>
@@ -231,7 +541,7 @@ onBeforeUnmount(() => {
             </q-item-section>
             <q-item-section>
               <q-item-label class="text-weight-bold truncate">{{ chatName(chat) }}</q-item-label>
-              <q-item-label caption class="truncate">{{ chat.lastMessage?.body || chat.lastMessage || chat.phone || 'Sem prévia' }}</q-item-label>
+              <q-item-label caption class="truncate">{{ chat.lastMessage?.preview || chat.lastMessage?.body || chat.lastMessage || chat.phone || 'Sem prévia' }}</q-item-label>
             </q-item-section>
             <q-item-section side top><span class="chat-time">{{ formatTime(chat.updatedAt || chat.timestamp) }}</span><q-badge v-if="chat.unreadCount" rounded color="primary" :label="chat.unreadCount" /></q-item-section>
           </q-item>
@@ -242,11 +552,36 @@ onBeforeUnmount(() => {
         <EmptyState v-if="!selected" icon="forum" title="Escolha uma conversa" description="Selecione um chat à esquerda para visualizar o histórico." />
         <template v-else>
           <header class="conversation-header">
-            <q-avatar size="42px" class="avatar-fallback">{{ initials(chatName(selected)) }}</q-avatar>
-            <div><strong>{{ chatName(selected) }}</strong><span>{{ selected.phone || selected.id || 'WhatsApp Web' }}</span></div>
+            <q-avatar size="42px" class="avatar-fallback">
+              <img
+                v-if="selected.avatarUrl || selected.imageUrl || selected.profilePicture || selected.avatar"
+                :src="selected.avatarUrl || selected.imageUrl || selected.profilePicture || selected.avatar"
+                :alt="`Foto de ${chatName(selected)}`"
+              />
+              <span v-else>{{ initials(chatName(selected)) }}</span>
+            </q-avatar>
+            <div class="conversation-identity">
+              <strong>{{ chatName(selected) }}</strong>
+              <div class="conversation-identifiers">
+                <code v-for="identifier in selectedIdentifiers" :key="identifier.key">{{ identifier.label }}: {{ identifier.value }}</code>
+              </div>
+              <q-badge
+                v-if="selectedRegistration.automatic"
+                outline
+                color="positive"
+                icon="auto_awesome"
+                :label="`Cadastro automático: ${selectedRegistration.label}`"
+              />
+              <q-badge
+                outline
+                :color="selectedReplyAllowed ? 'positive' : 'warning'"
+                :icon="selectedReplyAllowed ? 'verified_user' : 'visibility'"
+                :label="selectedReplyAllowed ? 'Resposta autorizada' : 'Somente leitura'"
+              />
+            </div>
             <q-space />
-            <q-btn flat round icon="person_add" aria-label="Cadastrar contato" @click="contactDialog = true"><q-tooltip>Cadastrar como contato</q-tooltip></q-btn>
-            <q-btn flat round icon="more_vert" aria-label="Opções da conversa" />
+            <q-btn v-if="!selected.isGroup" flat round icon="manage_accounts" aria-label="Editar contato" @click="openContact"><q-tooltip>{{ selected.contactId ? 'Editar contato' : 'Cadastrar como contato' }}</q-tooltip></q-btn>
+            <q-btn flat round color="negative" icon="delete_sweep" aria-label="Remover conversa" @click="removeConversation(selected)"><q-tooltip>Remover conversa mantendo o contato</q-tooltip></q-btn>
           </header>
 
           <div ref="messagesPanel" class="message-stream">
@@ -255,39 +590,36 @@ onBeforeUnmount(() => {
             <div v-for="item in messages" :key="item.id || item._id || item.timestamp" :class="['message-row', { 'message-row--mine': item.fromMe || item.direction === 'outbound' }]">
               <div class="message-bubble">
                 <div>{{ item.body || item.text || item.message }}</div>
-                <span>{{ formatTime(item.createdAt || item.timestamp) }} <q-icon v-if="item.fromMe || item.direction === 'outbound'" name="done_all" size="15px" /></span>
+                <span>{{ formatTime(item.sentAt || item.createdAt || item.timestamp) }} <q-icon v-if="item.fromMe || item.direction === 'outbound'" name="done_all" size="15px" /></span>
               </div>
             </div>
           </div>
 
-          <footer class="message-composer">
-            <q-btn-toggle v-model="sendMode" dense no-caps unelevated toggle-color="primary" color="white" text-color="dark" :options="[{ label: 'Rápida', value: 'quick' }, { label: 'Template', value: 'template' }]" />
+          <footer v-if="selectedReplyAllowed" class="message-composer">
             <div class="composer-row">
-              <q-input v-if="sendMode === 'quick'" v-model="message" dense outlined autogrow placeholder="Escreva uma notificação" class="composer-input" @keydown.ctrl.enter="send" />
-              <q-select v-else v-model="templateId" dense outlined emit-value map-options :options="templateOptions" label="Template" class="composer-input" />
-              <q-btn round unelevated color="primary" icon="send" aria-label="Enviar" :loading="sending" @click="send" />
+              <q-input v-model="message" dense outlined autogrow placeholder="Responder diretamente nesta conversa" class="composer-input" :disable="!monitorReady" @keydown.ctrl.enter="send" />
+              <q-btn round unelevated color="primary" icon="send" aria-label="Enviar" :loading="sending" :disable="!monitorReady" @click="send" />
             </div>
           </footer>
+          <q-banner v-else-if="selected.isGroup" rounded class="group-monitor-banner">
+            <template #avatar><q-icon name="visibility" color="primary" /></template>
+            Este grupo está disponível somente para monitoramento. O envio direto pelo WhatsApp Web é restrito a conversas individuais.
+          </q-banner>
+          <q-banner v-else rounded class="permission-monitor-banner">
+            <template #avatar><q-icon name="lock_person" color="warning" /></template>
+            <div>
+              <strong>Conversa disponível somente para leitura</strong>
+              <span>Ao enviar <code>{{ permissionCommand }}</code> pelo WhatsApp Web ou Cloud, o contato autoriza as duas integrações WhatsApp. A permissão de uma integração ainda não identificada fica pendente até a primeira interação real. O administrador também pode conceder apenas esta permissão manualmente.</span>
+            </div>
+            <template #action>
+              <q-btn flat color="primary" no-caps icon="manage_accounts" label="Editar permissão" @click="openContact" />
+            </template>
+          </q-banner>
         </template>
       </section>
     </q-card>
 
-    <q-dialog v-model="groupDialog" persistent>
-      <q-card class="dialog-card">
-        <q-card-section class="row items-center"><div><div class="text-h6 text-weight-bold">Grupo de contatos</div><div class="text-caption text-muted">A origem será identificada como WhatsApp Web.</div></div><q-space /><q-btn v-close-popup flat round dense icon="close" /></q-card-section>
-        <q-separator />
-        <q-form @submit.prevent="saveGroup">
-          <q-card-section class="form-grid q-pa-lg">
-            <q-input v-model.trim="groupForm.name" outlined label="Nome *" :rules="[(v) => Boolean(v) || 'Informe o nome']" />
-            <q-input v-model="groupForm.description" outlined label="Descrição" />
-            <q-select v-model="groupForm.chatIds" outlined multiple use-chips emit-value map-options :options="chatOptions" label="Chats" class="full-span" />
-          </q-card-section>
-          <q-separator />
-          <q-card-actions align="right" class="q-pa-md"><q-btn v-close-popup flat no-caps label="Cancelar" /><q-btn type="submit" color="primary" unelevated no-caps label="Criar grupo" :loading="savingGroup" /></q-card-actions>
-        </q-form>
-      </q-card>
-    </q-dialog>
-    <ContactDialog v-model="contactDialog" :initial="contactInitial" @saved="loadData" />
+    <ContactDialog v-model="contactDialog" :contact="contactForDialog" @saved="loadData({ background: true, refreshSelected: true })" />
   </q-page>
 </template>
 
@@ -297,6 +629,12 @@ onBeforeUnmount(() => {
   min-height: 680px;
   grid-template-columns: minmax(300px, 0.72fr) minmax(0, 1.5fr);
   overflow: hidden;
+}
+
+.monitor-unavailable {
+  display: grid;
+  min-height: 420px;
+  place-items: center;
 }
 
 .chat-sidebar {
@@ -361,6 +699,27 @@ onBeforeUnmount(() => {
   font-size: 0.72rem;
 }
 
+.conversation-identity {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.conversation-identifiers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.conversation-identifiers code {
+  max-width: min(430px, 56vw);
+  overflow: hidden;
+  color: #5d7470;
+  font-size: 0.66rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .message-stream {
   max-height: 500px;
   padding: 26px;
@@ -418,6 +777,37 @@ onBeforeUnmount(() => {
   background: rgba(255, 255, 255, 0.68);
 }
 
+.group-monitor-banner {
+  margin: 12px 16px;
+  border: 1px solid rgba(39, 183, 159, 0.2);
+  background: rgba(39, 183, 159, 0.08);
+  color: #365d56;
+}
+
+.permission-monitor-banner {
+  margin: 12px 16px;
+  border: 1px solid rgba(199, 125, 23, 0.24);
+  background: rgba(255, 246, 224, 0.9);
+  color: #694a1b;
+}
+
+.permission-monitor-banner strong,
+.permission-monitor-banner span {
+  display: block;
+}
+
+.permission-monitor-banner span {
+  margin-top: 3px;
+  font-size: 0.78rem;
+}
+
+.permission-monitor-banner code {
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #295e56;
+}
+
 .composer-row {
   display: flex;
   align-items: flex-end;
@@ -451,6 +841,19 @@ onBeforeUnmount(() => {
 
   .message-bubble {
     max-width: 88%;
+  }
+
+  .conversation-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .conversation-identity {
+    max-width: calc(100% - 60px);
+  }
+
+  .conversation-identifiers code {
+    max-width: 78vw;
   }
 }
 </style>

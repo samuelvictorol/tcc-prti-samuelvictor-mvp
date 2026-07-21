@@ -40,6 +40,7 @@ const env = {
   inviteTokenSecret: process.env.INVITE_TOKEN_SECRET || 'development-invite-key-change-me-now',
   rateLimitWindowMs: number('RATE_LIMIT_WINDOW_MS', 60_000),
   rateLimitMax: number('RATE_LIMIT_MAX', 120),
+  webhookRateLimitMax: number('WEBHOOK_RATE_LIMIT_MAX', 20_000),
   authRateLimitMax: number('AUTH_RATE_LIMIT_MAX', 10),
   ipBlockAfter: number('IP_BLOCK_AFTER', 20),
   ipBlockSeconds: number('IP_BLOCK_SECONDS', 900),
@@ -47,7 +48,8 @@ const env = {
   whatsappWebAutoInit: boolean('WHATSAPP_WEB_AUTO_INIT'),
   whatsappWebAuthPath: process.env.WHATSAPP_WEB_AUTH_PATH || '.wwebjs_auth',
   puppeteerExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-  whatsappCloudApiVersion: process.env.WHATSAPP_CLOUD_API_VERSION || 'v25.0'
+  whatsappCloudApiVersion: process.env.WHATSAPP_CLOUD_API_VERSION || 'v25.0',
+  startNotifyWhatsappPermission: process.env.START_NOTIFY_WHATSAPP_PERMISSION || '/notify-me'
 };
 
 const productionRequired = [

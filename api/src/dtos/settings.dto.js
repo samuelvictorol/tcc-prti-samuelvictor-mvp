@@ -16,6 +16,16 @@ const deleteSettingSchema = z.object({
   params: z.object({ key: z.string().min(2).max(100).regex(/^[A-Za-z0-9_]+$/) })
 });
 
+const whatsappPermissionCommand = optionalField(
+  z.string().trim().min(1).max(100).refine(
+    (value) => ![...value].some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint <= 31 || codePoint === 127;
+    }),
+    'O comando nao pode conter caracteres de controle'
+  )
+);
+
 const bulkSettingsSchema = z.object({
   body: z.object({
     telegram: z.object({
@@ -32,6 +42,9 @@ const bulkSettingsSchema = z.object({
       verifyToken: optionalField(z.string().max(500)),
       appSecret: optionalField(z.string().max(500)),
       apiVersion: optionalField(z.string().regex(/^v\d+\.\d+$/))
+    }).optional(),
+    whatsappPermission: z.object({
+      command: whatsappPermissionCommand
     }).optional(),
     email: z.object({
       user: optionalField(z.string().email().max(254)),

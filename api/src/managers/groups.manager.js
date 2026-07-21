@@ -1,5 +1,6 @@
 const ContactGroup = require('../models/contact-group.model');
 const Contact = require('../models/contact.model');
+const mongoose = require('mongoose');
 const ApiError = require('../utils/api-error');
 const { encrypt, decrypt, searchHash } = require('../services/crypto.service');
 const { normalizeSearch } = require('../utils/normalizers');
@@ -119,8 +120,19 @@ async function upsertExternal({ name, source, externalId, imageUrl, inviteLink }
   return serialize(group);
 }
 
-async function expandContactIds(groupIds = []) {
+async function expandContactIds(groupIds = [], options = {}) {
   if (!groupIds.length) return [];
+  const maxUnique = Number(options.maxUnique);
+  if (Number.isSafeInteger(maxUnique) && maxUnique > 0) {
+    const ids = groupIds.map((id) => id instanceof mongoose.Types.ObjectId ? id : new mongoose.Types.ObjectId(String(id)));
+    const contacts = await ContactGroup.aggregate([
+      { $match: { _id: { $in: ids }, active: true, notificationDisabled: false } },
+      { $unwind: '$contacts' },
+      { $group: { _id: '$contacts' } },
+      { $limit: maxUnique }
+    ]);
+    return contacts.map((item) => String(item._id));
+  }
   const groups = await ContactGroup.find({ _id: { $in: groupIds }, active: true, notificationDisabled: false }).select('contacts').lean();
   return [...new Set(groups.flatMap((group) => group.contacts.map(String)))];
 }

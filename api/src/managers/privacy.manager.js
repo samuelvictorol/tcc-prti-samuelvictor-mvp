@@ -7,16 +7,16 @@ const contactsManager = require('./contacts.manager');
 
 async function recordConsent(contactId, input, actorId) {
   const contact = await contactsManager.getById(contactId);
-  await contactsManager.setChannelConsent(contactId, input.channel, input.status, {
+  const updatedContact = await contactsManager.setChannelConsent(contactId, input.channel, input.status, {
     legalBasis: input.legalBasis,
     purpose: input.purpose,
-    source: input.source,
+    source: 'admin_manual',
     termsVersion: input.termsVersion,
     actorId,
-    evidence: input.evidence
+    evidence: { ...(input.evidence || {}), confirmed: input.confirmed === true }
   });
   const event = await ConsentEvent.findOne({ contact: contactId, channel: input.channel }).sort({ occurredAt: -1 }).select('-evidenceEncrypted').lean();
-  return { contactId: contact.id, consent: event, channelState: input.status };
+  return { contactId: contact.id, contact: updatedContact, consent: event, channelState: input.status };
 }
 
 async function exportContact(contactId) {
@@ -55,8 +55,18 @@ async function deleteContact(contactId) {
     InviteClick.updateMany({ contact: contactId }, { $set: { contact: null } }),
     Invite.updateMany({ recipientContact: contactId }, { $set: { active: false }, $unset: { recipientContact: 1 } })
   ]);
-  await contactsManager.remove(contactId);
-  return { contactId: String(contactId), deleted: true, notificationEligibilityRevoked: true, auditEventsPseudonymized: true };
+  const removal = await contactsManager.remove(contactId);
+  return {
+    contactId: String(contactId),
+    deleted: true,
+    notificationEligibilityRevoked: true,
+    auditEventsPseudonymized: true,
+    personalArtifactsRemoved: true,
+    removedConversations: removal.removedConversations || 0,
+    removedConversationMessages: removal.removedConversationMessages || 0,
+    removedAdminNotifications: removal.removedAdminNotifications || 0,
+    sanitizedConversationShortcuts: removal.sanitizedConversationShortcuts || 0
+  };
 }
 
 module.exports = { recordConsent, exportContact, deleteContact };

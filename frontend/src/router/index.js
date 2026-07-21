@@ -26,7 +26,7 @@ const routes = [
       { path: 'notifications', name: 'notifications', component: () => import('../pages/NotificationsPage.vue') },
       { path: 'telegram', name: 'telegram', component: () => import('../pages/TelegramPage.vue'), meta: { channel: 'telegram' } },
       { path: 'whatsapp-web', name: 'whatsapp-web', component: () => import('../pages/WhatsappWebPage.vue'), meta: { channel: 'whatsappWeb' } },
-      { path: 'whatsapp-cloud', name: 'whatsapp-cloud', component: () => import('../pages/WhatsappCloudPage.vue'), meta: { channel: 'whatsappCloud' } },
+      { path: 'whatsapp-cloud', name: 'whatsapp-cloud', component: () => import('../pages/WhatsappCloudPage.vue') },
       { path: 'email', name: 'email', component: () => import('../pages/EmailPage.vue'), meta: { channel: 'email' } },
       { path: 'invites', name: 'invites', component: () => import('../pages/InvitesPage.vue') },
       { path: 'terms', name: 'terms', component: () => import('../pages/TermsPage.vue') },
@@ -52,7 +52,7 @@ router.beforeEach(async (to) => {
 
   if (to.meta.channel) {
     const app = useAppStore()
-    await app.fetchStatus()
+    await app.fetchStatus(to.meta.channel === 'whatsappWeb')
     if (!app.isChannelEnabled(to.meta.channel)) {
       return { name: 'home', query: { unavailable: to.meta.channel } }
     }

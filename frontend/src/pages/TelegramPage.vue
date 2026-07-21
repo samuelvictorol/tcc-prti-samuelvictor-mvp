@@ -6,15 +6,17 @@ import EmptyState from '../components/EmptyState.vue'
 import ContactDialog from '../components/ContactDialog.vue'
 import { errorMessage, fetchAll, http, unwrap } from '../services/http.js'
 import { connectSocket, getSocket } from '../services/socket.js'
+import { telegramBotIdentity } from '../services/telegram.js'
 import {
-  normalizeTelegramMessage,
-  telegramBotIdentity,
-  telegramMessageMatchesChat,
-} from '../services/telegram.js'
+  contactIdentity,
+  identityIdentifiers,
+  identityRegistrationSource,
+} from '../services/contact-identities.js'
 
 const $q = useQuasar()
 const tab = ref('chats')
 const loading = ref(false)
+const loadingMessages = ref(false)
 const sending = ref(false)
 const syncing = ref(false)
 const liveConnected = ref(false)
@@ -30,6 +32,8 @@ const realtimeMessages = ref([])
 const selected = ref(null)
 const selectedGroup = ref(null)
 const contactDialog = ref(false)
+const contactForDialog = ref(null)
+const selectedContactRecord = ref(null)
 const search = ref('')
 const sendMode = ref('quick')
 const message = ref('')
@@ -47,7 +51,7 @@ const groupColumns = [
 
 const filteredChats = computed(() => {
   const needle = search.value.toLowerCase().trim()
-  return chats.value.filter((chat) => !needle || [chat.name, chat.firstName, chat.username, chat.chatId, chat.id]
+  return chats.value.filter((chat) => !needle || [chat.displayName, chat.externalId, chat.name, chat.firstName, chat.username, chat.chatId, chat.id]
     .some((value) => String(value || '').toLowerCase().includes(needle)))
 })
 
@@ -57,10 +61,17 @@ const templateOptions = computed(() => templates.value.map((item) => ({
 })))
 
 const selectedRealtimeMessages = computed(() => realtimeMessages.value
-  .filter((item) => telegramMessageMatchesChat(item, selected.value))
+  .filter((item) => String(item.conversationId) === String(recordId(selected.value)))
   .slice(-50))
 
 const botUsername = computed(() => bot.value?.username ? `@${bot.value.username}` : '')
+const selectedTelegramIdentity = computed(() => contactIdentity(selectedContactRecord.value || {}, 'telegram') || {
+  channel: 'telegram',
+  address: chatAddress(selected.value),
+  source: 'conversation',
+})
+const selectedTelegramIdentifiers = computed(() => identityIdentifiers(selectedTelegramIdentity.value))
+const selectedTelegramRegistration = computed(() => identityRegistrationSource(selectedTelegramIdentity.value))
 
 function recordId(record) {
   return record?.id || record?._id || record?.chatId || record?.chat_id
@@ -75,13 +86,13 @@ function telegramIdentity(chat) {
 }
 
 function chatAddress(chat) {
-  return telegramIdentity(chat)?.address || chat?.chatId || chat?.chat_id
+  return chat?.externalId || telegramIdentity(chat)?.address || chat?.chatId || chat?.chat_id
 }
 
 function chatSubtitle(chat) {
   const rawUsername = chat.telegramUsername || chat.username
   const username = rawUsername ? `@${String(rawUsername).replace(/^@/, '')}` : ''
-  return username || chat.type || (telegramIdentity(chat)?.authorized ? 'Conversa autorizada' : 'Aguardando autorização')
+  return username || chat.type || (chat.contactId || telegramIdentity(chat)?.authorized ? 'Conversa autorizada' : 'Aguardando autorização')
 }
 
 function replaceChats(items) {
@@ -109,7 +120,7 @@ function replaceChats(items) {
 
 async function loadChats({ background = false } = {}) {
   try {
-    const items = await fetchAll('/telegram/chats', { preferredKey: 'chats' })
+    const items = await fetchAll('/conversations', { params: { channel: 'telegram', isGroup: false, limit: 100 }, preferredKey: 'items' })
     replaceChats(items)
   } catch (error) {
     if (!background) throw error
@@ -129,7 +140,7 @@ async function loadData() {
   loading.value = true
   try {
     const [chatItems, groupItems, templateItems, status] = await Promise.all([
-      fetchAll('/telegram/chats', { preferredKey: 'chats' }),
+      fetchAll('/conversations', { params: { channel: 'telegram', isGroup: false, limit: 100 }, preferredKey: 'items' }),
       fetchAll('/telegram/groups', { preferredKey: 'groups' }),
       fetchAll('/templates', { params: { channel: 'telegram' }, preferredKey: 'templates' }),
       http.get('/telegram/status', { params: { probe: true } }).then(unwrap),
@@ -138,10 +149,53 @@ async function loadData() {
     groups.value = groupItems
     templates.value = templateItems
     bot.value = telegramBotIdentity(status)
+    if (selected.value) {
+      loadSelectedContact(selected.value)
+      await loadConversationMessages(selected.value)
+    }
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível carregar o Telegram.') })
   } finally {
     loading.value = false
+  }
+}
+
+async function loadConversationMessages(chat) {
+  if (!recordId(chat)) return
+  loadingMessages.value = true
+  try {
+    const items = await fetchAll(`/conversations/${recordId(chat)}/messages`, { params: { limit: 100 }, preferredKey: 'items' })
+    realtimeMessages.value = items.reverse().map((item) => ({
+      ...item,
+      text: item.body || '',
+      sentAt: item.sentAt || item.createdAt,
+    }))
+    await http.patch(`/conversations/${recordId(chat)}/read`).catch(() => undefined)
+    scrollMessagesToBottom()
+  } catch (error) {
+    realtimeMessages.value = []
+    $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível carregar o histórico da conversa.') })
+  } finally {
+    loadingMessages.value = false
+  }
+}
+
+async function selectChat(chat) {
+  selected.value = chat
+  loadSelectedContact(chat)
+  await loadConversationMessages(chat)
+}
+
+async function loadSelectedContact(chat) {
+  const selectedId = String(recordId(chat) || '')
+  selectedContactRecord.value = null
+  if (!chat?.contactId) return null
+  try {
+    const contact = unwrap(await http.get(`/contacts/${chat.contactId}`)) || null
+    if (String(recordId(selected.value) || '') === selectedId) selectedContactRecord.value = contact
+    return contact
+  } catch {
+    return null
   }
 }
 
@@ -176,38 +230,78 @@ function addRealtimeMessage(item) {
   scrollMessagesToBottom()
 }
 
-function updateChatPreview(item) {
-  if (item.chatType && item.chatType !== 'private') return
-  const index = chats.value.findIndex((chat) => telegramMessageMatchesChat(item, chat))
-  const current = index >= 0 ? chats.value[index] : {}
-  const updated = {
-    ...current,
-    id: current.id || current._id || item.contactId || item.chatId,
-    chatId: chatAddress(current) || item.chatId,
-    displayName: current.displayName || current.name || item.senderName || item.username || item.chatId,
-    telegramUsername: current.telegramUsername || current.username || item.username,
-    lastMessage: item.text,
-    updatedAt: item.sentAt,
-  }
-  chats.value = [updated, ...chats.value.filter((_chat, itemIndex) => itemIndex !== index)]
-  if (!selected.value || telegramMessageMatchesChat(item, selected.value)) selected.value = updated
-}
-
 function scheduleChatRefresh() {
   clearTimeout(chatRefreshTimer)
   chatRefreshTimer = setTimeout(() => loadChats({ background: true }), 250)
 }
 
-function onRealtimeMessage(payload) {
-  const item = normalizeTelegramMessage(payload)
-  if (!item) return
-  addRealtimeMessage(item)
-  updateChatPreview(item)
-  scheduleChatRefresh()
+function onConversationMessage(payload) {
+  const conversation = payload?.conversation
+  const messageItem = payload?.message
+  if (!conversation || conversation.channel !== 'telegram') return
+  const index = chats.value.findIndex((chat) => String(recordId(chat)) === String(conversation.id))
+  chats.value = [conversation, ...chats.value.filter((_chat, itemIndex) => itemIndex !== index)]
+  if (messageItem && String(recordId(selected.value)) === String(conversation.id)) {
+    addRealtimeMessage({ ...messageItem, text: messageItem.body || '', sentAt: messageItem.sentAt || messageItem.createdAt })
+    http.patch(`/conversations/${conversation.id}/read`).catch(() => undefined)
+  }
+}
+
+async function openContact() {
+  if (!selected.value) return
+  try {
+    contactForDialog.value = selectedContactRecord.value || (selected.value.contactId
+      ? unwrap(await http.get(`/contacts/${selected.value.contactId}`))
+      : {
+          displayName: chatTitle(selected.value),
+          telegramUsername: selected.value.telegramUsername || selected.value.username,
+          avatarUrl: selected.value.avatarUrl,
+        })
+    contactDialog.value = true
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível abrir o contato.') })
+  }
+}
+
+function removeConversation(chat) {
+  $q.dialog({
+    title: 'Remover conversa?',
+    message: 'O histórico deste chat será removido. O contato e a autorização do Telegram serão preservados.',
+    cancel: { flat: true, label: 'Cancelar' },
+    ok: { color: 'negative', label: 'Remover conversa' },
+    persistent: true,
+  }).onOk(async () => {
+    try {
+      await http.delete(`/conversations/${recordId(chat)}`)
+      realtimeMessages.value = []
+      selected.value = null
+      selectedContactRecord.value = null
+      await loadChats()
+      if (selected.value) {
+        loadSelectedContact(selected.value)
+        await loadConversationMessages(selected.value)
+      }
+      $q.notify({ type: 'positive', message: 'Conversa removida; contato preservado.' })
+    } catch (error) {
+      $q.notify({ type: 'negative', message: errorMessage(error) })
+    }
+  })
 }
 
 function onChatsChanged() {
   scheduleChatRefresh()
+}
+
+async function onConversationRemoved(payload = {}) {
+  const removedId = String(payload.conversationId || '')
+  if (!removedId || !chats.value.some((chat) => String(recordId(chat)) === removedId)) return
+  const selectedWasRemoved = String(recordId(selected.value)) === removedId
+  if (selectedWasRemoved) {
+    selected.value = null
+    realtimeMessages.value = []
+  }
+  await loadChats({ background: true })
+  if (selectedWasRemoved && selected.value) await loadConversationMessages(selected.value)
 }
 
 function onSocketConnected() {
@@ -237,23 +331,15 @@ async function send() {
   }
   sending.value = true
   try {
-    const outboundText = sendMode.value === 'quick' ? message.value : 'Template enviado'
     await http.post('/telegram/send', {
-      contactId: recordId(selected.value),
+      contactId: selected.value.contactId || recordId(selected.value),
       mode: sendMode.value,
       message: sendMode.value === 'quick' ? message.value : undefined,
       templateId: sendMode.value === 'template' ? templateId.value : undefined,
     })
-    addRealtimeMessage({
-      id: `local:${Date.now()}`,
-      contactId: String(recordId(selected.value)),
-      chatId: String(chatAddress(selected.value)),
-      text: outboundText,
-      sentAt: new Date().toISOString(),
-      direction: 'outbound',
-    })
     message.value = ''
-    $q.notify({ type: 'positive', message: 'Mensagem do Telegram colocada na fila.' })
+    await loadConversationMessages(selected.value)
+    $q.notify({ type: 'positive', message: 'Mensagem enviada pelo Telegram.' })
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error) })
   } finally {
@@ -325,7 +411,7 @@ async function sendGroup() {
       templateId: sendMode.value === 'template' ? templateId.value : undefined,
     })
     groupSendDialog.value = false
-    $q.notify({ type: 'positive', message: 'Mensagem para o grupo colocada na fila.' })
+    $q.notify({ type: 'positive', message: 'Mensagem enviada para o grupo.' })
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error) })
   } finally {
@@ -338,9 +424,10 @@ onMounted(() => {
   socket.on('connect', onSocketConnected)
   socket.on('disconnect', onSocketDisconnected)
   socket.on('system:ready', onSocketConnected)
-  socket.on('telegram:message', onRealtimeMessage)
   socket.on('telegram:chats', onChatsChanged)
   socket.on('telegram:webhook', onChatsChanged)
+  socket.on('conversation:message', onConversationMessage)
+  socket.on('conversation:removed', onConversationRemoved)
   connectSocket()
   liveConnected.value = socket.connected
   loadData()
@@ -352,9 +439,10 @@ onBeforeUnmount(() => {
   socket.off('connect', onSocketConnected)
   socket.off('disconnect', onSocketDisconnected)
   socket.off('system:ready', onSocketConnected)
-  socket.off('telegram:message', onRealtimeMessage)
   socket.off('telegram:chats', onChatsChanged)
   socket.off('telegram:webhook', onChatsChanged)
+  socket.off('conversation:message', onConversationMessage)
+  socket.off('conversation:removed', onConversationRemoved)
 })
 </script>
 
@@ -408,11 +496,11 @@ onBeforeUnmount(() => {
               <div v-if="loading" class="q-pa-md"><q-skeleton v-for="n in 5" :key="n" type="QItem" /></div>
               <EmptyState v-else-if="!filteredChats.length" icon="mark_chat_unread" title="Nenhuma conversa autorizada" description="Compartilhe o link do bot para receber novos /start." />
               <q-list v-else separator class="chat-list">
-                <q-item v-for="chat in filteredChats" :key="recordId(chat)" clickable :active="recordId(selected) === recordId(chat)" active-class="chat-active" @click="selected = chat">
+                <q-item v-for="chat in filteredChats" :key="recordId(chat)" clickable :active="recordId(selected) === recordId(chat)" active-class="chat-active" @click="selectChat(chat)">
                   <q-item-section avatar><q-avatar class="avatar-fallback"><img v-if="chat.avatarUrl || chat.imageUrl" :src="chat.avatarUrl || chat.imageUrl" :alt="`Foto de ${chatTitle(chat)}`" /><span v-else>{{ chatTitle(chat).slice(0, 1).toUpperCase() }}</span></q-avatar></q-item-section>
                   <q-item-section>
                     <q-item-label class="text-weight-bold">{{ chatTitle(chat) }}</q-item-label>
-                    <q-item-label caption>{{ chat.lastMessage || chatSubtitle(chat) }}</q-item-label>
+                    <q-item-label caption>{{ chat.lastMessage?.preview || chat.lastMessage || chatSubtitle(chat) }}</q-item-label>
                     <q-item-label v-if="chat.lastMessage" caption class="chat-identity">{{ chatSubtitle(chat) }}</q-item-label>
                   </q-item-section>
                   <q-item-section side><span class="status-dot status-dot--online" title="Autorizado" /></q-item-section>
@@ -425,12 +513,29 @@ onBeforeUnmount(() => {
               <template v-else>
                 <div class="recipient-header">
                   <q-avatar size="48px" class="avatar-fallback"><img v-if="selected.avatarUrl || selected.imageUrl" :src="selected.avatarUrl || selected.imageUrl" :alt="`Foto de ${chatTitle(selected)}`" /><span v-else>{{ chatTitle(selected).slice(0, 1).toUpperCase() }}</span></q-avatar>
-                  <div><strong>{{ chatTitle(selected) }}</strong><span>{{ chatSubtitle(selected) }} · chat_id {{ chatAddress(selected) || 'não disponível' }}</span></div>
+                  <div class="recipient-identity">
+                    <strong>{{ chatTitle(selected) }}</strong>
+                    <span>{{ chatSubtitle(selected) }}</span>
+                    <div class="recipient-identifiers">
+                      <code v-for="identifier in selectedTelegramIdentifiers" :key="identifier.key">{{ identifier.label }}: {{ identifier.value }}</code>
+                    </div>
+                    <q-badge
+                      v-if="selectedTelegramRegistration.automatic"
+                      outline
+                      color="positive"
+                      icon="auto_awesome"
+                      :label="`Cadastro automático: ${selectedTelegramRegistration.label}`"
+                    />
+                  </div>
                 </div>
-                <div class="row justify-end q-mt-sm"><q-btn flat color="primary" no-caps icon="person_add" label="Salvar como contato" @click="contactDialog = true" /></div>
+                <div class="row justify-end q-gutter-sm q-mt-sm">
+                  <q-btn flat color="primary" no-caps icon="manage_accounts" :label="selected.contactId ? 'Editar contato' : 'Salvar como contato'" @click="openContact" />
+                  <q-btn flat color="negative" no-caps icon="delete_sweep" label="Remover conversa" @click="removeConversation(selected)" />
+                </div>
                 <div ref="messagesPanel" class="telegram-message-stream" aria-live="polite">
-                  <div v-if="!selectedRealtimeMessages.length" class="message-session-note">
-                    Mensagens novas recebidas enquanto esta página estiver aberta aparecerão aqui automaticamente.
+                  <div v-if="loadingMessages" class="message-session-note">Carregando histórico…</div>
+                  <div v-else-if="!selectedRealtimeMessages.length" class="message-session-note">
+                    Nenhuma mensagem armazenada nesta conversa.
                   </div>
                   <div
                     v-for="item in selectedRealtimeMessages"
@@ -495,7 +600,7 @@ onBeforeUnmount(() => {
         <q-card-actions align="right" class="q-pa-md"><q-btn v-close-popup flat no-caps label="Cancelar" /><q-btn color="primary" unelevated no-caps icon="send" label="Enviar" :loading="sending" @click="sendGroup" /></q-card-actions>
       </q-card>
     </q-dialog>
-    <ContactDialog v-model="contactDialog" :contact="selected" @saved="loadData" />
+    <ContactDialog v-model="contactDialog" :contact="contactForDialog" @saved="loadData" />
   </q-page>
 </template>
 
@@ -647,6 +752,28 @@ onBeforeUnmount(() => {
   margin-top: 3px;
   color: #667a77;
   font-size: 0.76rem;
+}
+
+.recipient-identity {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.recipient-identifiers {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 3px 9px;
+}
+
+.recipient-identifiers code {
+  max-width: min(360px, 62vw);
+  overflow: hidden;
+  color: #58716d;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 780px) {

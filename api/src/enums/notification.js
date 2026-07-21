@@ -12,6 +12,8 @@ const DELIVERY_STATUS = Object.freeze({
   QUEUED: 'queued',
   PROCESSING: 'processing',
   SENT: 'sent',
+  DELIVERED: 'delivered',
+  READ: 'read',
   FAILED: 'failed',
   SKIPPED: 'skipped'
 });

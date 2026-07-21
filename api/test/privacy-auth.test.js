@@ -5,12 +5,56 @@ const Notification = require('../src/models/notification.model');
 const ConsentEvent = require('../src/models/consent-event.model');
 const InviteClick = require('../src/models/invite-click.model');
 const Invite = require('../src/models/invite.model');
+const Contact = require('../src/models/contact.model');
+const ContactGroup = require('../src/models/contact-group.model');
+const Conversation = require('../src/models/conversation.model');
+const ConversationMessage = require('../src/models/conversation-message.model');
+const AdminNotification = require('../src/models/admin-notification.model');
 const RefreshToken = require('../src/models/refresh-token.model');
 const Admin = require('../src/models/admin.model');
 const contactsManager = require('../src/managers/contacts.manager');
 const privacyManager = require('../src/managers/privacy.manager');
 const authManager = require('../src/managers/auth.manager');
 const { env } = require('../src/config/env');
+
+test('alteracao manual de permissao deriva origem administrativa e persiste ator', async (context) => {
+  const originals = {
+    get: contactsManager.getById,
+    setConsent: contactsManager.setChannelConsent,
+    findConsent: ConsentEvent.findOne
+  };
+  context.after(() => {
+    contactsManager.getById = originals.get;
+    contactsManager.setChannelConsent = originals.setConsent;
+    ConsentEvent.findOne = originals.findConsent;
+  });
+  const contactId = '507f1f77bcf86cd799439011';
+  const actorId = '507f1f77bcf86cd799439012';
+  contactsManager.getById = async () => ({ id: contactId });
+  let consentContext;
+  contactsManager.setChannelConsent = async (_id, _channel, _status, input) => {
+    consentContext = input;
+    return { id: contactId, channels: [{ channel: 'whatsapp_web', consentStatus: 'revoked' }] };
+  };
+  ConsentEvent.findOne = () => ({
+    sort() { return this; },
+    select() { return this; },
+    async lean() { return { channel: 'whatsapp_web', status: 'revoked', source: 'admin_manual', actor: actorId }; }
+  });
+
+  const result = await privacyManager.recordConsent(contactId, {
+    channel: 'whatsapp_web',
+    status: 'revoked',
+    confirmed: true,
+    evidence: { reason: 'Solicitacao do cliente' },
+    source: 'forjado'
+  }, actorId);
+
+  assert.equal(consentContext.source, 'admin_manual');
+  assert.equal(consentContext.actorId, actorId);
+  assert.deepEqual(consentContext.evidence, { reason: 'Solicitacao do cliente', confirmed: true });
+  assert.equal(result.contact.channels[0].consentStatus, 'revoked');
+});
 
 test('exclusao LGPD cobre delivery isolada e desativa convite personalizado', async (context) => {
   const originals = {
@@ -42,6 +86,77 @@ test('exclusao LGPD cobre delivery isolada e desativa convite personalizado', as
   assert.deepEqual(notificationFilter.$or[1], { 'deliveries.contact': '507f1f77bcf86cd799439011' });
   assert.equal(inviteUpdate.$set.active, false);
   assert.equal(inviteUpdate.$unset.recipientContact, 1);
+});
+
+test('remocao direta de contato apaga historico e atalhos pessoais sem deixar referencias orfas', async (context) => {
+  const originals = {
+    findContact: Contact.findById,
+    deleteContact: Contact.deleteOne,
+    group: ContactGroup.updateMany,
+    distinctConversations: Conversation.distinct,
+    deleteConversations: Conversation.deleteMany,
+    updateConversations: Conversation.updateMany,
+    distinctMessageConversations: ConversationMessage.distinct,
+    deleteMessages: ConversationMessage.deleteMany,
+    deleteAdminNotifications: AdminNotification.deleteMany
+  };
+  context.after(() => {
+    Contact.findById = originals.findContact;
+    Contact.deleteOne = originals.deleteContact;
+    ContactGroup.updateMany = originals.group;
+    Conversation.distinct = originals.distinctConversations;
+    Conversation.deleteMany = originals.deleteConversations;
+    Conversation.updateMany = originals.updateConversations;
+    ConversationMessage.distinct = originals.distinctMessageConversations;
+    ConversationMessage.deleteMany = originals.deleteMessages;
+    AdminNotification.deleteMany = originals.deleteAdminNotifications;
+  });
+  const contactId = '507f1f77bcf86cd799439011';
+  const conversationId = '507f1f77bcf86cd799439021';
+  const groupConversationId = '507f1f77bcf86cd799439022';
+  Contact.findById = async () => ({ _id: contactId });
+  Contact.deleteOne = async () => ({ deletedCount: 1 });
+  ContactGroup.updateMany = async () => ({ modifiedCount: 1 });
+  Conversation.distinct = async (field, filter) => {
+    assert.equal(field, '_id');
+    assert.deepEqual(filter, { contact: contactId });
+    return [conversationId];
+  };
+  ConversationMessage.distinct = async (field, filter) => {
+    assert.equal(field, 'conversation');
+    assert.deepEqual(filter, { contact: contactId });
+    return [conversationId, groupConversationId];
+  };
+  let messageFilter;
+  let conversationFilter;
+  let shortcutFilter;
+  let shortcutUpdate;
+  let adminFilter;
+  ConversationMessage.deleteMany = async (filter) => { messageFilter = filter; return { deletedCount: 5 }; };
+  Conversation.deleteMany = async (filter) => { conversationFilter = filter; return { deletedCount: 1 }; };
+  Conversation.updateMany = async (filter, update) => {
+    shortcutFilter = filter;
+    shortcutUpdate = update;
+    return { modifiedCount: 1 };
+  };
+  AdminNotification.deleteMany = async (filter) => { adminFilter = filter; return { deletedCount: 2 }; };
+
+  const result = await contactsManager.remove(contactId);
+
+  assert.deepEqual(conversationFilter, { contact: contactId });
+  assert.deepEqual(messageFilter.$or, [
+    { contact: contactId },
+    { conversation: { $in: [conversationId] } }
+  ]);
+  assert.deepEqual(shortcutFilter, { _id: { $in: [groupConversationId] } });
+  assert.equal(shortcutUpdate.$unset.lastMessagePreviewEncrypted, 1);
+  assert.equal(shortcutUpdate.$set.unreadCount, 0);
+  assert.ok(adminFilter.$or.some((condition) => condition.contact === contactId));
+  assert.ok(adminFilter.$or.some((condition) => condition['context.contactId']?.$in.includes(contactId)));
+  assert.equal(result.removedConversations, 1);
+  assert.equal(result.removedConversationMessages, 5);
+  assert.equal(result.removedAdminNotifications, 2);
+  assert.equal(result.sanitizedConversationShortcuts, 1);
 });
 
 test('rotacao de refresh token so pode ser reivindicada uma vez', async (context) => {

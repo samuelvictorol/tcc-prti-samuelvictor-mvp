@@ -64,7 +64,7 @@ onMounted(loadInvite)
           @click="follow(link)"
         />
       </div>
-      <div class="privacy-copy"><q-icon name="verified_user" /><span>Ao escolher um canal, você será direcionado ao serviço correspondente. Iniciar um bot ou conversa confirma apenas a autorização daquele canal.</span></div>
+      <div class="privacy-copy"><q-icon name="verified_user" /><span>Escolher um botão apenas abre o serviço. No Telegram, inicie o bot para autorizar esse canal. No WhatsApp, envie o comando informado pelo administrador para autorizar Web e Cloud.</span></div>
     </q-card>
   </main>
 </template>

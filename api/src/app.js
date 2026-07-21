@@ -8,7 +8,7 @@ const hpp = require('hpp');
 const morgan = require('morgan');
 const { env } = require('./config/env');
 const loadRoutes = require('./routes/loader');
-const { requestContext, ipBlock, apiLimiter } = require('./middlewares/security');
+const { requestContext, ipBlock, apiLimiter, webhookLimiter } = require('./middlewares/security');
 const { notFound, errorHandler } = require('./middlewares/error');
 
 morgan.token('safe-path', (req) => req.path || '/');
@@ -32,6 +32,9 @@ function createApp() {
   app.use(requestContext);
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(cors(corsOptions()));
+  app.use(ipBlock);
+  app.use(env.apiPrefix + '/webhooks', webhookLimiter);
+  app.use(env.apiPrefix, apiLimiter);
   app.use(compression());
   app.use(cookieParser());
   app.use(express.json({
@@ -44,8 +47,6 @@ function createApp() {
   app.use(morgan(env.nodeEnv === 'production'
     ? ':remote-addr - :method :safe-path :status :res[content-length] - :response-time ms'
     : 'dev'));
-  app.use(ipBlock);
-  app.use(env.apiPrefix, apiLimiter);
   loadRoutes(app);
   app.use(notFound);
   app.use(errorHandler);

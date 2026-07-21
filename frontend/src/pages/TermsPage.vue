@@ -67,7 +67,7 @@ async function loadData() {
     contacts.value = contactsResult.value
     privacy.activeContacts = contacts.value.length
     privacy.revokedConsents = contacts.value.flatMap((item) => item.channels || []).filter((channel) => channel.consentStatus === 'revoked').length
-    privacy.authorizedChannels = contacts.value.flatMap((item) => item.channels || []).filter((channel) => channel.authorized || channel.consentStatus === 'granted').length
+    privacy.authorizedChannels = contacts.value.flatMap((item) => item.channels || []).filter((channel) => channel.authorized && channel.consentStatus === 'granted').length
   }
   if (termsResult.status === 'rejected') $q.notify({ type: 'negative', message: errorMessage(termsResult.reason, 'Não foi possível carregar os termos.') })
   loading.value = false
@@ -107,7 +107,7 @@ async function save() {
 }
 
 function authorizedIdentities(contact) {
-  return (contact.channels || []).filter((item) => item.authorized || item.consentStatus === 'granted')
+  return (contact.channels || []).filter((item) => item.authorized && item.consentStatus === 'granted')
 }
 
 async function exportContact(contact) {
@@ -202,7 +202,7 @@ onMounted(loadData)
           <EmptyState v-if="!loading && !contacts.length" icon="contacts" title="Nenhum titular cadastrado" description="Contatos cadastrados aparecerão aqui para exportação, revogação ou exclusão." />
           <q-table v-else flat :rows="contacts" :columns="requestColumns" row-key="id" :loading="loading">
             <template #body-cell-contact="props"><q-td :props="props"><strong>{{ props.row.displayName || props.row.name || props.row.email || 'Titular' }}</strong><div class="text-caption text-muted">{{ props.row.email || props.row.phone || 'Sem identificador visível' }}</div></q-td></template>
-            <template #body-cell-channels="props"><q-td :props="props"><div class="row q-gutter-xs"><q-badge v-for="identity in props.row.channels || []" :key="identity.channel" outline :color="identity.authorized || identity.consentStatus === 'granted' ? 'positive' : identity.consentStatus === 'revoked' ? 'negative' : 'grey-7'" :label="`${identity.channel}: ${identity.consentStatus || (identity.authorized ? 'granted' : 'unknown')}`" /></div></q-td></template>
+            <template #body-cell-channels="props"><q-td :props="props"><div class="row q-gutter-xs"><q-badge v-for="identity in props.row.channels || []" :key="identity.channel" outline :color="identity.authorized && identity.consentStatus === 'granted' ? 'positive' : identity.consentStatus === 'revoked' ? 'negative' : 'grey-7'" :label="`${identity.channel}: ${identity.consentStatus || (identity.authorized ? 'granted' : 'unknown')}`" /></div></q-td></template>
             <template #body-cell-updatedAt="props"><q-td :props="props">{{ formatDate(props.row.updatedAt) }}</q-td></template>
             <template #body-cell-actions="props"><q-td :props="props"><q-btn flat round dense icon="download" aria-label="Exportar dados" @click="exportContact(props.row)" /><q-btn flat round dense icon="block" color="warning" aria-label="Revogar consentimento"><q-menu><q-list><q-item v-for="identity in authorizedIdentities(props.row)" :key="identity.channel" v-close-popup clickable @click="revokeConsent(props.row, identity.channel)"><q-item-section>Revogar {{ identity.channel }}</q-item-section></q-item><q-item v-if="!authorizedIdentities(props.row).length" disable><q-item-section>Nenhum canal autorizado</q-item-section></q-item></q-list></q-menu></q-btn><q-btn flat round dense icon="delete_forever" color="negative" aria-label="Excluir dados" @click="deleteContact(props.row)" /></q-td></template>
           </q-table>

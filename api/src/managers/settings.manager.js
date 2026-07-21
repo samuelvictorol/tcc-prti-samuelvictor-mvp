@@ -15,6 +15,7 @@ const DEFINITIONS = Object.freeze({
   WHATSAPP_CLOUD_VERIFY_TOKEN: { sensitive: true, channel: 'whatsapp_cloud' },
   WHATSAPP_CLOUD_APP_SECRET: { sensitive: true, channel: 'whatsapp_cloud' },
   WHATSAPP_CLOUD_API_VERSION: { sensitive: false, channel: 'whatsapp_cloud' },
+  START_NOTIFY_WHATSAPP_PERMISSION: { sensitive: false, channel: 'whatsapp' },
   WHATSAPP_WEB_AUTHENTICATED_AT: { sensitive: true, internal: true },
   WHATSAPP_WEB_SESSION_MAX_AGE_DAYS: { sensitive: false, channel: 'whatsapp_web' }
 });
@@ -108,6 +109,7 @@ async function setBulk(input, actorId) {
     'whatsappCloud.verifyToken': 'WHATSAPP_CLOUD_VERIFY_TOKEN',
     'whatsappCloud.appSecret': 'WHATSAPP_CLOUD_APP_SECRET',
     'whatsappCloud.apiVersion': 'WHATSAPP_CLOUD_API_VERSION',
+    'whatsappPermission.command': 'START_NOTIFY_WHATSAPP_PERMISSION',
     'email.user': 'GMAIL_USER',
     'email.from': 'GMAIL_FROM',
     'email.fromName': 'GMAIL_FROM_NAME',
@@ -125,9 +127,17 @@ async function setBulk(input, actorId) {
 async function getStructured() {
   const [items, channelStatuses] = await Promise.all([list(), statuses()]);
   const values = Object.fromEntries(items.map((item) => [item.key, item]));
+  const permissionCommand = values.START_NOTIFY_WHATSAPP_PERMISSION?.value
+    || process.env.START_NOTIFY_WHATSAPP_PERMISSION
+    || '/notify-me';
   return {
     telegram: { configured: channelStatuses.telegram.configured, botTokenConfigured: values.TELEGRAM_BOT_TOKEN?.configured || false, webhookSecretConfigured: values.TELEGRAM_WEBHOOK_SECRET?.configured || false },
-    whatsappWeb: { ...channelStatuses.whatsapp_web, sessionTtlDays: Number(values.WHATSAPP_WEB_SESSION_MAX_AGE_DAYS?.value || process.env.WHATSAPP_WEB_SESSION_MAX_AGE_DAYS || 90) },
+    whatsappPermission: { command: permissionCommand },
+    whatsappWeb: {
+      ...channelStatuses.whatsapp_web,
+      sessionTtlDays: Number(values.WHATSAPP_WEB_SESSION_MAX_AGE_DAYS?.value || process.env.WHATSAPP_WEB_SESSION_MAX_AGE_DAYS || 90),
+      permissionCommand
+    },
     whatsappCloud: {
       configured: channelStatuses.whatsapp_cloud.configured,
       sendConfigured: channelStatuses.whatsapp_cloud.configured,
@@ -139,7 +149,8 @@ async function getStructured() {
       webhookVerificationConfigured: values.WHATSAPP_CLOUD_VERIFY_TOKEN?.configured || false,
       webhookSignatureConfigured: values.WHATSAPP_CLOUD_APP_SECRET?.configured || false,
       webhookConfigured: Boolean(values.WHATSAPP_CLOUD_VERIFY_TOKEN?.configured && values.WHATSAPP_CLOUD_APP_SECRET?.configured),
-      apiVersion: values.WHATSAPP_CLOUD_API_VERSION?.value || process.env.WHATSAPP_CLOUD_API_VERSION || null
+      apiVersion: values.WHATSAPP_CLOUD_API_VERSION?.value || process.env.WHATSAPP_CLOUD_API_VERSION || null,
+      permissionCommand
     },
     email: {
       configured: channelStatuses.email.configured,
@@ -152,4 +163,21 @@ async function getStructured() {
   };
 }
 
-module.exports = { DEFINITIONS, getValue, setValue, remove, list, setBulk, getStructured, channelConfigured, statuses };
+function normalizeWhatsappPermissionText(value) {
+  return String(value || '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('pt-BR');
+}
+
+async function getWhatsappPermissionCommand() {
+  const configured = await module.exports.getValue('START_NOTIFY_WHATSAPP_PERMISSION');
+  return String(configured || process.env.START_NOTIFY_WHATSAPP_PERMISSION || '/notify-me').trim();
+}
+
+async function isWhatsappPermissionCommand(value) {
+  const command = await getWhatsappPermissionCommand();
+  return Boolean(command) && normalizeWhatsappPermissionText(value) === normalizeWhatsappPermissionText(command);
+}
+
+module.exports = {
+  DEFINITIONS, getValue, setValue, remove, list, setBulk, getStructured, channelConfigured, statuses,
+  getWhatsappPermissionCommand, isWhatsappPermissionCommand, normalizeWhatsappPermissionText
+};

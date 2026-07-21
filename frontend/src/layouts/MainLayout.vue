@@ -1,16 +1,21 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app.js'
 import { useAuthStore } from '../stores/auth.js'
-import { disconnectSocket } from '../services/socket.js'
+import { connectSocket, disconnectSocket, getSocket } from '../services/socket.js'
+import { asList, http, unwrap } from '../services/http.js'
+import { normalizeWhatsappWebStatus } from '../services/whatsapp-web.js'
 
 const $q = useQuasar()
 const router = useRouter()
 const app = useAppStore()
 const auth = useAuthStore()
 const drawer = ref($q.screen.gt.sm)
+const adminNotifications = ref([])
+const unreadAdminNotifications = ref(0)
+const notificationsLoading = ref(false)
 
 const navigation = computed(() => [
   { label: 'Início', caption: 'Saúde e configurações', icon: 'space_dashboard', to: '/', available: true },
@@ -19,8 +24,14 @@ const navigation = computed(() => [
   { label: 'Notificações', caption: 'Envios e histórico', icon: 'send', to: '/notifications', available: true },
   { separator: true, label: 'Canais' },
   { label: 'Telegram', icon: 'send_to_mobile', to: '/telegram', available: app.isChannelEnabled('telegram') },
-  { label: 'WhatsApp Web', icon: 'forum', to: '/whatsapp-web', available: app.isChannelEnabled('whatsappWeb') },
-  { label: 'WhatsApp Cloud', icon: 'cloud_sync', to: '/whatsapp-cloud', available: app.isChannelEnabled('whatsappCloud') },
+  {
+    label: 'WhatsApp Web',
+    caption: app.isChannelEnabled('whatsappWeb') ? 'Monitor conectado' : 'Conecte o QR Code no Início',
+    icon: 'forum',
+    to: '/whatsapp-web',
+    available: app.isChannelEnabled('whatsappWeb'),
+  },
+  { label: 'WhatsApp Cloud', icon: 'cloud_sync', to: '/whatsapp-cloud', available: true },
   { label: 'Gmail', icon: 'mail', to: '/email', available: app.isChannelEnabled('email') },
   { separator: true, label: 'Governança' },
   { label: 'Convites', icon: 'link', to: '/invites', available: true },
@@ -40,13 +51,119 @@ function goTo(item) {
   })
 }
 
+function notificationChannelMeta(channel) {
+  return {
+    telegram: { label: 'Telegram', icon: 'send_to_mobile', color: 'info' },
+    whatsapp_cloud: { label: 'WhatsApp oficial', icon: 'cloud_sync', color: 'positive' },
+    whatsapp_web: { label: 'WhatsApp Web', icon: 'forum', color: 'primary' },
+  }[channel] || { label: 'Sistema', icon: 'notifications', color: 'grey-7' }
+}
+
+function formatNotificationDate(value) {
+  if (!value) return 'agora'
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
+}
+
+async function loadAdminNotifications() {
+  notificationsLoading.value = true
+  try {
+    const payload = unwrap(await http.get('/admin-notifications', { params: { page: 1, limit: 20 } })) || {}
+    adminNotifications.value = asList(payload, 'items')
+    unreadAdminNotifications.value = Number(payload.unread || adminNotifications.value.filter((item) => !item.read).length)
+  } catch {
+    adminNotifications.value = []
+    unreadAdminNotifications.value = 0
+  } finally {
+    notificationsLoading.value = false
+  }
+}
+
+function onAdminNotification(notification) {
+  if (!notification?.id) return
+  const alreadyListed = adminNotifications.value.some((item) => item.id === notification.id)
+  adminNotifications.value = [notification, ...adminNotifications.value.filter((item) => item.id !== notification.id)].slice(0, 20)
+  if (!alreadyListed && !notification.read) unreadAdminNotifications.value += 1
+}
+
+function onSocketReady() {
+  loadAdminNotifications()
+  app.fetchStatus(true)
+}
+
+function onWhatsappWebStatus(payload = {}) {
+  const status = normalizeWhatsappWebStatus(payload, app.channelStatus('whatsappWeb'))
+  app.updateChannelStatus('whatsappWeb', status)
+}
+
+function onWhatsappWebReady(payload = {}) {
+  onWhatsappWebStatus({ ...payload, state: 'ready', ready: true, attemptActive: false, qrCode: '' })
+}
+
+function onWhatsappWebDisconnected(payload = {}) {
+  onWhatsappWebStatus({ ...payload, state: 'disconnected', ready: false, attemptActive: false, qrCode: '' })
+}
+
+async function markNotificationRead(notification) {
+  if (!notification?.id || notification.read) return
+  try {
+    await http.post(`/admin-notifications/${notification.id}/read`)
+    notification.read = true
+    unreadAdminNotifications.value = Math.max(0, unreadAdminNotifications.value - 1)
+  } catch {
+    // O atalho continua disponível mesmo se a atualização do contador falhar.
+  }
+}
+
+async function openAdminNotification(notification) {
+  await markNotificationRead(notification)
+  if (notification.contactId) {
+    await router.push({ path: '/contacts', query: { editContact: notification.contactId } })
+    return
+  }
+  if (notification.channel === 'telegram') await router.push('/telegram')
+  else if (notification.channel === 'whatsapp_web') await router.push('/whatsapp-web')
+  else if (notification.channel === 'whatsapp_cloud') await router.push('/whatsapp-cloud')
+}
+
+async function markAllAdminNotificationsRead() {
+  try {
+    await http.post('/admin-notifications/read-all')
+    adminNotifications.value = adminNotifications.value.map((item) => ({ ...item, read: true }))
+    unreadAdminNotifications.value = 0
+  } catch {
+    $q.notify({ type: 'warning', message: 'Não foi possível marcar todas as notificações como lidas.' })
+  }
+}
+
 async function logout() {
   disconnectSocket()
   await auth.logout()
   router.replace({ name: 'login' })
 }
 
-onMounted(() => app.fetchStatus())
+onMounted(() => {
+  app.fetchStatus()
+  loadAdminNotifications()
+  const socket = connectSocket()
+  socket.on('admin_notification:created', onAdminNotification)
+  socket.on('connect', onSocketReady)
+  socket.on('system:ready', onSocketReady)
+  socket.on('whatsapp_web:status', onWhatsappWebStatus)
+  socket.on('whatsapp_web:qr', onWhatsappWebStatus)
+  socket.on('whatsapp_web:ready', onWhatsappWebReady)
+  socket.on('whatsapp_web:disconnected', onWhatsappWebDisconnected)
+})
+
+onBeforeUnmount(() => {
+  const socket = getSocket()
+  socket.off('admin_notification:created', onAdminNotification)
+  socket.off('connect', onSocketReady)
+  socket.off('system:ready', onSocketReady)
+  socket.off('whatsapp_web:status', onWhatsappWebStatus)
+  socket.off('whatsapp_web:qr', onWhatsappWebStatus)
+  socket.off('whatsapp_web:ready', onWhatsappWebReady)
+  socket.off('whatsapp_web:disconnected', onWhatsappWebDisconnected)
+})
 </script>
 
 <template>
@@ -63,6 +180,48 @@ onMounted(() => app.fetchStatus())
           <span :class="['status-dot', app.statusLoaded && 'status-dot--online']" />
           {{ app.statusLoaded ? 'Central sincronizada' : 'Sincronizando' }}
         </div>
+        <q-btn flat round icon="notifications" aria-label="Notificações do administrador" class="admin-bell">
+          <q-badge v-if="unreadAdminNotifications" floating rounded color="negative" :label="unreadAdminNotifications > 99 ? '99+' : unreadAdminNotifications" />
+          <q-menu anchor="bottom right" self="top right" :offset="[0, 10]" class="admin-notification-menu">
+            <div class="admin-notification-header">
+              <div>
+                <strong>Atualizações da central</strong>
+                <span>{{ unreadAdminNotifications }} não lida(s)</span>
+              </div>
+              <q-btn v-if="unreadAdminNotifications" flat dense no-caps color="primary" label="Marcar todas" @click.stop="markAllAdminNotificationsRead" />
+            </div>
+            <q-separator />
+            <div v-if="notificationsLoading" class="q-pa-md"><q-skeleton v-for="n in 3" :key="n" type="QItem" /></div>
+            <q-list v-else-if="adminNotifications.length" separator class="admin-notification-list">
+              <q-item
+                v-for="notification in adminNotifications"
+                :key="notification.id"
+                v-close-popup
+                clickable
+                :class="{ 'admin-notification--unread': !notification.read }"
+                @click="openAdminNotification(notification)"
+              >
+                <q-item-section avatar>
+                  <q-avatar :color="notificationChannelMeta(notification.channel).color" text-color="white" :icon="notificationChannelMeta(notification.channel).icon" />
+                </q-item-section>
+                <q-item-section>
+                  <q-item-label class="text-weight-bold">{{ notification.title }}</q-item-label>
+                  <q-item-label caption lines="2">{{ notification.message }}</q-item-label>
+                  <div class="admin-notification-meta">
+                    <q-badge outline :color="notificationChannelMeta(notification.channel).color" :label="notificationChannelMeta(notification.channel).label" />
+                    <time>{{ formatNotificationDate(notification.createdAt) }}</time>
+                  </div>
+                </q-item-section>
+                <q-item-section v-if="!notification.read" side top><span class="unread-dot" /></q-item-section>
+              </q-item>
+            </q-list>
+            <div v-else class="admin-notification-empty">
+              <q-icon name="notifications_none" />
+              <strong>Nenhuma novidade</strong>
+              <span>Contatos cadastrados automaticamente aparecerão aqui.</span>
+            </div>
+          </q-menu>
+        </q-btn>
         <q-btn flat round icon="account_circle" aria-label="Menu da conta">
           <q-menu anchor="bottom right" self="top right" :offset="[0, 10]">
             <q-list style="min-width: 220px">
@@ -105,6 +264,7 @@ onMounted(() => app.fetchStatus())
               :active="$route.path === item.to"
               active-class="nav-item--active"
               :class="['nav-item', { 'nav-item--disabled': !item.available }]"
+              :aria-disabled="String(!item.available)"
               @click="goTo(item)"
             >
               <q-item-section avatar>
@@ -264,6 +424,84 @@ onMounted(() => app.fetchStatus())
   gap: 9px;
   margin-right: 10px;
   color: #506865;
+  font-size: 0.78rem;
+}
+
+.admin-bell {
+  margin-right: 4px;
+}
+
+:global(.admin-notification-menu) {
+  width: min(430px, calc(100vw - 20px));
+  max-width: calc(100vw - 20px) !important;
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+:global(.admin-notification-header) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 16px;
+}
+
+:global(.admin-notification-header strong),
+:global(.admin-notification-header span) {
+  display: block;
+}
+
+:global(.admin-notification-header span) {
+  margin-top: 2px;
+  color: #667a77;
+  font-size: 0.75rem;
+}
+
+:global(.admin-notification-list) {
+  max-height: min(520px, 66vh);
+  overflow-y: auto;
+}
+
+:global(.admin-notification--unread) {
+  background: rgba(130, 248, 230, 0.13);
+}
+
+:global(.admin-notification-meta) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+  color: #6a7d79;
+  font-size: 0.68rem;
+}
+
+:global(.unread-dot) {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #e0445e;
+}
+
+:global(.admin-notification-empty) {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 34px 24px;
+  color: #6b807c;
+  text-align: center;
+}
+
+:global(.admin-notification-empty .q-icon) {
+  color: #35bca4;
+  font-size: 38px;
+}
+
+:global(.admin-notification-empty strong) {
+  color: #294641;
+}
+
+:global(.admin-notification-empty span) {
+  max-width: 280px;
   font-size: 0.78rem;
 }
 
