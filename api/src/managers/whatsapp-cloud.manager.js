@@ -6,8 +6,39 @@ const { timingSafeEqual } = require('../services/crypto.service');
 const { env } = require('../config/env');
 const { emit } = require('../services/socket.service');
 const ApiError = require('../utils/api-error');
+const { buildOfficialTemplateMessage, listTemplatePresets } = require('../utils/whatsapp-cloud-templates');
 
-async function configuration() {
+async function sendConfiguration() {
+  const [accessToken, phoneNumberId, version] = await Promise.all([
+    settingsManager.getValue('WHATSAPP_CLOUD_ACCESS_TOKEN'),
+    settingsManager.getValue('WHATSAPP_CLOUD_PHONE_NUMBER_ID'),
+    settingsManager.getValue('WHATSAPP_CLOUD_API_VERSION')
+  ]);
+  if (!accessToken || !phoneNumberId) {
+    throw new ApiError(503, 'Envio do WhatsApp Cloud nao configurado', {
+      missing: [!accessToken && 'accessToken', !phoneNumberId && 'phoneNumberId'].filter(Boolean)
+    }, 'CHANNEL_NOT_CONFIGURED');
+  }
+  return { accessToken, phoneNumberId, version: version || env.whatsappCloudApiVersion };
+}
+
+async function challengeConfiguration() {
+  const verifyToken = await settingsManager.getValue('WHATSAPP_CLOUD_VERIFY_TOKEN');
+  if (!verifyToken) {
+    throw new ApiError(503, 'Token de verificacao do webhook nao configurado', null, 'WHATSAPP_WEBHOOK_VERIFY_NOT_CONFIGURED');
+  }
+  return { verifyToken };
+}
+
+async function signatureConfiguration() {
+  const appSecret = await settingsManager.getValue('WHATSAPP_CLOUD_APP_SECRET');
+  if (!appSecret) {
+    throw new ApiError(503, 'App Secret do webhook nao configurado', null, 'WHATSAPP_WEBHOOK_SIGNATURE_NOT_CONFIGURED');
+  }
+  return { appSecret };
+}
+
+async function status() {
   const [accessToken, phoneNumberId, verifyToken, appSecret, version] = await Promise.all([
     settingsManager.getValue('WHATSAPP_CLOUD_ACCESS_TOKEN'),
     settingsManager.getValue('WHATSAPP_CLOUD_PHONE_NUMBER_ID'),
@@ -15,22 +46,27 @@ async function configuration() {
     settingsManager.getValue('WHATSAPP_CLOUD_APP_SECRET'),
     settingsManager.getValue('WHATSAPP_CLOUD_API_VERSION')
   ]);
-  if (!accessToken || !phoneNumberId || !verifyToken || !appSecret) throw new ApiError(503, 'WhatsApp Cloud nao configurado', null, 'CHANNEL_NOT_CONFIGURED');
-  return { accessToken, phoneNumberId, verifyToken, appSecret, version: version || env.whatsappCloudApiVersion };
-}
-
-async function status() {
-  return { configured: await settingsManager.channelConfigured('whatsapp_cloud') };
+  const sendConfigured = Boolean(accessToken && phoneNumberId);
+  const webhookVerificationConfigured = Boolean(verifyToken);
+  const webhookSignatureConfigured = Boolean(appSecret);
+  return {
+    configured: sendConfigured,
+    sendConfigured,
+    webhookVerificationConfigured,
+    webhookSignatureConfigured,
+    webhookConfigured: webhookVerificationConfigured && webhookSignatureConfigured,
+    apiVersion: version || env.whatsappCloudApiVersion
+  };
 }
 
 async function verifyChallenge(mode, token, challenge) {
-  const config = await configuration();
+  const config = await challengeConfiguration();
   if (mode !== 'subscribe' || !timingSafeEqual(token, config.verifyToken)) throw new ApiError(403, 'Token de verificacao invalido');
   return challenge;
 }
 
 async function verifySignature(rawBody, signature) {
-  const config = await configuration();
+  const config = await signatureConfiguration();
   if (!signature?.startsWith('sha256=')) throw new ApiError(401, 'Assinatura Meta ausente');
   const expected = 'sha256=' + crypto.createHmac('sha256', config.appSecret).update(rawBody || Buffer.alloc(0)).digest('hex');
   if (!timingSafeEqual(signature, expected)) throw new ApiError(401, 'Assinatura Meta invalida');
@@ -62,8 +98,20 @@ async function webhook(payload, rawBody, signature) {
   return { received: true };
 }
 
+function templatePresets() {
+  return listTemplatePresets();
+}
+
+function normalizeMetaDestination(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!/^\d{8,15}$/.test(digits)) {
+    throw new ApiError(422, 'Numero WhatsApp invalido; informe pais, DDD e numero', null, 'WHATSAPP_DESTINATION_INVALID');
+  }
+  return digits;
+}
+
 async function send(input) {
-  const config = await configuration();
+  const config = await sendConfiguration();
   let destination = input.destination;
   if (!destination && input.contactId) destination = (await contactsManager.getDestination(input.contactId, 'whatsapp_cloud')).address;
   if (destination && !input.contactId && !input.allowUnconsented) {
@@ -72,11 +120,16 @@ async function send(input) {
     destination = (await contactsManager.getDestination(known.id, 'whatsapp_cloud')).address;
   }
   if (!destination) throw new ApiError(422, 'Destino WhatsApp obrigatorio');
+  destination = normalizeMetaDestination(destination);
   let message;
-  if (input.templateName) {
+  if (input.officialTemplate) {
+    message = buildOfficialTemplateMessage(input.officialTemplate);
+  } else if (input.templateName) {
+    const template = { name: input.templateName, language: { code: input.languageCode || 'pt_BR' } };
+    if (input.components?.length) template.components = input.components;
     message = {
       type: 'template',
-      template: { name: input.templateName, language: { code: input.languageCode || 'pt_BR' }, components: input.components || [] }
+      template
     };
   } else if (input.payload) {
     message = input.payload;
@@ -97,4 +150,4 @@ async function send(input) {
   return { providerMessageId: messageId, raw: body };
 }
 
-module.exports = { status, verifyChallenge, webhook, send };
+module.exports = { status, templatePresets, verifyChallenge, webhook, send, normalizeMetaDestination };

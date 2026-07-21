@@ -10,6 +10,7 @@ const { env } = require('../config/env');
 const router = express.Router();
 router.use(requireAuth);
 router.get('/status', asyncHandler(controller.status));
+router.get('/template-presets', asyncHandler(controller.templatePresets));
 router.post('/send', requireConfiguredChannel('whatsapp_cloud'), validate(channelSendSchema), asyncHandler(controller.send));
 
 const webhookRouter = express.Router();

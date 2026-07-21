@@ -2,6 +2,7 @@ const sanitizeHtml = require('sanitize-html');
 const Template = require('../models/template.model');
 const ApiError = require('../utils/api-error');
 const { parsePagination, pageResult } = require('../utils/pagination');
+const { normalizeOfficialTemplateDefinition } = require('../utils/whatsapp-cloud-templates');
 
 function clean(input) {
   const output = { ...input };
@@ -42,14 +43,28 @@ function clean(input) {
 function validateTemplate(input) {
   if (input.channel === 'email' && !input.body && !input.html) throw new ApiError(422, 'Template de email exige body ou html');
   if (input.channel === 'global' && (!input.variants || typeof input.variants !== 'object')) throw new ApiError(422, 'Template global exige variants por canal');
-  if (input.channel === 'whatsapp_cloud' && input.templateType === 'approved_template' && !input.externalTemplateName) {
-    throw new ApiError(422, 'Template oficial exige externalTemplateName');
+  if (input.channel === 'whatsapp_cloud' && !input.whatsappCloudPreset) {
+    throw new ApiError(
+      422,
+      'Selecione um dos tres modelos oficiais disponiveis para WhatsApp Cloud',
+      { allowedPresets: ['order_confirmation', 'plain_text', 'hello_world'] },
+      'WHATSAPP_TEMPLATE_PRESET_REQUIRED'
+    );
   }
 }
 
+function normalize(input) {
+  if (input.channel === 'whatsapp_cloud') {
+    const normalized = normalizeOfficialTemplateDefinition(input);
+    return { ...normalized, templateType: normalized.templateType || 'approved_template' };
+  }
+  return { ...input, templateType: input.templateType || 'text' };
+}
+
 async function create(input, actorId) {
-  validateTemplate(input);
-  return Template.create({ ...clean(input), createdBy: actorId, updatedBy: actorId });
+  const normalized = normalize(input);
+  validateTemplate(normalized);
+  return Template.create({ ...clean(normalized), createdBy: actorId, updatedBy: actorId });
 }
 
 async function getById(id) {
@@ -73,8 +88,17 @@ async function list(query = {}) {
 
 async function update(id, input, actorId) {
   const existing = await getById(id);
-  validateTemplate({ ...existing, ...input });
-  const template = await Template.findByIdAndUpdate(id, { $set: { ...clean(input), updatedBy: actorId } }, { new: true, runValidators: true }).lean();
+  const merged = { ...existing, ...input };
+  if (input.whatsappCloudPreset && input.whatsappCloudPreset !== existing.whatsappCloudPreset && input.body === undefined) {
+    merged.body = undefined;
+  }
+  const normalized = normalize(merged);
+  validateTemplate(normalized);
+  const changed = Object.fromEntries(Object.keys(input).map((key) => [key, normalized[key]]));
+  for (const derivedKey of ['templateType', 'whatsappCloudPreset', 'externalTemplateName', 'languageCode', 'body', 'payload']) {
+    if (normalized[derivedKey] !== existing[derivedKey]) changed[derivedKey] = normalized[derivedKey];
+  }
+  const template = await Template.findByIdAndUpdate(id, { $set: { ...clean(changed), updatedBy: actorId } }, { new: true, runValidators: true }).lean();
   return template;
 }
 
@@ -84,4 +108,12 @@ async function remove(id) {
   return { id: String(id), removed: true };
 }
 
-module.exports = { create, getById, list, update, remove };
+module.exports = {
+  create,
+  getById,
+  list,
+  update,
+  remove,
+  normalizeTemplateInput: normalize,
+  validateTemplateInput: validateTemplate
+};

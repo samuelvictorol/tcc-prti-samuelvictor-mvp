@@ -11,6 +11,7 @@ const templateSchema = new mongoose.Schema({
   html: { type: String },
   payload: { type: mongoose.Schema.Types.Mixed },
   variants: { type: mongoose.Schema.Types.Mixed },
+  whatsappCloudPreset: { type: String, enum: ['order_confirmation', 'plain_text', 'hello_world'] },
   externalTemplateName: { type: String },
   languageCode: { type: String },
   active: { type: Boolean, default: true, index: true },

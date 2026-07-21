@@ -14,8 +14,17 @@ const contactDialog = ref(false)
 const contacts = ref([])
 const templates = ref([])
 const events = ref([])
+const cloudStatus = ref({})
 const mode = ref('template')
-const form = reactive({ contactId: null, templateId: null, message: '', variablesJson: '{}' })
+let webhookRefreshTimer = null
+const form = reactive({
+  contactId: null,
+  templateId: null,
+  message: '',
+  customerName: 'John Doe',
+  orderNumber: '123456',
+  orderDate: 'Jul 20, 2026',
+})
 
 function cloudIdentity(contact) {
   return contact.channels?.find((item) => String(item.channel).replaceAll('-', '_') === 'whatsapp_cloud' && (item.authorized || item.consentStatus === 'granted'))
@@ -25,10 +34,42 @@ const contactOptions = computed(() => contacts.value.map((item) => ({
   label: `${item.displayName || item.name || 'Sem nome'} · ${cloudIdentity(item)?.address || item.phone || 'sem telefone'}`,
   value: item.id || item._id,
 })))
-const templateOptions = computed(() => templates.value.map((item) => ({
-  label: `${item.name || item.title}${item.languageCode ? ` · ${item.languageCode}` : ''}`,
+
+const presetByTemplateName = {
+  jaspers_market_order_confirmation_v1: 'order_confirmation',
+  jaspers_market_plain_text_v1: 'plain_text',
+  hello_world: 'hello_world',
+}
+
+function cloudPresetOf(template) {
+  return template?.whatsappCloudPreset || presetByTemplateName[template?.externalTemplateName] || null
+}
+
+const officialTemplates = computed(() => templates.value.filter((item) => cloudPresetOf(item)))
+const templateOptions = computed(() => officialTemplates.value.map((item) => ({
+  label: `${item.name || item.title}${item.externalTemplateName ? ` · ${item.externalTemplateName}` : ''}`,
   value: item.id || item._id,
 })))
+
+const selectedTemplate = computed(() => templates.value.find((item) => (item.id || item._id) === form.templateId) || null)
+
+const selectedPreset = computed(() => {
+  return cloudPresetOf(selectedTemplate.value)
+})
+
+const webhookReady = computed(() => Boolean(cloudStatus.value.webhookConfigured))
+const webhookStatusLabel = computed(() => webhookReady.value ? 'Webhook pronto para receber' : 'Webhook com configuração pendente')
+const webhookStatusDescription = computed(() => {
+  if (webhookReady.value) return 'Verify Token e App Secret estão configurados. Eventos assinados serão processados em tempo real.'
+  if (cloudStatus.value.webhookVerificationConfigured) return 'A callback pode ser validada; cadastre também o App Secret para processar os eventos POST.'
+  return 'Cadastre o Verify Token e o App Secret no menu Início para habilitar o recebimento.'
+})
+
+const selectedTemplateDescription = computed(() => ({
+  order_confirmation: 'A aplicação monta o template oficial com nome do cliente, número e data do pedido.',
+  plain_text: 'Template oficial de texto simples. Não há parâmetros para preencher.',
+  hello_world: 'Template oficial Hello World da Meta. Não há parâmetros para preencher.',
+}[selectedPreset.value] || 'O destinatário e o payload oficial serão montados automaticamente pelo backend.'))
 
 const eventColumns = [
   { name: 'createdAt', label: 'Quando', field: 'createdAt', align: 'left' },
@@ -58,14 +99,16 @@ function contextSummary(event) {
 async function loadData() {
   loading.value = true
   try {
-    const [contactItems, templateItems, logResponse] = await Promise.all([
+    const [contactItems, templateItems, logResponse, statusResponse] = await Promise.all([
       fetchAll('/contacts', { params: { channel: 'whatsapp_cloud', authorized: true }, preferredKey: 'contacts' }),
       fetchAll('/templates', { params: { channel: 'whatsapp_cloud' }, preferredKey: 'templates' }),
       http.get('/logs', { params: { channel: 'whatsapp_cloud', limit: 50 } }),
+      http.get('/whatsapp-cloud/status'),
     ])
     contacts.value = contactItems
     templates.value = templateItems
     events.value = asList(unwrap(logResponse), 'logs')
+    cloudStatus.value = unwrap(statusResponse) || {}
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível carregar o canal oficial.') })
   } finally {
@@ -87,12 +130,18 @@ async function send() {
     return
   }
 
-  let variables = {}
-  try {
-    variables = JSON.parse(form.variablesJson || '{}')
-  } catch {
-    $q.notify({ type: 'negative', message: 'O JSON de variáveis é inválido.' })
-    return
+  const variables = {}
+  if (mode.value === 'template' && selectedPreset.value === 'order_confirmation') {
+    const requiredValues = [form.customerName, form.orderNumber, form.orderDate]
+    if (requiredValues.some((value) => !String(value || '').trim())) {
+      $q.notify({ type: 'warning', message: 'Preencha nome do cliente, número e data do pedido.' })
+      return
+    }
+    Object.assign(variables, {
+      customerName: form.customerName.trim(),
+      orderNumber: form.orderNumber.trim(),
+      orderDate: form.orderDate.trim(),
+    })
   }
 
   sending.value = true
@@ -116,7 +165,9 @@ async function send() {
 }
 
 function onWebhookEvent(event) {
-  events.value = [event, ...events.value].slice(0, 50)
+  events.value = [{ id: `live-${Date.now()}`, createdAt: event.at, ...event }, ...events.value].slice(0, 50)
+  clearTimeout(webhookRefreshTimer)
+  webhookRefreshTimer = setTimeout(loadData, 400)
 }
 
 onMounted(() => {
@@ -127,6 +178,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearTimeout(webhookRefreshTimer)
   const socket = getSocket()
   socket.off('whatsapp_cloud:webhook', onWebhookEvent)
   socket.off('whatsapp-cloud:webhook', onWebhookEvent)
@@ -158,7 +210,18 @@ onBeforeUnmount(() => {
           <q-select v-model="form.contactId" outlined clearable use-input emit-value map-options :options="contactOptions" label="Contato autorizado" class="full-span" />
           <template v-if="mode === 'template'">
             <q-select v-model="form.templateId" outlined emit-value map-options :options="templateOptions" label="Template aprovado *" class="full-span" />
-            <q-input v-model="form.variablesJson" outlined type="textarea" label="Variáveis em JSON" class="full-span json-field" />
+            <div v-if="selectedTemplate" class="full-span official-template-summary">
+              <q-icon name="verified" />
+              <div>
+                <strong>{{ selectedTemplate.externalTemplateName }}</strong>
+                <span>{{ selectedTemplateDescription }}</span>
+              </div>
+            </div>
+            <template v-if="selectedPreset === 'order_confirmation'">
+              <q-input v-model="form.customerName" outlined label="Nome do cliente *" hint="Exemplo: John Doe" class="full-span" />
+              <q-input v-model="form.orderNumber" outlined label="Número do pedido *" hint="Exemplo: 123456" />
+              <q-input v-model="form.orderDate" outlined label="Data do pedido *" hint="Exemplo: Jul 20, 2026" />
+            </template>
           </template>
           <q-input v-else v-model="form.message" outlined type="textarea" autogrow label="Mensagem dentro da janela" class="full-span" />
         </div>
@@ -166,11 +229,11 @@ onBeforeUnmount(() => {
       </q-card>
 
       <aside class="page-grid">
-        <q-card flat class="glass-card section-card stat-card"><q-icon name="description" color="primary" size="30px" /><div><strong>{{ templates.length }}</strong><span>templates disponíveis</span></div></q-card>
+        <q-card flat class="glass-card section-card stat-card"><q-icon name="description" color="primary" size="30px" /><div><strong>{{ officialTemplates.length }}</strong><span>templates oficiais disponíveis</span></div></q-card>
         <q-card flat class="glass-card section-card stat-card"><q-icon name="contacts" color="primary" size="30px" /><div><strong>{{ contacts.length }}</strong><span>contatos elegíveis</span></div></q-card>
         <q-card flat class="glass-card section-card webhook-card">
-          <div class="row items-center q-gutter-sm"><span class="status-dot status-dot--online" /><strong>Webhook em tempo real</strong></div>
-          <p class="section-copy">Respostas recebidas podem criar ou atualizar o contato e seu identificador do canal.</p>
+          <div class="row items-center q-gutter-sm"><span class="status-dot" :class="webhookReady ? 'status-dot--online' : 'status-dot--warning'" /><strong>{{ webhookStatusLabel }}</strong></div>
+          <p class="section-copy">{{ webhookStatusDescription }}</p>
         </q-card>
       </aside>
     </section>
@@ -243,9 +306,32 @@ onBeforeUnmount(() => {
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.82), rgba(130, 248, 230, 0.17));
 }
 
-.json-field :deep(textarea) {
-  font-family: "Cascadia Code", Consolas, monospace;
+.official-template-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid rgba(22, 134, 111, 0.2);
+  border-radius: 14px;
+  background: rgba(222, 248, 242, 0.58);
+  color: #315f56;
+}
+
+.official-template-summary .q-icon {
+  margin-top: 1px;
+  color: #16866f;
+  font-size: 21px;
+}
+
+.official-template-summary strong,
+.official-template-summary span {
+  display: block;
+}
+
+.official-template-summary span {
+  margin-top: 3px;
   font-size: 0.82rem;
+  line-height: 1.45;
 }
 
 @media (max-width: 900px) {

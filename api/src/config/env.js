@@ -47,7 +47,7 @@ const env = {
   whatsappWebAutoInit: boolean('WHATSAPP_WEB_AUTO_INIT'),
   whatsappWebAuthPath: process.env.WHATSAPP_WEB_AUTH_PATH || '.wwebjs_auth',
   puppeteerExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-  whatsappCloudApiVersion: process.env.WHATSAPP_CLOUD_API_VERSION || 'v23.0'
+  whatsappCloudApiVersion: process.env.WHATSAPP_CLOUD_API_VERSION || 'v25.0'
 };
 
 const productionRequired = [

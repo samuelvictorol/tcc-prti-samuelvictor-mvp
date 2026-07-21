@@ -12,6 +12,7 @@ const whatsappWebManager = require('./whatsapp-web.manager');
 const { enqueueNotification } = require('../services/queue.service');
 const { parsePagination, pageResult } = require('../utils/pagination');
 const ApiError = require('../utils/api-error');
+const { officialTemplateInputForPreset } = require('../utils/whatsapp-cloud-templates');
 
 const channelManagers = {
   telegram: telegramManager,
@@ -191,6 +192,9 @@ function templateContent(template, channel) {
   content.text ||= content.body || content.payload?.text;
   content.body ||= content.text;
   content.components ||= content.payload?.components;
+  if (channel === 'whatsapp_cloud' && template.whatsappCloudPreset) {
+    content.officialTemplate = officialTemplateInputForPreset(template.whatsappCloudPreset);
+  }
   return content;
 }
 

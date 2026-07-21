@@ -1,5 +1,27 @@
 const { z, objectId, inviteUrl } = require('./common.dto');
 
+const whatsappOfficialTemplateSchema = z.discriminatedUnion('preset', [
+  z.object({
+    preset: z.literal('order_confirmation'),
+    parameters: z.object({
+      customerName: z.string().min(1).max(1024).optional(),
+      orderNumber: z.string().min(1).max(1024).optional(),
+      orderDate: z.string().min(1).max(1024).optional(),
+      customer_name: z.string().min(1).max(1024).optional(),
+      order_number: z.string().min(1).max(1024).optional(),
+      order_date: z.string().min(1).max(1024).optional()
+    }).superRefine((parameters, context) => {
+      for (const [canonical, alias] of [['customerName', 'customer_name'], ['orderNumber', 'order_number'], ['orderDate', 'order_date']]) {
+        if (!parameters[canonical] && !parameters[alias]) {
+          context.addIssue({ code: z.ZodIssueCode.custom, path: [canonical], message: canonical + ' obrigatorio' });
+        }
+      }
+    })
+  }),
+  z.object({ preset: z.literal('plain_text'), parameters: z.object({}).optional() }),
+  z.object({ preset: z.literal('hello_world'), parameters: z.object({}).optional() })
+]);
+
 const channelSendSchema = z.object({
   body: z.object({
     contactId: objectId.optional(),
@@ -11,6 +33,7 @@ const channelSendSchema = z.object({
     templateName: z.string().max(512).optional(),
     languageCode: z.string().max(20).optional(),
     components: z.array(z.record(z.unknown())).optional(),
+    officialTemplate: whatsappOfficialTemplateSchema.optional(),
     payload: z.record(z.unknown()).optional()
   }).refine((body) => body.contactId || body.groupId || body.destination, 'Informe contactId, groupId ou destination')
 });
@@ -67,7 +90,7 @@ const whatsappWebGroupSchema = z.object({
 });
 
 module.exports = {
-  channelSendSchema, telegramWebhookSchema, cloudWebhookSchema, registerWebhookSchema,
+  channelSendSchema, whatsappOfficialTemplateSchema, telegramWebhookSchema, cloudWebhookSchema, registerWebhookSchema,
   telegramSendSchema, createTelegramGroupSchema, updateTelegramGroupSchema,
   whatsappWebMessagesSchema, whatsappWebGroupSchema
 };

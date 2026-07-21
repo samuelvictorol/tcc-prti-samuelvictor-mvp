@@ -79,7 +79,7 @@ Todas usam o prefixo configurável `API_PREFIX` (padrão `/api`). Rotas administ
     "businessAccountId": "...",
     "verifyToken": "...",
     "appSecret": "...",
-    "apiVersion": "v23.0"
+    "apiVersion": "v25.0"
   },
   "email": { "user": "...", "from": "...", "fromName": "...", "appPassword": "..." }
 }

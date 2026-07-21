@@ -22,7 +22,7 @@ const DEFINITIONS = Object.freeze({
 const REQUIRED = Object.freeze({
   telegram: ['TELEGRAM_BOT_TOKEN'],
   email: ['GMAIL_USER', 'GMAIL_APP_PASSWORD', 'GMAIL_FROM'],
-  whatsapp_cloud: ['WHATSAPP_CLOUD_ACCESS_TOKEN', 'WHATSAPP_CLOUD_PHONE_NUMBER_ID', 'WHATSAPP_CLOUD_VERIFY_TOKEN', 'WHATSAPP_CLOUD_APP_SECRET'],
+  whatsapp_cloud: ['WHATSAPP_CLOUD_ACCESS_TOKEN', 'WHATSAPP_CLOUD_PHONE_NUMBER_ID'],
   whatsapp_web: []
 });
 
@@ -130,11 +130,15 @@ async function getStructured() {
     whatsappWeb: { ...channelStatuses.whatsapp_web, sessionTtlDays: Number(values.WHATSAPP_WEB_SESSION_MAX_AGE_DAYS?.value || process.env.WHATSAPP_WEB_SESSION_MAX_AGE_DAYS || 90) },
     whatsappCloud: {
       configured: channelStatuses.whatsapp_cloud.configured,
+      sendConfigured: channelStatuses.whatsapp_cloud.configured,
       accessTokenConfigured: values.WHATSAPP_CLOUD_ACCESS_TOKEN?.configured || false,
       phoneNumberIdConfigured: values.WHATSAPP_CLOUD_PHONE_NUMBER_ID?.configured || false,
       businessAccountId: values.WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID?.value || null,
       verifyTokenConfigured: values.WHATSAPP_CLOUD_VERIFY_TOKEN?.configured || false,
       appSecretConfigured: values.WHATSAPP_CLOUD_APP_SECRET?.configured || false,
+      webhookVerificationConfigured: values.WHATSAPP_CLOUD_VERIFY_TOKEN?.configured || false,
+      webhookSignatureConfigured: values.WHATSAPP_CLOUD_APP_SECRET?.configured || false,
+      webhookConfigured: Boolean(values.WHATSAPP_CLOUD_VERIFY_TOKEN?.configured && values.WHATSAPP_CLOUD_APP_SECRET?.configured),
       apiVersion: values.WHATSAPP_CLOUD_API_VERSION?.value || process.env.WHATSAPP_CLOUD_API_VERSION || null
     },
     email: {

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import QRCode from 'qrcode'
-import { useQuasar } from 'quasar'
+import { copyToClipboard, useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -27,7 +27,7 @@ const stats = reactive({ contacts: 0, deliveries: 0, failed: 0 })
 const settings = reactive({
   telegram: { botToken: '', webhookSecret: '', webhookUrl: '', bot: null },
   whatsappWeb: { sessionTtlDays: 90 },
-  whatsappCloud: { accessToken: '', phoneNumberId: '', businessAccountId: '', verifyToken: '', appSecret: '' },
+  whatsappCloud: { accessToken: '', phoneNumberId: '', businessAccountId: '', verifyToken: '', appSecret: '', apiVersion: 'v25.0' },
   email: { user: '', appPassword: '', from: '', fromName: '' },
 })
 
@@ -56,6 +56,21 @@ const telegramBot = computed(() => telegramBotIdentity({
 }))
 
 const telegramBotUsername = computed(() => telegramBot.value?.username ? `@${telegramBot.value.username}` : '')
+
+const whatsappCloudCallbackUrl = computed(() => {
+  const origin = typeof window !== 'undefined' ? window.location.origin.replace(/\/$/, '') : ''
+  const publicOrigin = origin.startsWith('https://') ? origin : 'https://seudominio.com'
+  return `${publicOrigin}/api/webhooks/whatsapp-cloud`
+})
+
+async function copyWhatsappCloudCallbackUrl() {
+  try {
+    await copyToClipboard(whatsappCloudCallbackUrl.value)
+    $q.notify({ type: 'positive', message: 'URL de callback copiada.' })
+  } catch {
+    $q.notify({ type: 'warning', message: 'Não foi possível copiar. Selecione a URL manualmente.' })
+  }
+}
 
 function applySettings(value = {}) {
   const source = value.configuration || value.settings || value
@@ -304,7 +319,12 @@ onBeforeUnmount(() => {
     </section>
 
     <section class="page-grid channel-grid q-mb-lg" aria-label="Status dos canais">
-      <article v-for="channel in channels" :key="channel.key" class="channel-card glass-card">
+      <article
+        v-for="channel in channels"
+        :key="channel.key"
+        class="channel-card glass-card"
+        :class="{ 'channel-card--configured': app.isChannelEnabled(channel.key) }"
+      >
         <div class="channel-icon"><q-icon :name="channel.icon" size="24px" /></div>
         <div class="channel-copy">
           <strong>{{ channel.name }}</strong>
@@ -323,11 +343,16 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <q-expansion-item default-opened icon="send_to_mobile" label="Telegram" header-class="text-weight-bold">
+        <q-expansion-item
+          icon="send_to_mobile"
+          label="Telegram"
+          :caption="app.isChannelEnabled('telegram') ? 'Configurado e disponível' : undefined"
+          :header-class="app.isChannelEnabled('telegram') ? 'channel-config-header channel-config-header--configured text-weight-bold' : 'channel-config-header text-weight-bold'"
+        >
           <div class="form-grid q-pa-md">
             <div v-if="telegramBot" class="full-span telegram-bot-card">
-              <q-avatar color="primary" text-color="white" icon="smart_toy" size="42px" />
-              <div>
+              <q-avatar class="telegram-bot-avatar" color="primary" text-color="white" icon="smart_toy" size="36px" />
+              <div class="telegram-bot-copy">
                 <span>Bot identificado automaticamente</span>
                 <strong>{{ telegramBot.displayName }}</strong>
                 <small v-if="telegramBotUsername">{{ telegramBotUsername }}</small>
@@ -346,10 +371,32 @@ onBeforeUnmount(() => {
           </div>
         </q-expansion-item>
         <q-separator />
-        <q-expansion-item icon="cloud_sync" label="WhatsApp Cloud API" header-class="text-weight-bold">
+        <q-expansion-item
+          icon="cloud_sync"
+          label="WhatsApp Cloud API"
+          :caption="app.isChannelEnabled('whatsappCloud') ? 'Configurado e disponível' : undefined"
+          :header-class="app.isChannelEnabled('whatsappCloud') ? 'channel-config-header channel-config-header--configured text-weight-bold' : 'channel-config-header text-weight-bold'"
+        >
           <div class="form-grid q-pa-md">
+            <q-input
+              :model-value="whatsappCloudCallbackUrl"
+              class="full-span"
+              outlined
+              readonly
+              label="URL de callback do webhook"
+              hint="Cadastre esta URL em Meta Developers. Em acesso local, substitua seudominio.com pelo seu domínio HTTPS ou ngrok."
+            >
+              <template #append>
+                <q-btn flat round dense color="primary" icon="content_copy" aria-label="Copiar URL de callback" @click="copyWhatsappCloudCallbackUrl" />
+              </template>
+            </q-input>
+            <div class="full-span whatsapp-cloud-webhook-hint">
+              <q-icon name="verified_user" />
+              <span>Use o mesmo <strong>Webhook verify token</strong> abaixo no painel da Meta e assine o campo <strong>messages</strong>.</span>
+            </div>
             <q-input v-model="settings.whatsappCloud.phoneNumberId" outlined label="Phone Number ID" />
             <q-input v-model="settings.whatsappCloud.businessAccountId" outlined label="Business Account ID" />
+            <q-input v-model.trim="settings.whatsappCloud.apiVersion" outlined label="Versão da Graph API" hint="Use v25.0 para reproduzir os exemplos deste ambiente de testes" />
             <q-input v-model="settings.whatsappCloud.accessToken" outlined type="password" label="Access token" autocomplete="off" />
             <q-input v-model="settings.whatsappCloud.verifyToken" outlined type="password" label="Webhook verify token" autocomplete="off" />
             <q-input v-model="settings.whatsappCloud.appSecret" class="full-span" outlined type="password" label="App secret (validação X-Hub-Signature-256)" autocomplete="off" />
@@ -360,7 +407,12 @@ onBeforeUnmount(() => {
           </div>
         </q-expansion-item>
         <q-separator />
-        <q-expansion-item icon="mail" label="Gmail" header-class="text-weight-bold">
+        <q-expansion-item
+          icon="mail"
+          label="Gmail"
+          :caption="app.isChannelEnabled('email') ? 'Configurado e disponível' : undefined"
+          :header-class="app.isChannelEnabled('email') ? 'channel-config-header channel-config-header--configured text-weight-bold' : 'channel-config-header text-weight-bold'"
+        >
           <div class="form-grid q-pa-md">
             <q-input v-model="settings.email.user" outlined type="email" label="Conta Gmail" />
             <q-input v-model="settings.email.from" outlined type="email" label="Email do remetente (GMAIL_FROM)" />
@@ -474,6 +526,26 @@ onBeforeUnmount(() => {
   padding: 16px;
 }
 
+.channel-card--configured {
+  border-color: rgba(21, 157, 130, 0.34);
+  background: linear-gradient(135deg, rgba(220, 250, 241, 0.88), rgba(255, 255, 255, 0.58));
+  box-shadow: inset 4px 0 0 #1a9f83;
+}
+
+:deep(.channel-config-header) {
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+:deep(.channel-config-header--configured) {
+  background: rgba(218, 249, 240, 0.72);
+  color: #116b59;
+  box-shadow: inset 4px 0 0 #1a9f83;
+}
+
+:deep(.channel-config-header--configured .q-item__label--caption) {
+  color: #368273;
+}
+
 .channel-icon {
   display: grid;
   width: 45px;
@@ -521,7 +593,14 @@ onBeforeUnmount(() => {
   background: rgba(224, 246, 255, 0.46);
 }
 
-.telegram-bot-card > div {
+.telegram-bot-avatar {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  align-self: center;
+}
+
+.telegram-bot-copy {
   display: grid;
   min-width: 0;
   flex: 1;
@@ -544,6 +623,25 @@ onBeforeUnmount(() => {
   color: #5d7470;
   font-size: 0.78rem;
   line-height: 1.45;
+}
+
+.whatsapp-cloud-webhook-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: -6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(222, 248, 242, 0.6);
+  color: #426b64;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.whatsapp-cloud-webhook-hint .q-icon {
+  margin-top: 2px;
+  color: #16866f;
+  font-size: 17px;
 }
 
 .qr-card {
