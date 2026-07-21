@@ -1,0 +1,9 @@
+node_modules
+npm-debug.log*
+.env
+.git
+.gitignore
+coverage
+.wwebjs_auth
+.wwebjs_cache
+test-results

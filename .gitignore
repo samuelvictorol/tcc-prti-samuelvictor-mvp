@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+.wwebjs_auth/
+.wwebjs_cache/
+api/.wwebjs_auth/
+api/.wwebjs_cache/
+

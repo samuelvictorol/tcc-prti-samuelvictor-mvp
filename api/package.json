@@ -1,0 +1,46 @@
+{
+  "name": "notify-app-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "API multicanal do Notify App",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "test": "node --test --test-concurrency=1",
+    "lint": "eslint . --max-warnings=0",
+    "check": "npm run lint && npm test"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "bullmq": "5.66.0",
+    "compression": "^1.7.4",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-mongo-sanitize": "^2.2.0",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
+    "hpp": "^0.2.3",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.5.1",
+    "morgan": "^1.10.0",
+    "nodemailer": "9.0.3",
+    "qrcode": "^1.5.4",
+    "redis": "^4.7.0",
+    "sanitize-html": "^2.13.0",
+    "socket.io": "^4.7.5",
+    "whatsapp-web.js": "^1.26.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "nodemon": "^3.1.4",
+    "supertest": "^7.0.0"
+  }
+}

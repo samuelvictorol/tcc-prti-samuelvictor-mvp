@@ -1,0 +1,40 @@
+const mongoose = require('mongoose');
+const { CHANNELS, DELIVERY_CHANNELS } = require('../enums/channels');
+const { NOTIFICATION_STATUS, DELIVERY_STATUS } = require('../enums/notification');
+
+const deliverySchema = new mongoose.Schema({
+  contact: { type: mongoose.Schema.Types.ObjectId, ref: 'Contact', required: true },
+  channel: { type: String, enum: DELIVERY_CHANNELS, required: true },
+  destinationHash: { type: String },
+  status: { type: String, enum: Object.values(DELIVERY_STATUS), default: DELIVERY_STATUS.QUEUED },
+  attempts: { type: Number, default: 0 },
+  providerMessageId: { type: String },
+  errorCode: { type: String },
+  errorMessage: { type: String },
+  sentAt: { type: Date }
+}, { _id: true, timestamps: true });
+
+const notificationSchema = new mongoose.Schema({
+  kind: { type: String, enum: ['quick', 'template', 'global'], required: true },
+  channel: { type: String, enum: Object.values(CHANNELS), required: true },
+  template: { type: mongoose.Schema.Types.ObjectId, ref: 'Template' },
+  content: { type: mongoose.Schema.Types.Mixed },
+  recipientContacts: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Contact' }],
+  recipientGroups: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ContactGroup' }],
+  status: { type: String, enum: Object.values(NOTIFICATION_STATUS), default: NOTIFICATION_STATUS.QUEUED, index: true },
+  deliveries: { type: [deliverySchema], default: [] },
+  summary: {
+    queued: { type: Number, default: 0 },
+    sent: { type: Number, default: 0 },
+    failed: { type: Number, default: 0 },
+    skipped: { type: Number, default: 0 }
+  },
+  idempotencyKey: { type: String, unique: true, sparse: true },
+  requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+  startedAt: { type: Date },
+  completedAt: { type: Date }
+}, { timestamps: true, versionKey: false });
+
+notificationSchema.index({ createdAt: -1 });
+
+module.exports = mongoose.models.Notification || mongoose.model('Notification', notificationSchema);

@@ -1,0 +1,18 @@
+const mongoose = require('mongoose');
+const { DELIVERY_CHANNELS } = require('../enums/channels');
+
+const consentEventSchema = new mongoose.Schema({
+  contact: { type: mongoose.Schema.Types.ObjectId, ref: 'Contact', index: true },
+  contactReferenceHash: { type: String, required: true },
+  channel: { type: String, enum: DELIVERY_CHANNELS, required: true, index: true },
+  status: { type: String, enum: ['granted', 'revoked', 'denied'], required: true },
+  legalBasis: { type: String, default: 'consent' },
+  purpose: { type: String, default: 'notification_delivery' },
+  source: { type: String, required: true },
+  termsVersion: { type: String },
+  actor: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+  evidenceEncrypted: { type: String, select: false },
+  occurredAt: { type: Date, default: Date.now, index: true }
+}, { timestamps: true, versionKey: false });
+
+module.exports = mongoose.models.ConsentEvent || mongoose.model('ConsentEvent', consentEventSchema);
