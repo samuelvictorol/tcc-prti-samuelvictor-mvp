@@ -1,0 +1,133 @@
+# Render Blueprints use YAML. This file intentionally keeps provider credentials
+# out of source control; configure Telegram, WhatsApp and Gmail from the app UI.
+services:
+  - type: web
+    name: notify-flow
+    runtime: docker
+    plan: starter
+    dockerContext: ./frontend
+    dockerfilePath: ./frontend/Dockerfile
+    autoDeployTrigger: commit
+    healthCheckPath: /api/health
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: /api
+      - key: VITE_SOCKET_URL
+        value: ""
+
+  # Keep this exact service name unless frontend/nginx.conf is also changed:
+  # the Nginx upstream currently resolves http://api:3000.
+  - type: pserv
+    name: api
+    runtime: docker
+    plan: starter
+    dockerContext: ./api
+    dockerfilePath: ./api/Dockerfile
+    autoDeployTrigger: commit
+    maxShutdownDelaySeconds: 120
+    disk:
+      name: whatsapp-web-session
+      mountPath: /app/.wwebjs_auth
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: API_PREFIX
+        value: /api
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: TRUST_PROXY
+        value: "1"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: LOG_LEVEL
+        value: info
+
+      # Use a MongoDB Atlas SRV/TLS connection string. Render does not provide
+      # a managed MongoDB product, so the value is requested during Blueprint sync.
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_ENSURE_INDEXES
+        value: "true"
+      - key: REDIS_URL
+        fromService:
+          name: notify-flow-redis
+          type: keyvalue
+          property: connectionString
+      - key: REDIS_REQUIRED
+        value: "true"
+
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: PROFILE_JWT_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: SEARCH_HASH_KEY
+        generateValue: true
+      - key: INVITE_TOKEN_SECRET
+        generateValue: true
+      - key: JWT_ACCESS_TTL
+        value: 15m
+      - key: JWT_REFRESH_TTL
+        value: 30d
+      - key: PROFILE_JWT_TTL
+        value: 10m
+      - key: PROFILE_CODE_TTL_SECONDS
+        value: "600"
+      - key: PROFILE_CODE_MAX_ATTEMPTS
+        value: "5"
+      - key: PROFILE_CODE_MAX_REQUESTS
+        value: "5"
+      - key: PROFILE_CODE_WINDOW_SECONDS
+        value: "3600"
+      - key: PROFILE_CODE_RESEND_SECONDS
+        value: "60"
+
+      - key: ADMIN1_EMAIL
+        sync: false
+      - key: ADMIN1_PASSWORD
+        sync: false
+
+      - key: START_NOTIFY_WHATSAPP_PERMISSION
+        value: /notify-me
+      - key: START_VERIFY_TELEGRAM_PERMISSION
+        value: /verify-me
+      - key: WHATSAPP_CLOUD_API_VERSION
+        value: v25.0
+      - key: WHATSAPP_WEB_AUTH_PATH
+        value: /app/.wwebjs_auth
+      - key: WHATSAPP_WEB_AUTO_INIT
+        value: "false"
+      - key: WHATSAPP_WEB_SESSION_MAX_AGE_DAYS
+        value: "90"
+      - key: WHATSAPP_WEB_MESSAGE_RETENTION_DAYS
+        value: "90"
+      - key: PUPPETEER_EXECUTABLE_PATH
+        value: /usr/bin/chromium
+
+      - key: RATE_LIMIT_WINDOW_MS
+        value: "60000"
+      - key: AUTH_RATE_LIMIT_MAX
+        value: "10"
+      - key: RATE_LIMIT_MAX
+        value: "300"
+      - key: WEBHOOK_RATE_LIMIT_MAX
+        value: "20000"
+      - key: IP_BLOCK_AFTER
+        value: "20"
+      - key: IP_BLOCK_SECONDS
+        value: "900"
+
+  - type: keyvalue
+    name: notify-flow-redis
+    plan: starter
+    ipAllowList: []
+    maxmemoryPolicy: noeviction

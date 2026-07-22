@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Jornada de implantação na Meta</title>
+  <desc id="desc">Etapas empresariais e técnicas do teste até a produção da WhatsApp Business Platform.</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#0F8F7A"/></marker><style>.t{font:700 44px Arial;fill:#0B2E2B}.s{font:400 23px Arial;fill:#47645F}.h{font:700 22px Arial;fill:#0B2E2B}.p{font:400 17px Arial;fill:#47645F}.num{font:700 20px Arial;fill:#fff}.a{stroke:#0F8F7A;stroke-width:5;fill:none;marker-end:url(#arrow)}</style></defs>
+  <rect width="1600" height="900" fill="#F7FBFA"/><text x="90" y="85" class="t">Da empresa real ao aplicativo em produção</text><text x="90" y="124" class="s">A liberação combina identidade empresarial, configuração técnica, políticas e qualidade contínua.</text>
+  <path class="a" d="M155 450H1450"/>
+  <g transform="translate(95 0)"><circle cx="85" cy="450" r="32" fill="#0F8F7A"/><text x="85" y="457" text-anchor="middle" class="num">1</text><text x="35" y="350" class="h">Empresa</text><text x="35" y="385" class="p">Dados legais coerentes</text></g>
+  <g transform="translate(320 0)"><circle cx="85" cy="450" r="32" fill="#0F8F7A"/><text x="85" y="457" text-anchor="middle" class="num">2</text><text x="20" y="535" class="h">Facebook</text><text x="20" y="570" class="p">Perfil real e Página</text></g>
+  <g transform="translate(545 0)"><circle cx="85" cy="450" r="32" fill="#0F8F7A"/><text x="85" y="457" text-anchor="middle" class="num">3</text><text x="12" y="350" class="h">Portfólio</text><text x="12" y="385" class="p">Ativos e permissões</text></g>
+  <g transform="translate(770 0)"><circle cx="85" cy="450" r="32" fill="#0F8F7A"/><text x="85" y="457" text-anchor="middle" class="num">4</text><text x="22" y="535" class="h">App Meta</text><text x="22" y="570" class="p">WhatsApp + WABA</text></g>
+  <g transform="translate(995 0)"><circle cx="85" cy="450" r="32" fill="#0F8F7A"/><text x="85" y="457" text-anchor="middle" class="num">5</text><text x="13" y="350" class="h">Integração</text><text x="13" y="385" class="p">Token, webhook, templates</text></g>
+  <g transform="translate(1220 0)"><circle cx="85" cy="450" r="32" fill="#0B2E2B"/><text x="85" y="457" text-anchor="middle" class="num">6</text><text x="10" y="535" class="h">Produção</text><text x="10" y="570" class="p">Verificação, cobrança, qualidade</text></g>
+  <rect x="140" y="690" width="1320" height="100" rx="25" fill="#DDF7F1"/><text x="185" y="748" class="h">Operação contínua: consentimento, qualidade, limites e preços devem ser conferidos no painel e nas políticas vigentes.</text>
+</svg>

@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Fluxo de consentimento</title>
+  <desc id="desc">Da página de convite até o registro auditável de autorização por canal.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#0F8F7A"/></marker>
+    <style>.t{font:700 44px Arial;fill:#0B2E2B}.s{font:400 23px Arial;fill:#47645F}.h{font:700 24px Arial;fill:#0B2E2B}.p{font:400 18px Arial;fill:#47645F}.n{font:700 20px Arial;fill:#fff}.a{stroke:#0F8F7A;stroke-width:5;fill:none;marker-end:url(#arrow)}</style>
+  </defs>
+  <rect width="1600" height="900" fill="#F7FBFA"/>
+  <text x="90" y="86" class="t">Consentimento explícito, canal por canal</text>
+  <text x="90" y="124" class="s">O clique no convite não autoriza notificações; a evidência nasce da ação do titular no canal.</text>
+  <g>
+    <rect x="80" y="270" width="235" height="250" rx="30" fill="#fff" stroke="#BFE9DF" stroke-width="3"/>
+    <circle cx="125" cy="320" r="26" fill="#0F8F7A"/><text x="125" y="327" text-anchor="middle" class="n">1</text>
+    <text x="115" y="390" class="h">Convite público</text><text x="115" y="430" class="p">Link e QR code</text><text x="115" y="462" class="p">com rastreio.</text>
+  </g>
+  <g>
+    <rect x="385" y="270" width="235" height="250" rx="30" fill="#fff" stroke="#BFE9DF" stroke-width="3"/>
+    <circle cx="430" cy="320" r="26" fill="#0F8F7A"/><text x="430" y="327" text-anchor="middle" class="n">2</text>
+    <text x="420" y="390" class="h">Documentos</text><text x="420" y="430" class="p">Termos e privacidade</text><text x="420" y="462" class="p">aceitos antes de seguir.</text>
+  </g>
+  <g>
+    <rect x="690" y="270" width="235" height="250" rx="30" fill="#fff" stroke="#BFE9DF" stroke-width="3"/>
+    <circle cx="735" cy="320" r="26" fill="#0F8F7A"/><text x="735" y="327" text-anchor="middle" class="n">3</text>
+    <text x="725" y="390" class="h">Ação no canal</text><text x="725" y="430" class="p">Usuário envia o comando</text><text x="725" y="462" class="p">dinâmico configurado.</text>
+  </g>
+  <g>
+    <rect x="995" y="270" width="235" height="250" rx="30" fill="#fff" stroke="#BFE9DF" stroke-width="3"/>
+    <circle cx="1040" cy="320" r="26" fill="#0F8F7A"/><text x="1040" y="327" text-anchor="middle" class="n">4</text>
+    <text x="1030" y="390" class="h">Correlação</text><text x="1030" y="430" class="p">Telefone, chat ID e</text><text x="1030" y="462" class="p">identidade sem duplicar.</text>
+  </g>
+  <g>
+    <rect x="1300" y="270" width="235" height="250" rx="30" fill="#0B2E2B"/>
+    <circle cx="1345" cy="320" r="26" fill="#8BE6D2"/><text x="1345" y="327" text-anchor="middle" style="font:700 20px Arial;fill:#0B2E2B">5</text>
+    <text x="1335" y="390" style="font:700 24px Arial;fill:#fff">ConsentEvent</text><text x="1335" y="430" style="font:400 18px Arial;fill:#DDF7F1">Canal, origem, data,</text><text x="1335" y="462" style="font:400 18px Arial;fill:#DDF7F1">finalidade e evidência.</text>
+  </g>
+  <path class="a" d="M315 395H370"/><path class="a" d="M620 395H675"/><path class="a" d="M925 395H980"/><path class="a" d="M1230 395H1285"/>
+  <rect x="190" y="625" width="1220" height="132" rx="30" fill="#FFF4E3" stroke="#F5C46B" stroke-width="3"/>
+  <text x="240" y="682" class="h">Regra de segurança</text>
+  <text x="240" y="724" class="p">Sem comando válido: a interação pode aparecer no monitor, mas o destino continua inelegível para campanhas.</text>
+</svg>
