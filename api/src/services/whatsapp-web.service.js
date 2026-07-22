@@ -16,8 +16,6 @@ let generation = 0;
 
 const PROVIDER_TIMEOUTS = Object.freeze({
   compatibility: 2_000,
-  chatList: 6_000,
-  history: 4_000,
   avatar: 2_500
 });
 
@@ -313,144 +311,6 @@ async function initialize(eventHandlers = {}, options = {}) {
   return snapshot();
 }
 
-async function rawChatSummary(chatId) {
-  return client.pupPage.evaluate(async (requestedId) => {
-    const page = globalThis.window;
-    const read = (getter, fallback = null) => {
-      try { return getter() ?? fallback; } catch (_error) { return fallback; }
-    };
-    const serialize = (value) => {
-      if (!value) return null;
-      if (typeof value === 'string') return value;
-      return value._serialized || value.$1 || read(() => value.toString(), null);
-    };
-    const wid = page.require('WAWebWidFactory').createWid(requestedId);
-    let chat = page.require('WAWebCollections').Chat.get(wid);
-    if (!chat) chat = (await page.require('WAWebFindChatAction').findOrCreateLatestChat(wid))?.chat;
-    if (!chat) return null;
-    const id = serialize(chat.id) || requestedId;
-    const server = read(() => chat.id.server, String(id).split('@')[1]);
-    const isGroup = server === 'g.us' || /@g\.us$/i.test(id) || Boolean(read(() => chat.groupMetadata, false));
-    const contact = read(() => chat.contact, null);
-    let phoneWid = read(() => contact.phoneNumber, null);
-    if (!phoneWid && !isGroup) {
-      phoneWid = read(() => page.require('WAWebApiContact').getAlternateUserWid(chat.id), null);
-    }
-    const phone = isGroup ? null : read(() => phoneWid.user, null)
-      || read(() => contact.userid, null)
-      || (server !== 'lid' ? read(() => chat.id.user, null) : null);
-    return {
-      id,
-      name: read(() => chat.name, null)
-        || read(() => chat.formattedTitle, null)
-        || read(() => contact.name, null)
-        || read(() => contact.pushname, null)
-        || phone
-        || id,
-      phone,
-      isGroup,
-      unreadCount: Number(read(() => chat.unreadCount, 0)) || 0,
-      timestamp: Number(read(() => chat.t, 0)) || null,
-      imageUrl: read(() => contact.profilePicThumb.eurl, null)
-        || read(() => chat.profilePicThumb.eurl, null)
-    };
-  }, chatId);
-}
-
-async function rawChats(limit) {
-  return client.pupPage.evaluate((requestedLimit) => {
-    const page = globalThis.window;
-    const read = (getter, fallback = null) => {
-      try { return getter() ?? fallback; } catch (_error) { return fallback; }
-    };
-    const serialize = (value) => {
-      if (!value) return null;
-      if (typeof value === 'string') return value;
-      return value._serialized || value.$1 || read(() => value.toString(), null);
-    };
-    const result = [];
-    for (const chat of page.require('WAWebCollections').Chat.getModelsArray()) {
-      const id = serialize(read(() => chat.id, null));
-      if (!id) continue;
-      const server = read(() => chat.id.server, String(id).split('@')[1]);
-      const isGroup = server === 'g.us' || /@g\.us$/i.test(id) || Boolean(read(() => chat.groupMetadata, false));
-      const contact = read(() => chat.contact, null);
-      let phoneWid = read(() => contact.phoneNumber, null);
-      if (!phoneWid && !isGroup) {
-        phoneWid = read(() => page.require('WAWebApiContact').getAlternateUserWid(chat.id), null);
-      }
-      const phone = isGroup ? null : read(() => phoneWid.user, null)
-        || read(() => contact.userid, null)
-        || (server !== 'lid' ? read(() => chat.id.user, null) : null);
-      result.push({
-        id,
-        name: read(() => chat.name, null)
-          || read(() => chat.formattedTitle, null)
-          || read(() => contact.name, null)
-          || read(() => contact.pushname, null)
-          || phone
-          || id,
-        phone,
-        isGroup,
-        unreadCount: Number(read(() => chat.unreadCount, 0)) || 0,
-        timestamp: Number(read(() => chat.t, 0)) || null,
-        imageUrl: read(() => contact.profilePicThumb.eurl, null)
-          || read(() => chat.profilePicThumb.eurl, null)
-      });
-      if (result.length >= requestedLimit) break;
-    }
-    return result;
-  }, Math.min(200, Math.max(1, limit)));
-}
-
-async function listChats(limit = 100, options = {}) {
-  if (!client || state !== 'ready') throw new Error('WhatsApp Web nao esta pronto');
-  const timeoutMs = Math.min(30_000, Math.max(100, Number(options.timeoutMs) || PROVIDER_TIMEOUTS.chatList));
-  const deadline = Date.now() + timeoutMs;
-  const remaining = () => Math.max(25, deadline - Date.now());
-  await withTimeout(ensureCompatibility(), Math.min(PROVIDER_TIMEOUTS.compatibility, remaining()), {
-    stage: 'compatibility', message: 'Tempo limite ao preparar a lista de chats do WhatsApp Web'
-  });
-  try {
-    return await withTimeout(rawChats(limit), remaining(), {
-      stage: 'chat_list', message: 'Tempo limite ao consultar a lista de chats do WhatsApp Web'
-    });
-  } catch (rawError) {
-    // Um timeout indica que a pagina ficou presa. Nao enfileire imediatamente
-    // outro evaluate pela API publica na mesma pagina.
-    if (rawError.code === 'WHATSAPP_WEB_PROVIDER_TIMEOUT') throw rawError;
-    const chats = (await withTimeout(client.getChats(), remaining(), {
-      stage: 'chat_list_fallback', message: 'Tempo limite ao consultar a lista alternativa de chats do WhatsApp Web'
-    })).slice(0, Math.min(200, limit));
-    return chats.map((chat) => ({
-      id: serializedId(chat.id),
-      name: chat.name || chat.formattedTitle || chat.id.user,
-      phone: chat.isGroup ? null : chat.id.user,
-      isGroup: chat.isGroup,
-      unreadCount: chat.unreadCount,
-      timestamp: chat.timestamp,
-      imageUrl: null
-    }));
-  }
-}
-
-async function getChatSummary(chatId) {
-  if (!client || state !== 'ready') throw new Error('WhatsApp Web nao esta pronto');
-  await ensureCompatibility();
-  try {
-    const summary = await rawChatSummary(chatId);
-    if (summary) return summary;
-  } catch (_rawError) { /* tenta a API publica abaixo */ }
-  const chat = await client.getChatById(chatId);
-  return {
-    id: serializedId(chat.id),
-    name: chat.name || chat.formattedTitle || chat.id.user,
-    phone: chat.isGroup ? null : chat.id.user,
-    isGroup: chat.isGroup,
-    imageUrl: null
-  };
-}
-
 async function getProfilePicUrl(chatId, options = {}) {
   if (!client || state !== 'ready' || !chatId) return null;
   const timeoutMs = Math.min(10_000, Math.max(100, Number(options.timeoutMs) || PROVIDER_TIMEOUTS.avatar));
@@ -506,98 +366,6 @@ async function getProfilePicUrl(chatId, options = {}) {
   } catch (error) {
     if (error.code === 'WHATSAPP_WEB_PROVIDER_TIMEOUT') throw error;
     return null;
-  }
-}
-
-async function getMessages(chatId, limit = 50, options = {}) {
-  if (!client || state !== 'ready') throw new Error('WhatsApp Web nao esta pronto');
-  const timeoutMs = Math.min(20_000, Math.max(100, Number(options.timeoutMs) || PROVIDER_TIMEOUTS.history));
-  const deadline = Date.now() + timeoutMs;
-  const remaining = () => Math.max(25, deadline - Date.now());
-  await withTimeout(ensureCompatibility(), Math.min(PROVIDER_TIMEOUTS.compatibility, remaining()), {
-    stage: 'compatibility', message: 'Tempo limite ao preparar o historico WhatsApp Web'
-  });
-  const requestedLimit = Math.min(100, Math.max(1, limit));
-  try {
-    const result = await withTimeout(client.pupPage.evaluate(async (requestedId, maxMessages, browserTimeoutMs) => {
-      const page = globalThis.window;
-      const historyDeadline = Date.now() + browserTimeoutMs;
-      const wid = page.require('WAWebWidFactory').createWid(requestedId);
-      let chat = page.require('WAWebCollections').Chat.get(wid);
-      if (!chat) {
-        let findTimer;
-        const findTimeout = { timedOut: true };
-        const found = await Promise.race([
-          page.require('WAWebFindChatAction').findOrCreateLatestChat(wid),
-          new Promise((resolve) => {
-            findTimer = setTimeout(() => resolve(findTimeout), Math.min(1_000, browserTimeoutMs));
-          })
-        ]);
-        clearTimeout(findTimer);
-        if (found === findTimeout) return { messages: [], timedOut: true };
-        chat = found?.chat;
-      }
-      if (!chat) return { messages: [], timedOut: false };
-      const filter = (message) => !message.isNotification;
-      let messages = chat.msgs.getModelsArray().filter(filter);
-      let timedOut = false;
-      while (messages.length < maxMessages) {
-        const callBudget = Math.max(1, Math.min(1_500, historyDeadline - Date.now()));
-        if (Date.now() >= historyDeadline) {
-          timedOut = true;
-          break;
-        }
-        let timer;
-        const timeoutMarker = { timedOut: true };
-        const loaded = await Promise.race([
-          page.require('WAWebChatLoadMessages').loadEarlierMsgs({ chat }),
-          new Promise((resolve) => {
-            timer = setTimeout(() => resolve(timeoutMarker), callBudget);
-          })
-        ]);
-        clearTimeout(timer);
-        if (loaded === timeoutMarker) {
-          timedOut = true;
-          break;
-        }
-        if (!loaded?.length) break;
-        messages = [...loaded.filter(filter), ...messages];
-      }
-      messages.sort((left, right) => Number(left.t || 0) - Number(right.t || 0));
-      return {
-        timedOut,
-        messages: messages.slice(-maxMessages).map((message) => ({
-          id: page.WWebJS.getMsgKeyId(message.id),
-          chatId: requestedId,
-          fromMe: Boolean(message.id?.fromMe),
-          body: String(message.body || message.caption || message.pollName || '').slice(0, 10000),
-          type: message.type || 'chat',
-          timestamp: Number(message.t || 0),
-          hasMedia: Boolean(message.directPath)
-        }))
-      };
-    }, chatId, requestedLimit, Math.max(25, remaining() - 50)), remaining(), {
-      stage: 'history', message: 'Tempo limite ao consultar o historico WhatsApp Web'
-    });
-    if (result?.timedOut) throw providerTimeout('history', timeoutMs);
-    return result?.messages || [];
-  } catch (rawError) {
-    if (rawError.code === 'WHATSAPP_WEB_PROVIDER_TIMEOUT') throw rawError;
-    const chat = await withTimeout(client.getChatById(chatId), remaining(), {
-      stage: 'history_chat_fallback', message: 'Tempo limite ao localizar o chat pelo historico alternativo'
-    });
-    const messages = await withTimeout(chat.fetchMessages({ limit: requestedLimit }), remaining(), {
-      stage: 'history_fallback', message: 'Tempo limite ao consultar o historico alternativo do WhatsApp Web'
-    });
-    return messages.map((message) => ({
-      id: serializedId(message.id),
-      chatId: serializedId(chat.id),
-      fromMe: message.fromMe,
-      body: String(message.body || '').slice(0, 10000),
-      type: message.type,
-      timestamp: message.timestamp,
-      hasMedia: message.hasMedia
-    }));
   }
 }
 
@@ -658,10 +426,7 @@ module.exports = {
   initialize,
   regenerate,
   snapshot,
-  listChats,
-  getChatSummary,
   getProfilePicUrl,
-  getMessages,
   sendMessage,
   destroy,
   logout,

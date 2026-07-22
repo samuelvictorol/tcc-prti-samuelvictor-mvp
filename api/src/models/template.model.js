@@ -15,6 +15,8 @@ const templateSchema = new mongoose.Schema({
   whatsappCloudPreset: { type: String, enum: ['order_confirmation', 'plain_text', 'hello_world', 'custom'] },
   externalTemplateName: { type: String },
   languageCode: { type: String },
+  systemKey: { type: String, trim: true, unique: true, sparse: true },
+  systemManaged: { type: Boolean, default: false, index: true },
   active: { type: Boolean, default: true, index: true },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
   updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' }

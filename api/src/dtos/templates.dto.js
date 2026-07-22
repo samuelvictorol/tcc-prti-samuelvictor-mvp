@@ -17,7 +17,7 @@ const whatsappBuilderParameter = z.object({
 const whatsappBuilderComponent = z.object({
   id: z.string().min(1).max(80).optional(),
   type: z.enum(['header', 'body', 'button']),
-  subType: z.enum(['url', 'quick_reply', 'copy_code']).optional(),
+  subType: z.enum(['url', 'quick_reply', 'copy_code', 'otp_copy_code']).optional(),
   index: z.union([z.string().regex(/^[0-9]$/), z.number().int().min(0).max(9)]).optional(),
   parameters: z.array(whatsappBuilderParameter).max(20)
 }).superRefine((component, context) => {
@@ -43,7 +43,7 @@ const whatsappBuilderComponent = z.object({
       if (parameter.parameterName) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ['parameters', parameterIndex, 'parameterName'], message: 'Botoes usam parametros posicionais' });
       }
-      const expectedType = { url: 'text', quick_reply: 'payload', copy_code: 'coupon_code' }[component.subType];
+      const expectedType = { url: 'text', quick_reply: 'payload', copy_code: 'coupon_code', otp_copy_code: 'text' }[component.subType];
       if (expectedType && parameter.type !== expectedType) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ['parameters', parameterIndex, 'type'], message: component.subType + ' exige ' + expectedType });
       }

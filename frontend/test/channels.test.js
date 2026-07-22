@@ -27,6 +27,19 @@ describe('configuração independente dos canais', () => {
     })).toEqual({ user: 'admin@example.com' })
   })
 
+  it('mantém número público separado do Phone Number ID no payload do Cloud', () => {
+    expect(channelSettingsPayload('whatsappCloud', {
+      phoneNumberId: '1273327629189888',
+      displayPhoneNumber: '5561981748795',
+      configured: true,
+    })).toEqual({
+      whatsappCloud: {
+        phoneNumberId: '1273327629189888',
+        displayPhoneNumber: '5561981748795',
+      },
+    })
+  })
+
   it('completa uma URL base do ngrok com a rota do Telegram', () => {
     expect(normalizeTelegramWebhookUrl('https://notify.ngrok-free.app'))
       .toBe('https://notify.ngrok-free.app/api/webhooks/telegram')

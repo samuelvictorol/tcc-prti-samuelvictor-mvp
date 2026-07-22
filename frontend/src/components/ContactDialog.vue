@@ -243,9 +243,9 @@ watch(() => props.modelValue, (open) => open && reset())
 </script>
 
 <template>
-  <q-dialog :model-value="modelValue" persistent @update:model-value="emit('update:modelValue', $event)">
-    <q-card class="dialog-card">
-      <q-card-section class="row items-center">
+  <q-dialog :model-value="modelValue" persistent :maximized="$q.screen.lt.sm" @update:model-value="emit('update:modelValue', $event)">
+    <q-card class="dialog-card contact-dialog-card">
+      <q-card-section class="row items-center contact-dialog__header">
         <div>
           <div class="text-h6 text-weight-bold">{{ contact ? 'Editar contato' : 'Novo contato' }}</div>
           <div class="text-caption text-muted">Identidades verificadas do provedor serão preservadas.</div>
@@ -255,7 +255,7 @@ watch(() => props.modelValue, (open) => open && reset())
       </q-card-section>
       <q-separator />
       <q-form @submit.prevent="save">
-        <q-card-section class="q-pa-lg">
+        <q-card-section class="q-pa-lg contact-dialog__body">
           <div class="form-grid">
             <q-input v-model.trim="form.displayName" outlined label="Nome de exibição *" :rules="[(value) => Boolean(value) || 'Informe o nome']" />
             <q-input v-model.trim="form.email" outlined type="email" label="Email" />
@@ -357,7 +357,7 @@ watch(() => props.modelValue, (open) => open && reset())
           </div>
         </q-card-section>
         <q-separator />
-        <q-card-actions align="right" class="q-pa-md">
+        <q-card-actions align="right" class="q-pa-md contact-dialog__footer">
           <q-btn flat no-caps label="Cancelar" @click="emit('update:modelValue', false)" />
           <q-btn type="submit" color="primary" unelevated no-caps label="Salvar contato" :loading="saving" />
         </q-card-actions>
@@ -367,6 +367,20 @@ watch(() => props.modelValue, (open) => open && reset())
 </template>
 
 <style scoped>
+.contact-dialog-card {
+  width: min(1040px, calc(100vw - 32px));
+  max-width: 1040px !important;
+}
+
+.contact-dialog__header,
+.contact-dialog__footer {
+  flex: 0 0 auto;
+}
+
+.contact-dialog__body {
+  scrollbar-gutter: stable;
+}
+
 .consent-box,
 .telegram-warning {
   padding: 15px;
@@ -532,6 +546,23 @@ watch(() => props.modelValue, (open) => open && reset())
 }
 
 @media (max-width: 560px) {
+  .contact-dialog-card {
+    width: 100%;
+    max-width: 100% !important;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .contact-dialog__header,
+  .contact-dialog__body {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .contact-dialog__footer {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
   .provider-identities {
     padding: 12px;
   }

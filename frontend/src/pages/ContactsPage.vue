@@ -390,8 +390,8 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
       </q-tab-panels>
     </q-card>
 
-    <q-dialog v-model="dialog" persistent>
-      <q-card class="dialog-card">
+    <q-dialog v-model="dialog" persistent :maximized="$q.screen.lt.sm">
+      <q-card class="dialog-card dialog-card--medium">
         <q-card-section class="row items-center">
           <div class="text-h6 text-weight-bold">{{ editingId ? 'Editar grupo' : 'Novo grupo' }}</div>
           <q-space />

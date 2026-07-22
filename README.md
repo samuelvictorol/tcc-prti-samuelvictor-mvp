@@ -105,7 +105,9 @@ Controllers não acessam models e não chamam outros controllers. O autoloader p
 
 Na tela **Início**, cada provedor é salvo separadamente. Um canal incompleto ou vazio não impede configurar nem testar outro. Valores sensíveis são write-only: respostas da API informam somente se o valor está configurado e qual é sua origem (`environment` ou `runtime`). O menu e a rota do canal repetem a verificação no backend.
 
-O mesmo painel permite alterar `START_NOTIFY_WHATSAPP_PERMISSION` (`/notify-me` por padrão). WhatsApp Web e WhatsApp Cloud registram toda pessoa que envia uma mensagem para que o atendimento possa visualizar a conversa, mas as identidades começam sem autorização de envio. Quando a pessoa envia exatamente o comando configurado por qualquer uma das duas integrações, a aplicação correlaciona o contato e autoriza WhatsApp Web e WhatsApp Cloud em conjunto. A identidade real de origem é concedida imediatamente; a contraparte existente também é concedida e auditada. Se a contraparte ainda não existir, a intenção fica pendente e só é consumida quando o provedor identificar aquela identidade real, sem criar um destino sintético. As duas permissões continuam armazenadas separadamente e um administrador pode conceder ou revogar cada uma de forma individual. Telefones e IDs do provedor são correlacionados para atualizar o contato existente sem duplicá-lo.
+O mesmo painel permite alterar `START_NOTIFY_WHATSAPP_PERMISSION` (`/notify-me` por padrão). O WhatsApp Cloud continua identificando mensagens inbound conforme seu webhook. Depois do `ready`, o WhatsApp Web guarda somente eventos novos em uma inbox local criptografada: um remetente desconhecido aparece temporariamente e somente para leitura, sem gerar contato, aviso de novo usuário ou consentimento. Quando a pessoa envia o comando por qualquer uma das duas integrações, a aplicação correlaciona o contato, associa a conversa pendente sem duplicar mensagens e autoriza WhatsApp Web e WhatsApp Cloud em conjunto. A identidade real de origem é concedida imediatamente; a contraparte existente também é concedida e auditada. Se a contraparte ainda não existir, a intenção fica pendente e só é consumida quando o provedor identificar aquela identidade real, sem criar um destino sintético. As duas permissões continuam armazenadas separadamente e um administrador pode conceder ou revogar cada uma de forma individual. Telefones e IDs do provedor são correlacionados para atualizar o contato existente sem duplicá-lo.
+
+O onboarding do Telegram possui um comando separado, `START_VERIFY_TELEGRAM_PERMISSION` (`/verify-me` por padrão), editável no Início. Esse comando e o `/notify-me` configurado abrem o mesmo menu do bot: vínculo seguro do próprio telefone, acesso ao Meu perfil e ajuda. O compartilhamento usa o botão nativo do Telegram e só consolida contatos quando o telefone pertence ao próprio remetente.
 
 - **Telegram:** requer somente o token do bot para envios. Ao salvá-lo, a aplicação consulta `getMe` e mostra automaticamente o nome e o `@username` oficiais, sem campo manual. O webhook é opcional para outbound, mas necessário para receber `/start`, mensagens e mudanças de associação; ao registrá-lo, a API gera um segredo seguro se nenhum tiver sido informado. Uma URL HTTPS raiz do ngrok recebe automaticamente `/api/webhooks/telegram`.
 - **Gmail:** requer usuário, remetente e App Password.
@@ -116,13 +118,13 @@ O mesmo painel permite alterar `START_NOTIFY_WHATSAPP_PERMISSION` (`/notify-me` 
 
 1. O administrador solicita um novo QR.
 2. A API inicializa `whatsapp-web.js` e Chromium sob demanda, publica o QR por Socket.IO e mantém somente uma instância da sessão.
-3. Depois do scan e do evento `ready`, a UI libera exclusivamente o monitor. Toda conversa recebida aparece no atendimento, mas o campo de resposta fica bloqueado até o contato enviar o comando configurado por WhatsApp Web ou Cloud, que autoriza ambas as integrações WhatsApp, ou até uma decisão administrativa confirmada para a permissão Web. WhatsApp Web não participa de templates, notificações ou disparos em massa.
-4. A sessão fica em volume persistente. `WHATSAPP_WEB_SESSION_MAX_AGE_DAYS` impõe a expiração local (90 dias por padrão); desconexão ou logout remoto também a invalida.
+3. Depois do scan e do evento `ready`, a UI libera exclusivamente o monitor. Não há importação ou sincronização de chats/histórico: somente eventos novos são persistidos e exibidos. Interações ainda sem contato/opt-in ficam marcadas como pendentes e sem resposta; o comando associa o mesmo histórico ao contato. WhatsApp Web não participa de templates, notificações ou disparos em massa.
+4. A sessão fica em volume persistente. `WHATSAPP_WEB_SESSION_MAX_AGE_DAYS` impõe a expiração local da sessão, enquanto `WHATSAPP_WEB_MESSAGE_RETENTION_DAYS` controla separadamente a retenção de mensagens e conversas Web (ambos usam 90 dias por padrão). Desconexão ou logout remoto também invalida a sessão.
 
 ### 4. Convite público e consentimento
 
-1. O administrador cria um convite com slug, título, descrição, gradiente e links `{ title, linkUrl, channel }`.
-2. `/invite/:slug` é público e apresenta os botões configurados.
+1. O administrador cria um convite com título, descrição, ícone HTTPS opcional, gradiente e links `{ title, linkUrl, channel }`. O slug é derivado do título pela API; colisões recebem sufixo sobre o índice único sem depender do navegador.
+2. `/invite/:slug` é público e apresenta primeiro um diálogo persistente, rolável e somente leitura com Termos de Uso, Termos de Serviço e Política de Privacidade. Os botões do convite permanecem inacessíveis até **Aceitar**; um link fixo permite reabrir os documentos.
 3. O redirecionamento registra clique agregado ou atribuído por token assinado quando houver um contato associado.
 4. O texto da página deixa claro que iniciar uma conversa/autorizar escrita permite notificações futuras.
 5. Webhook ou aceite explícito registra um evento de consentimento por canal, finalidade, origem, data e versão dos termos.
@@ -153,11 +155,16 @@ Revogação, `/stop`, bloqueio do bot, exclusão ou `notificationDisabled` torna
 - **Templates:** CRUD por canal, payload específico e preview de e-mail.
 - **Notificações:** envio rápido/template/global e histórico das entregas.
 - **Telegram:** identidade oficial do bot, interações conhecidas, destinos de grupo, envio rápido/template e mensagens recentes atualizadas por Socket.IO enquanto a página estiver aberta. O botão de sincronização continua disponível para uma atualização manual.
-- **WhatsApp Web:** caixa responsiva para monitorar, responder e remover conversas diretas já autorizadas pelo comando; não envia notificações ou campanhas.
+- **WhatsApp Web:** inbox responsiva dos eventos live recebidos após o `ready`. Interações desconhecidas ficam temporárias e somente para leitura; respostas exigem opt-in. É possível limpar/remover o histórico local, mas não importar chats do aparelho nem enviar notificações ou campanhas.
 - **WhatsApp Cloud:** configuração protegida, envio e eventos do webhook.
 - **Gmail:** texto/HTML, preview e envio.
-- **Convites:** CRUD, links e acesso à página pública.
-- **Termos e LGPD:** versionamento/publicação de termos, consentimentos e ações de acesso/exportação/revogação/exclusão.
+- **Convites:** CRUD, ícone HTTPS, slug automático/único, links e acesso à página pública protegida pela leitura dos documentos legais.
+- **Termos e LGPD:** editor simplificado de título/texto; versão, vigência, publicação e histórico são mantidos internamente, além das ações de acesso/exportação/revogação/exclusão.
+- **Logins:** configuração somente leitura do acesso dos contatos, estado real dos provedores/template Meta e auditoria sem códigos, hashes ou IDs de mensagem.
+
+O contato acessa a área pública em `/meu-perfil` usando email ou telefone único. Um mesmo código aleatório de seis dígitos é enviado de forma independente pelo Gmail, WhatsApp Cloud e Telegram autorizado: a falha de um provedor não bloqueia os demais, mas o desafio é revogado se nenhum deles entregar. Código e token individual expiram em 10 minutos; o código é armazenado somente como HMAC, tem limite de tentativas, uso único e proteção de reenvio. O envio de autenticação pelo Telegram não grava o código no histórico ou nos logs locais. A sessão permite consultar/editar apenas o próprio perfil, revogar as próprias permissões e visualizar somente suas entregas individuais, de grupo ou globais.
+
+Para o WhatsApp, crie e aprove primeiro na biblioteca da Meta o template oficial `verify_code_1`, idioma `pt_BR`, categoria de autenticação e entrega **Copiar código**, com o parâmetro `{{código}}`. O payload de envio repete o mesmo código no componente BODY e no componente BUTTON de índice `0` e subtipo `url`, como exigido por esse modelo OTP. O painel consulta o estado real na WABA configurada; ele não presume que o template existe ou está aprovado. Enquanto a WABA não devolver essa combinação de nome e idioma como aprovada, o painel exibirá o template como ausente, pendente ou não aprovado.
 
 ## Endpoints
 
@@ -177,9 +184,11 @@ Todos os recursos administrativos usam `/api` e JWT, exceto healthcheck, login, 
 | `/api/terms` | termos versionados e publicação |
 | `/api/privacy` | direitos do titular/LGPD |
 | `/api/telegram` | webhook, interações, grupos e envio |
-| `/api/whatsapp-web` | QR, sessão, chats e envio |
+| `/api/whatsapp-web` | QR, sessão e resposta autorizada; rotas legadas de chats/histórico/sync do provider retornam `410` |
 | `/api/whatsapp-cloud` | verificação/webhook e envio Meta |
 | `/api/email` | envio rápido/template por Gmail |
+| `/api/my-profile` | solicitação/validação de código, perfil próprio, revogação, links de ativação e histórico isolado do contato |
+| `/api/profile-logins` | configuração e auditoria administrativa dos logins, sem expor códigos ou hashes |
 
 Consulte também o próprio código em `api/src/routes`: ele é o contrato executável e contém a proteção/DTO exata de cada operação.
 
@@ -221,6 +230,10 @@ Use `.env.example` como catálogo. As principais são:
 |---|---|
 | `ADMIN{N}_EMAIL` / `ADMIN{N}_PASSWORD` | bootstrap dos administradores |
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | assinatura de tokens distintos |
+| `PROFILE_JWT_SECRET` | assinatura exclusiva do acesso de contatos; opcional, pois a API deriva uma chave separada quando vazio |
+| `PROFILE_JWT_TTL` | validade do token individual de `/meu-perfil` (`10m` por padrão) |
+| `PROFILE_CODE_TTL_SECONDS` / `PROFILE_CODE_MAX_ATTEMPTS` | validade do código de seis dígitos (`600s`) e limite de tentativas |
+| `PROFILE_CODE_MAX_REQUESTS` / `PROFILE_CODE_WINDOW_SECONDS` / `PROFILE_CODE_RESEND_SECONDS` | limites por identificador e intervalo mínimo entre códigos |
 | `ENCRYPTION_KEY` | chave derivada da criptografia de campos |
 | `SEARCH_HASH_KEY` | chave dos blind indexes |
 | `INVITE_TOKEN_SECRET` | tokens atribuíveis dos convites |

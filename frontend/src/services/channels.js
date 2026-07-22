@@ -1,7 +1,7 @@
 const editableSettings = Object.freeze({
   telegram: ['botToken', 'webhookSecret'],
   whatsappWeb: ['sessionTtlDays'],
-  whatsappCloud: ['accessToken', 'phoneNumberId', 'businessAccountId', 'verifyToken', 'appSecret', 'apiVersion'],
+  whatsappCloud: ['accessToken', 'phoneNumberId', 'displayPhoneNumber', 'businessAccountId', 'verifyToken', 'appSecret', 'apiVersion'],
   email: ['user', 'from', 'fromName', 'appPassword'],
 })
 

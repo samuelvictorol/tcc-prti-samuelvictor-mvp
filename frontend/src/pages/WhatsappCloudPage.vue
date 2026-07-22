@@ -822,9 +822,9 @@ onBeforeUnmount(() => {
 
     <ContactDialog v-model="contactDialog" :contact="editingContact" @saved="loadData" />
 
-    <q-dialog v-model="eligibilityDialog">
+    <q-dialog v-model="eligibilityDialog" :maximized="$q.screen.lt.md">
       <q-card class="eligibility-dialog">
-        <q-card-section class="row items-start q-gutter-md">
+        <q-card-section class="row items-start q-gutter-md eligibility-dialog__header">
           <div>
             <div class="text-h6 text-weight-bold">Contatos inelegíveis do grupo</div>
             <div class="text-caption text-muted">Revise todos antes de enfileirar. Nenhum contato desta lista receberá a notificação.</div>
@@ -834,7 +834,7 @@ onBeforeUnmount(() => {
           <q-btn v-close-popup flat round icon="close" aria-label="Fechar" />
         </q-card-section>
         <q-separator />
-        <q-card-section>
+        <q-card-section class="eligibility-dialog__body">
           <q-input
             v-model="eligibilitySearch"
             outlined
@@ -878,13 +878,13 @@ onBeforeUnmount(() => {
             <template #no-data><div class="full-width text-center q-pa-lg text-muted">Nenhum contato corresponde à busca.</div></template>
           </q-table>
         </q-card-section>
-        <q-card-actions align="right"><q-btn v-close-popup flat no-caps label="Fechar" /></q-card-actions>
+        <q-card-actions align="right" class="eligibility-dialog__footer"><q-btn v-close-popup flat no-caps label="Fechar" /></q-card-actions>
       </q-card>
     </q-dialog>
 
     <q-dialog v-model="issueDialog">
       <q-card class="issue-dialog">
-        <q-card-section class="row items-center"><div><div class="text-h6 text-weight-bold">Detalhes da entrega</div><div class="text-caption text-muted">Registro persistido pela fila</div></div><q-space /><q-btn v-close-popup flat round icon="close" /></q-card-section>
+        <q-card-section class="row items-center issue-dialog__header"><div><div class="text-h6 text-weight-bold">Detalhes da entrega</div><div class="text-caption text-muted">Registro persistido pela fila</div></div><q-space /><q-btn v-close-popup flat round icon="close" /></q-card-section>
         <q-separator />
         <q-card-section v-if="selectedIssue" class="issue-details">
           <div><span>Contato</span><strong>{{ selectedIssue.contact?.displayName || selectedIssue.contactId }}</strong></div>
@@ -894,7 +894,7 @@ onBeforeUnmount(() => {
           <div><span>Motivo</span><strong>{{ selectedIssue.errorMessage }}</strong></div>
           <div><span>Quando</span><strong>{{ formatDate(selectedIssue.createdAt) }}</strong></div>
         </q-card-section>
-        <q-card-actions align="right"><q-btn v-if="selectedIssue?.contact" v-close-popup outline color="primary" no-caps icon="manage_accounts" label="Editar permissão" @click="openEditContact(selectedIssue.contact)" /><q-btn v-close-popup flat no-caps label="Fechar" /></q-card-actions>
+        <q-card-actions align="right" class="issue-dialog__footer"><q-btn v-if="selectedIssue?.contact" v-close-popup outline color="primary" no-caps icon="manage_accounts" label="Editar permissão" @click="openEditContact(selectedIssue.contact)" /><q-btn v-close-popup flat no-caps label="Fechar" /></q-card-actions>
       </q-card>
     </q-dialog>
   </q-page>
@@ -1206,15 +1206,43 @@ onBeforeUnmount(() => {
 }
 
 .issue-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(620px, calc(100vw - 32px));
+  max-width: 620px !important;
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
   border-radius: 20px;
 }
 
 .eligibility-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(1040px, calc(100vw - 32px));
-  max-width: none;
-  max-height: 90vh;
+  max-width: 1040px !important;
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
   border-radius: 20px;
+}
+
+.eligibility-dialog__body,
+.issue-dialog > .issue-details {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.eligibility-dialog__header,
+.eligibility-dialog__footer,
+.issue-dialog__header,
+.issue-dialog__footer {
+  flex: 0 0 auto;
+}
+
+.eligibility-dialog__footer,
+.issue-dialog__footer {
+  flex-wrap: wrap;
 }
 
 .issue-reason {
@@ -1268,6 +1296,31 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 650px) {
+  .eligibility-dialog {
+    width: 100%;
+    max-width: 100% !important;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .eligibility-dialog__header,
+  .eligibility-dialog__body {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .eligibility-dialog__header {
+    flex-wrap: wrap;
+  }
+
+  .eligibility-dialog__footer {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .issue-dialog__footer .q-btn {
+    flex: 1 1 auto;
+  }
+
   .recipient-switch,
   .parameter-form-grid,
   .stats-column {

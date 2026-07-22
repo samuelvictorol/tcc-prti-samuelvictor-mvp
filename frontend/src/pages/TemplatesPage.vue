@@ -43,6 +43,24 @@ export const CUSTOM_WHATSAPP_CLOUD_TEMPLATE = Object.freeze({
   parameters: Object.freeze([]),
 })
 
+export const SYSTEM_WHATSAPP_TEMPLATE_NAMES = Object.freeze([
+  'verify_code_1',
+  'jaspers_market_plain_text_v1',
+  'jaspers_market_order_confirmation_v1',
+])
+
+export function isSystemTemplateRecord(template = {}) {
+  if (template.systemManaged === true || template.deletable === false) return true
+  return normalizedTemplateChannel(template.channel || template.type) === 'whatsapp_cloud'
+    && SYSTEM_WHATSAPP_TEMPLATE_NAMES.includes(String(template.externalTemplateName || '').trim())
+}
+
+function normalizedTemplateChannel(value = '') {
+  const key = String(value).toLowerCase().replaceAll('-', '_')
+  if (['whatsappcloud', 'meta', 'whatsapp_official'].includes(key)) return 'whatsapp_cloud'
+  return key
+}
+
 export const META_COMPONENT_OPTIONS = Object.freeze([
   Object.freeze({ label: 'Cabeçalho', value: 'header' }),
   Object.freeze({ label: 'Corpo', value: 'body' }),
@@ -118,7 +136,7 @@ export function buildCustomWhatsAppCloudDefinition(input) {
       filename: parameter.type === 'document' ? String(parameter.filename || '').trim() || undefined : undefined,
     })),
   }))
-  const variables = builderComponents.flatMap((component) => component.parameters.map((parameter) => parameter.key))
+  const variables = [...new Set(builderComponents.flatMap((component) => component.parameters.map((parameter) => parameter.key)))]
 
   return {
     whatsappCloudPreset: 'custom',
@@ -426,7 +444,7 @@ function addCloudParameter(component) {
 
 function parameterOptionsFor(component) {
   if (component.type === 'button') {
-    const allowed = component.subType === 'url'
+    const allowed = ['url', 'otp_copy_code'].includes(component.subType)
       ? ['text']
       : component.subType === 'copy_code'
         ? ['coupon_code']
@@ -466,7 +484,10 @@ function customCloudValidationError() {
   if (new Set(buttonIndexes).size !== buttonIndexes.length) return 'Cada botão deve usar um índice diferente.'
   const keys = parameters.map((parameter, index) => normalizeCloudVariableKey(parameter.key || parameter.label, `campo_${index + 1}`))
   if (keys.some((key) => !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key))) return 'As variáveis devem começar com letra e ter no máximo 64 caracteres.'
-  if (new Set(keys).size !== keys.length) return 'Cada parâmetro deve usar uma variável diferente.'
+  if (form.cloudComponents.some((component) => {
+    const componentKeys = component.parameters.map((parameter, index) => normalizeCloudVariableKey(parameter.key || parameter.label, `campo_${index + 1}`))
+    return new Set(componentKeys).size !== componentKeys.length
+  })) return 'Cada parâmetro do mesmo componente deve usar uma variável diferente.'
   if (parameters.some((parameter) => !String(parameter.label || '').trim())) return 'Informe um rótulo para cada parâmetro.'
   for (const component of form.cloudComponents) {
     const metaNames = component.parameters.map((parameter) => String(parameter.parameterName || '').trim())
@@ -565,6 +586,10 @@ async function save() {
 }
 
 function remove(template) {
+  if (isSystemTemplateRecord(template)) {
+    $q.notify({ type: 'info', message: 'Este é um template padrão do sistema e não pode ser removido.' })
+    return
+  }
   $q.dialog({
     title: 'Remover template?',
     message: `O template “${template.name || template.title}” deixará de estar disponível para novos envios.`,
@@ -615,8 +640,16 @@ onMounted(loadTemplates)
         <template #body-cell-name="props">
           <q-td :props="props">
             <div class="template-name">
-              <span class="template-icon"><q-icon :name="channelIcon(props.row.channel || props.row.type)" /></span>
-              <div><strong>{{ props.row.name || props.row.title }}</strong><span>{{ props.row.description || props.row.subject || String(props.row.body || props.row.content || '').slice(0, 78) || 'Sem descrição' }}</span></div>
+              <span class="template-icon" aria-hidden="true">
+                <q-icon :name="channelIcon(props.row.channel || props.row.type)" size="22px" />
+              </span>
+              <div class="template-name__copy">
+                <strong>
+                  {{ props.row.name || props.row.title }}
+                  <q-icon v-if="isSystemTemplateRecord(props.row)" name="lock" size="14px" color="primary"><q-tooltip>Template padrão do sistema</q-tooltip></q-icon>
+                </strong>
+                <span>{{ props.row.description || props.row.subject || String(props.row.body || props.row.content || '').slice(0, 78) || 'Sem descrição' }}</span>
+              </div>
             </div>
           </q-td>
         </template>
@@ -641,15 +674,18 @@ onMounted(loadTemplates)
             <q-icon v-else name="history" color="grey-6" size="20px">
               <q-tooltip>Template global legado: somente leitura</q-tooltip>
             </q-icon>
-            <q-btn flat round dense color="negative" icon="delete" aria-label="Remover template" @click="remove(props.row)" />
+            <q-icon v-if="isSystemTemplateRecord(props.row)" name="lock" color="primary" size="20px" aria-label="Template padrão protegido">
+              <q-tooltip>Template padrão do sistema: não pode ser removido</q-tooltip>
+            </q-icon>
+            <q-btn v-else flat round dense color="negative" icon="delete" aria-label="Remover template" @click="remove(props.row)" />
           </q-td>
         </template>
       </q-table>
     </q-card>
 
-    <q-dialog v-model="dialog" persistent maximized-on-mobile>
+    <q-dialog v-model="dialog" persistent :maximized="$q.screen.lt.md">
       <q-card class="template-dialog">
-        <q-card-section class="row items-center q-px-lg q-py-md">
+        <q-card-section class="row items-center q-px-lg q-py-md template-dialog__header">
           <div>
             <div class="text-h6 text-weight-bold">{{ editingId ? 'Editar template' : 'Novo template' }}</div>
             <div class="dialog-subtitle">
@@ -873,7 +909,7 @@ onMounted(loadTemplates)
                             stack-label
                             emit-value
                             map-options
-                            :options="[{ label: 'URL dinâmica', value: 'url' }, { label: 'Resposta rápida', value: 'quick_reply' }, { label: 'Copiar código', value: 'copy_code' }]"
+                            :options="[{ label: 'URL dinâmica', value: 'url' }, { label: 'Resposta rápida', value: 'quick_reply' }, { label: 'Copiar cupom', value: 'copy_code' }, { label: 'OTP - Copiar código', value: 'otp_copy_code' }]"
                             label="Tipo do botão"
                             class="template-field"
                             @update:model-value="onCloudButtonSubTypeChange(component)"
@@ -986,7 +1022,7 @@ onMounted(loadTemplates)
             </aside>
           </q-card-section>
           <q-separator />
-          <q-card-actions align="right" class="q-pa-md q-px-lg">
+          <q-card-actions align="right" class="q-pa-md q-px-lg template-dialog__footer">
             <q-btn v-close-popup flat no-caps label="Cancelar" />
             <q-btn type="submit" color="primary" unelevated no-caps icon="save" label="Salvar template" :loading="saving" />
           </q-card-actions>
@@ -1002,42 +1038,90 @@ onMounted(loadTemplates)
 }
 
 .template-name {
-  display: flex;
+  display: grid;
+  min-width: 240px;
+  grid-template-columns: 44px minmax(0, 1fr);
   align-items: center;
-  gap: 11px;
+  gap: 12px;
 }
 
 .template-icon {
   display: grid;
-  width: 38px;
-  height: 38px;
-  flex: none;
-  border-radius: 12px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-items: center;
+  border-radius: 13px;
   background: rgba(130, 248, 230, 0.22);
   color: #137d6c;
+  line-height: 1;
   place-items: center;
 }
 
-.template-name strong,
-.template-name span {
-  display: block;
+.template-icon :deep(.q-icon) {
+  width: 22px;
+  height: 22px;
+  font-size: 22px !important;
+  line-height: 1;
 }
 
-.template-name span {
-  max-width: 430px;
+.template-name__copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.template-name__copy strong,
+.template-name__copy span {
+  display: block;
+  min-width: 0;
   overflow: hidden;
-  color: #667a77;
-  font-size: 0.76rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.template-name__copy strong {
+  color: #173833;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.template-name__copy span {
+  max-width: 430px;
+  color: #667a77;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
 .template-dialog {
+  display: flex;
+  flex-direction: column;
   width: min(1280px, calc(100vw - 48px)) !important;
   max-width: 1280px !important;
-  max-height: calc(100vh - 32px);
+  height: min(900px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
   border-radius: 24px;
   background: #f9fffd;
+}
+
+.template-dialog > .q-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.template-dialog__header,
+.template-dialog__footer {
+  flex: 0 0 auto;
+  background: #f9fffd;
+}
+
+.template-dialog__footer {
+  flex-wrap: wrap;
 }
 
 .dialog-subtitle {
@@ -1049,10 +1133,13 @@ onMounted(loadTemplates)
 
 .template-builder {
   display: grid;
+  flex: 1 1 auto;
   grid-template-columns: minmax(570px, 1.35fr) minmax(340px, 0.65fr);
   gap: 28px;
-  max-height: calc(100vh - 190px);
+  min-height: 0;
+  max-height: none;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .editor-column {
@@ -1446,13 +1533,14 @@ onMounted(loadTemplates)
   .template-dialog {
     width: 100% !important;
     max-width: 100% !important;
-    max-height: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
     border-radius: 0;
   }
 
   .template-builder {
     grid-template-columns: 1fr;
-    max-height: calc(100vh - 180px);
+    max-height: none;
   }
 
   .preview-column {
@@ -1461,6 +1549,31 @@ onMounted(loadTemplates)
 }
 
 @media (max-width: 600px) {
+  .template-name {
+    min-width: 210px;
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .template-icon {
+    width: 42px;
+    height: 42px;
+    min-width: 42px;
+    min-height: 42px;
+  }
+
+  .template-dialog__header,
+  .template-builder {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .template-dialog__footer {
+    padding-right: 16px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    padding-left: 16px;
+  }
+
   .builder-section {
     padding: 16px;
   }

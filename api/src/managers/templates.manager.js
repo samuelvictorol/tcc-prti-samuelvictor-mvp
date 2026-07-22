@@ -3,6 +3,7 @@ const Template = require('../models/template.model');
 const ApiError = require('../utils/api-error');
 const { parsePagination, pageResult } = require('../utils/pagination');
 const { normalizeOfficialTemplateDefinition } = require('../utils/whatsapp-cloud-templates');
+const { listSystemTemplateDefinitions, isSystemTemplate } = require('../utils/system-templates');
 const { telegramTemplateDefinition } = require('../dtos/templates.dto');
 const { telegramDefinitionFromTemplate, telegramTemplateBody, extractVariables } = require('../utils/telegram-templates');
 
@@ -96,16 +97,89 @@ function normalize(input) {
   return { ...input, templateType: input.templateType || 'text' };
 }
 
+function serialize(template) {
+  const value = typeof template?.toObject === 'function' ? template.toObject() : { ...template };
+  const systemManaged = isSystemTemplate(value);
+  return {
+    ...value,
+    systemManaged,
+    deletable: !systemManaged
+  };
+}
+
+function systemTemplateFilter(definition) {
+  return {
+    $or: [
+      { systemKey: definition.systemKey },
+      {
+        channel: definition.channel,
+        externalTemplateName: definition.externalTemplateName
+      }
+    ]
+  };
+}
+
+async function markSystemTemplate(existing, definition) {
+  if (existing.systemManaged === true && existing.systemKey === definition.systemKey) return false;
+  await Template.updateOne(
+    { _id: existing._id },
+    { $set: { systemKey: definition.systemKey, systemManaged: true } }
+  );
+  return true;
+}
+
+async function ensureSystemTemplates() {
+  const summary = { created: 0, protected: 0, existing: 0 };
+  for (const definition of listSystemTemplateDefinitions()) {
+    const filter = systemTemplateFilter(definition);
+    let existing = await Template.findOne(filter).lean();
+    if (existing) {
+      if (await markSystemTemplate(existing, definition)) summary.protected += 1;
+      else summary.existing += 1;
+      continue;
+    }
+    const normalized = normalize(definition);
+    validateTemplate(normalized);
+    try {
+      await Template.create({ ...clean(normalized), systemKey: definition.systemKey, systemManaged: true });
+      summary.created += 1;
+    } catch (error) {
+      if (error?.code !== 11000) throw error;
+      existing = await Template.findOne(filter).lean();
+      if (!existing) throw error;
+      if (await markSystemTemplate(existing, definition)) summary.protected += 1;
+      else summary.existing += 1;
+    }
+  }
+  return summary;
+}
+
+function assertSystemIdentityUnchanged(existing, input) {
+  if (!isSystemTemplate(existing)) return;
+  const identityFields = ['channel', 'templateType', 'whatsappCloudPreset', 'externalTemplateName', 'languageCode'];
+  const changedFields = identityFields.filter((field) => (
+    input[field] !== undefined && String(input[field] ?? '') !== String(existing[field] ?? '')
+  ));
+  if (changedFields.length) {
+    throw new ApiError(
+      409,
+      'A identidade de um template padrao do sistema nao pode ser alterada',
+      { fields: changedFields },
+      'SYSTEM_TEMPLATE_IDENTITY_IMMUTABLE'
+    );
+  }
+}
+
 async function create(input, actorId) {
   const normalized = normalize(input);
   validateTemplate(normalized);
-  return Template.create({ ...clean(normalized), createdBy: actorId, updatedBy: actorId });
+  return serialize(await Template.create({ ...clean(normalized), createdBy: actorId, updatedBy: actorId }));
 }
 
 async function getById(id) {
   const template = await Template.findById(id).lean();
   if (!template) throw new ApiError(404, 'Template nao encontrado');
-  return template;
+  return serialize(template);
 }
 
 async function list(query = {}) {
@@ -118,11 +192,12 @@ async function list(query = {}) {
     Template.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(limit).lean(),
     Template.countDocuments(filter)
   ]);
-  return pageResult(items, total, page, limit);
+  return pageResult(items.map(serialize), total, page, limit);
 }
 
 async function update(id, input, actorId) {
   const existing = await getById(id);
+  assertSystemIdentityUnchanged(existing, input);
   const merged = { ...existing, ...input };
   if (input.whatsappCloudPreset && input.whatsappCloudPreset !== existing.whatsappCloudPreset && input.body === undefined) {
     merged.body = undefined;
@@ -134,10 +209,19 @@ async function update(id, input, actorId) {
     if (normalized[derivedKey] !== existing[derivedKey]) changed[derivedKey] = normalized[derivedKey];
   }
   const template = await Template.findByIdAndUpdate(id, { $set: { ...clean(changed), updatedBy: actorId } }, { new: true, runValidators: true }).lean();
-  return template;
+  return serialize(template);
 }
 
 async function remove(id) {
+  const existing = await getById(id);
+  if (isSystemTemplate(existing)) {
+    throw new ApiError(
+      409,
+      'Templates padrao do sistema nao podem ser removidos',
+      { templateId: String(id), externalTemplateName: existing.externalTemplateName },
+      'SYSTEM_TEMPLATE_DELETE_FORBIDDEN'
+    );
+  }
   const result = await Template.deleteOne({ _id: id });
   if (!result.deletedCount) throw new ApiError(404, 'Template nao encontrado');
   return { id: String(id), removed: true };
@@ -150,5 +234,8 @@ module.exports = {
   update,
   remove,
   normalizeTemplateInput: normalize,
-  validateTemplateInput: validateTemplate
+  validateTemplateInput: validateTemplate,
+  ensureSystemTemplates,
+  serializeTemplate: serialize,
+  isSystemTemplate
 };

@@ -8,6 +8,7 @@ const { env } = require('../config/env');
 const { emit } = require('../services/socket.service');
 const ApiError = require('../utils/api-error');
 const { buildOfficialTemplateMessage, buildCustomTemplateMessage, listTemplatePresets } = require('../utils/whatsapp-cloud-templates');
+const { normalizeWhatsappE164 } = require('../utils/normalizers');
 
 async function sendConfiguration() {
   const [accessToken, phoneNumberId, version] = await Promise.all([
@@ -74,12 +75,15 @@ async function verifySignature(rawBody, signature) {
 }
 
 function cloudIdentity(source = {}, fallback = {}) {
-  const raw = source.wa_id ?? source.from ?? source.from_user_id ?? source.user_id
-    ?? fallback.wa_id ?? fallback.from_user_id ?? fallback.user_id;
-  let digits = String(raw ?? '').replace(/\D/g, '');
-  const countryCode = String(source.country_code ?? fallback.country_code ?? '').replace(/\D/g, '');
-  if (digits && countryCode && !digits.startsWith(countryCode)) digits = countryCode + digits;
-  return digits || null;
+  const raw = source.wa_id ?? source.from ?? fallback.wa_id ?? fallback.from;
+  return normalizeWhatsappE164(raw);
+}
+
+function cloudLogicalId(source = {}, fallback = {}) {
+  const raw = source.from_logical_id ?? source.logical_id
+    ?? fallback.from_logical_id ?? fallback.logical_id;
+  const digits = String(raw || '').replace(/\D/g, '');
+  return /^\d{8,}$/.test(digits) ? digits : null;
 }
 
 function cloudProfile(source = {}) {
@@ -124,8 +128,15 @@ async function upsertCloudContact(source, value, fallback = {}, options = {}) {
   const address = cloudIdentity(source, fallback);
   if (!address) return null;
   const profile = cloudProfile(source);
-  const existingChannelContact = await contactsManager.findByChannelAddress('whatsapp_cloud', address);
+  const logicalId = cloudLogicalId(source, fallback);
+  const [existingChannelContact, logicalContact] = await Promise.all([
+    contactsManager.findByChannelAddress('whatsapp_cloud', address),
+    logicalId
+      ? contactsManager.findByChannelAddress('whatsapp_web', logicalId + '@lid')
+      : null
+  ]);
   const existing = existingChannelContact
+    || logicalContact
     || await contactsManager.findByChannelOrPhone('whatsapp_cloud', address, address);
   const existingIdentity = existing?.channels?.find((item) => item.channel === 'whatsapp_cloud');
   const alreadyGranted = Boolean(existingIdentity?.authorized && existingIdentity?.consentStatus === 'granted');
@@ -134,6 +145,7 @@ async function upsertCloudContact(source, value, fallback = {}, options = {}) {
     channel: 'whatsapp_cloud',
     address,
     phone: address,
+    matchedContactId: existing?.id,
     displayName: profile.displayName || address,
     avatarUrl: profile.avatarUrl,
     source: permissionGranted ? 'whatsapp_cloud_permission_command' : 'whatsapp_cloud_webhook',
@@ -384,7 +396,9 @@ async function send(input) {
     );
   }
   const messageId = body.messages?.[0]?.id;
-  await logsManager.create({ channel: 'whatsapp_cloud', action: 'message.sent', message: 'Mensagem WhatsApp Cloud enviada', context: { contactId: input.contactId, providerMessageId: messageId } });
+  if (input.useCase !== 'profile_auth') {
+    await logsManager.create({ channel: 'whatsapp_cloud', action: 'message.sent', message: 'Mensagem WhatsApp Cloud enviada', context: { contactId: input.contactId, providerMessageId: messageId } });
+  }
   return { providerMessageId: messageId, raw: body };
 }
 
@@ -396,7 +410,9 @@ module.exports = {
   send,
   normalizeMetaDestination,
   cloudIdentity,
+  cloudLogicalId,
   cloudProfile,
+  upsertCloudContact,
   matchingCloudContact,
   sameProviderUser
 };

@@ -11,11 +11,13 @@ const DEFINITIONS = Object.freeze({
   GMAIL_FROM_NAME: { sensitive: false, channel: 'email' },
   WHATSAPP_CLOUD_ACCESS_TOKEN: { sensitive: true, channel: 'whatsapp_cloud' },
   WHATSAPP_CLOUD_PHONE_NUMBER_ID: { sensitive: true, channel: 'whatsapp_cloud' },
+  WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER: { sensitive: false, channel: 'whatsapp_cloud' },
   WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID: { sensitive: false, channel: 'whatsapp_cloud' },
   WHATSAPP_CLOUD_VERIFY_TOKEN: { sensitive: true, channel: 'whatsapp_cloud' },
   WHATSAPP_CLOUD_APP_SECRET: { sensitive: true, channel: 'whatsapp_cloud' },
   WHATSAPP_CLOUD_API_VERSION: { sensitive: false, channel: 'whatsapp_cloud' },
   START_NOTIFY_WHATSAPP_PERMISSION: { sensitive: false, channel: 'whatsapp' },
+  START_VERIFY_TELEGRAM_PERMISSION: { sensitive: false, channel: 'telegram' },
   WHATSAPP_WEB_AUTHENTICATED_AT: { sensitive: true, internal: true },
   WHATSAPP_WEB_SESSION_MAX_AGE_DAYS: { sensitive: false, channel: 'whatsapp_web' }
 });
@@ -105,11 +107,13 @@ async function setBulk(input, actorId) {
     'whatsappWeb.sessionTtlDays': 'WHATSAPP_WEB_SESSION_MAX_AGE_DAYS',
     'whatsappCloud.accessToken': 'WHATSAPP_CLOUD_ACCESS_TOKEN',
     'whatsappCloud.phoneNumberId': 'WHATSAPP_CLOUD_PHONE_NUMBER_ID',
+    'whatsappCloud.displayPhoneNumber': 'WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER',
     'whatsappCloud.businessAccountId': 'WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID',
     'whatsappCloud.verifyToken': 'WHATSAPP_CLOUD_VERIFY_TOKEN',
     'whatsappCloud.appSecret': 'WHATSAPP_CLOUD_APP_SECRET',
     'whatsappCloud.apiVersion': 'WHATSAPP_CLOUD_API_VERSION',
     'whatsappPermission.command': 'START_NOTIFY_WHATSAPP_PERMISSION',
+    'telegramPermission.command': 'START_VERIFY_TELEGRAM_PERMISSION',
     'email.user': 'GMAIL_USER',
     'email.from': 'GMAIL_FROM',
     'email.fromName': 'GMAIL_FROM_NAME',
@@ -130,8 +134,17 @@ async function getStructured() {
   const permissionCommand = values.START_NOTIFY_WHATSAPP_PERMISSION?.value
     || process.env.START_NOTIFY_WHATSAPP_PERMISSION
     || '/notify-me';
+  const telegramPermissionCommand = values.START_VERIFY_TELEGRAM_PERMISSION?.value
+    || process.env.START_VERIFY_TELEGRAM_PERMISSION
+    || '/verify-me';
   return {
-    telegram: { configured: channelStatuses.telegram.configured, botTokenConfigured: values.TELEGRAM_BOT_TOKEN?.configured || false, webhookSecretConfigured: values.TELEGRAM_WEBHOOK_SECRET?.configured || false },
+    telegram: {
+      configured: channelStatuses.telegram.configured,
+      botTokenConfigured: values.TELEGRAM_BOT_TOKEN?.configured || false,
+      webhookSecretConfigured: values.TELEGRAM_WEBHOOK_SECRET?.configured || false,
+      permissionCommand: telegramPermissionCommand
+    },
+    telegramPermission: { command: telegramPermissionCommand },
     whatsappPermission: { command: permissionCommand },
     whatsappWeb: {
       ...channelStatuses.whatsapp_web,
@@ -143,6 +156,7 @@ async function getStructured() {
       sendConfigured: channelStatuses.whatsapp_cloud.configured,
       accessTokenConfigured: values.WHATSAPP_CLOUD_ACCESS_TOKEN?.configured || false,
       phoneNumberIdConfigured: values.WHATSAPP_CLOUD_PHONE_NUMBER_ID?.configured || false,
+      displayPhoneNumber: values.WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER?.value || null,
       businessAccountId: values.WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID?.value || null,
       verifyTokenConfigured: values.WHATSAPP_CLOUD_VERIFY_TOKEN?.configured || false,
       appSecretConfigured: values.WHATSAPP_CLOUD_APP_SECRET?.configured || false,
@@ -177,7 +191,18 @@ async function isWhatsappPermissionCommand(value) {
   return Boolean(command) && normalizeWhatsappPermissionText(value) === normalizeWhatsappPermissionText(command);
 }
 
+async function getTelegramPermissionCommand() {
+  const configured = await module.exports.getValue('START_VERIFY_TELEGRAM_PERMISSION');
+  return String(configured || process.env.START_VERIFY_TELEGRAM_PERMISSION || '/verify-me').trim();
+}
+
+async function isTelegramPermissionCommand(value) {
+  const command = await getTelegramPermissionCommand();
+  return Boolean(command) && normalizeWhatsappPermissionText(value) === normalizeWhatsappPermissionText(command);
+}
+
 module.exports = {
   DEFINITIONS, getValue, setValue, remove, list, setBulk, getStructured, channelConfigured, statuses,
-  getWhatsappPermissionCommand, isWhatsappPermissionCommand, normalizeWhatsappPermissionText
+  getWhatsappPermissionCommand, isWhatsappPermissionCommand, getTelegramPermissionCommand,
+  isTelegramPermissionCommand, normalizeWhatsappPermissionText
 };

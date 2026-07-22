@@ -17,6 +17,7 @@ const conversationSchema = new mongoose.Schema({
   lastMessageAt: { type: Date, index: true },
   unreadCount: { type: Number, default: 0, min: 0 },
   messageCount: { type: Number, default: 0, min: 0 },
+  retentionUntil: { type: Date },
   activityVersion: { type: Number, default: 0, min: 0 },
   lastHiddenVersion: { type: Number, default: 0, min: 0 },
   hiddenAt: { type: Date, index: true }
@@ -25,5 +26,6 @@ const conversationSchema = new mongoose.Schema({
 conversationSchema.index({ channel: 1, externalIdHash: 1 }, { unique: true });
 conversationSchema.index({ lastMessageAt: -1, updatedAt: -1 });
 conversationSchema.index({ channel: 1, hiddenAt: 1, lastMessageAt: -1 });
+conversationSchema.index({ retentionUntil: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.models.Conversation || mongoose.model('Conversation', conversationSchema);

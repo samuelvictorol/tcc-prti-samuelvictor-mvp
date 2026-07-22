@@ -16,6 +16,12 @@ const routes = [
     meta: { public: true },
   },
   {
+    path: '/meu-perfil',
+    name: 'my-profile',
+    component: () => import('../pages/ProfilePage.vue'),
+    meta: { public: true },
+  },
+  {
     path: '/',
     component: () => import('../layouts/MainLayout.vue'),
     meta: { requiresAuth: true },
@@ -30,6 +36,7 @@ const routes = [
       { path: 'email', name: 'email', component: () => import('../pages/EmailPage.vue'), meta: { channel: 'email' } },
       { path: 'invites', name: 'invites', component: () => import('../pages/InvitesPage.vue') },
       { path: 'terms', name: 'terms', component: () => import('../pages/TermsPage.vue') },
+      { path: 'logins', name: 'profile-logins', component: () => import('../pages/LoginSettingsPage.vue') },
     ],
   },
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('../pages/NotFoundPage.vue'), meta: { public: true } },

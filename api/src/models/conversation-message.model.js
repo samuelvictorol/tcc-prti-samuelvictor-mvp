@@ -12,6 +12,9 @@ const conversationMessageSchema = new mongoose.Schema({
   type: { type: String, default: 'text' },
   hasMedia: { type: Boolean, default: false },
   sentAt: { type: Date, required: true, index: true },
+  // Somente mensagens WhatsApp Web recebem este campo. O indice TTL garante
+  // retencao temporal sem alterar o historico Telegram compartilhado no model.
+  retentionUntil: { type: Date },
   activityVersion: { type: Number, default: 0, min: 0 },
   tombstonedAt: { type: Date },
   metadataEncrypted: { type: String, select: false }
@@ -24,5 +27,6 @@ conversationMessageSchema.index(
 conversationMessageSchema.index({ conversation: 1, sentAt: -1, _id: -1 });
 conversationMessageSchema.index({ conversation: 1, activityVersion: 1 });
 conversationMessageSchema.index({ tombstonedAt: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
+conversationMessageSchema.index({ retentionUntil: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.models.ConversationMessage || mongoose.model('ConversationMessage', conversationMessageSchema);

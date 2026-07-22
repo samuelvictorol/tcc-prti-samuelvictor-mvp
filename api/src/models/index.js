@@ -11,6 +11,7 @@ module.exports = {
   Log: require('./log.model'),
   Notification: require('./notification.model'),
   ProviderReceipt: require('./provider-receipt.model'),
+  ProfileAuthChallenge: require('./profile-auth-challenge.model'),
   RefreshToken: require('./refresh-token.model'),
   Setting: require('./setting.model'),
   Template: require('./template.model'),

@@ -1,5 +1,5 @@
 const { z } = require('zod');
-const { isAllowedInviteUrl } = require('../utils/urls');
+const { isAllowedInviteUrl, isSafePublicHttpsUrl } = require('../utils/urls');
 
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, 'ObjectId invalido');
 const booleanQuery = z.preprocess((value) => {
@@ -14,5 +14,6 @@ const paginationQuery = z.object({
 
 const idParams = z.object({ id: objectId });
 const inviteUrl = z.string().min(3).max(2048).refine(isAllowedInviteUrl, 'Protocolo de link nao permitido');
+const publicHttpsUrl = z.string().trim().min(8).max(2048).refine(isSafePublicHttpsUrl, 'Informe uma URL HTTPS publica e segura');
 
-module.exports = { z, objectId, booleanQuery, paginationQuery, idParams, inviteUrl };
+module.exports = { z, objectId, booleanQuery, paginationQuery, idParams, inviteUrl, publicHttpsUrl };

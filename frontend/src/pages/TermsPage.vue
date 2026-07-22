@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import DOMPurify from 'dompurify'
 import { useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
@@ -12,16 +12,14 @@ const loading = ref(false)
 const saving = ref(false)
 const dialog = ref(false)
 const editingId = ref(null)
+const editingTerm = ref(null)
 const terms = ref([])
 const contacts = ref([])
 const privacy = reactive({ activeContacts: 0, revokedConsents: 0, authorizedChannels: 0 })
 const form = reactive({
   type: 'terms_of_use',
   title: 'Termos de Uso',
-  version: '1.0',
   content: '',
-  status: 'draft',
-  effectiveAt: '',
 })
 
 const typeOptions = [
@@ -29,8 +27,6 @@ const typeOptions = [
   { label: 'Termos de Serviço', value: 'terms_of_service' },
   { label: 'Política de Privacidade', value: 'privacy_policy' },
 ]
-
-const safePreview = computed(() => DOMPurify.sanitize(form.content || '<p>O conteúdo aparecerá aqui.</p>', { USE_PROFILES: { html: true } }))
 
 const requestColumns = [
   { name: 'contact', label: 'Titular', field: 'contact', align: 'left' },
@@ -59,7 +55,7 @@ function formatDate(value) {
 async function loadData() {
   loading.value = true
   const [termsResult, contactsResult] = await Promise.allSettled([
-    fetchAll('/terms', { preferredKey: 'terms' }),
+    fetchAll('/terms', { preferredKey: 'terms', params: { status: 'published' } }),
     fetchAll('/contacts', { preferredKey: 'contacts' }),
   ])
   if (termsResult.status === 'fulfilled') terms.value = termsResult.value
@@ -74,30 +70,38 @@ async function loadData() {
 }
 
 function openTerm(term) {
-  editingId.value = term ? recordId(term) : null
+  editingId.value = recordId(term)
+  editingTerm.value = term
+  const type = term.type
   Object.assign(form, {
-    type: term?.type || 'terms_of_use',
-    title: term?.title || 'Termos de Uso',
-    version: term?.version || '1.0',
+    type,
+    title: term?.title || typeLabel(type),
     content: term?.content || '',
-    status: term?.status || 'draft',
-    effectiveAt: term?.effectiveAt ? String(term.effectiveAt).slice(0, 10) : '',
   })
   dialog.value = true
 }
 
 async function save() {
+  const content = DOMPurify.sanitize(form.content, { USE_PROFILES: { html: true } })
+  const readableText = content.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').trim()
+  if (!readableText) {
+    $q.notify({ type: 'warning', message: 'Informe o texto do documento.' })
+    return
+  }
   saving.value = true
   try {
     const payload = {
-      ...form,
-      content: DOMPurify.sanitize(form.content, { USE_PROFILES: { html: true } }),
-      effectiveAt: form.effectiveAt || undefined,
+      type: form.type,
+      title: form.title,
+      content,
     }
-    if (editingId.value) await http.put(`/terms/${editingId.value}`, payload)
-    else await http.post('/terms', payload)
+    if (editingId.value && editingTerm.value?.status === 'draft') {
+      await http.put(`/terms/${editingId.value}`, { title: payload.title, content: payload.content, status: 'published' })
+    } else {
+      await http.post('/terms', payload)
+    }
     dialog.value = false
-    $q.notify({ type: 'positive', message: form.status === 'published' ? 'Documento publicado.' : 'Rascunho salvo.' })
+    $q.notify({ type: 'positive', message: editingId.value ? 'Nova versão publicada; o histórico foi preservado.' : 'Documento publicado.' })
     await loadData()
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error) })
@@ -167,9 +171,7 @@ onMounted(loadData)
       title="Termos e LGPD"
       description="Versione documentos legais e acompanhe solicitações dos titulares em um fluxo auditável."
       icon="verified_user"
-    >
-      <template #actions><q-btn color="primary" unelevated no-caps icon="post_add" label="Novo documento" @click="openTerm()" /></template>
-    </PageHeader>
+    />
 
     <section class="page-grid page-grid--3 q-mb-lg">
       <article class="metric-card glass-card"><div class="text-muted">Contatos ativos</div><div class="metric-value">{{ privacy.activeContacts || 0 }}</div><q-icon name="contacts" class="privacy-icon" /></article>
@@ -184,15 +186,13 @@ onMounted(loadData)
       </q-tabs>
       <q-tab-panels v-model="tab" animated class="transparent">
         <q-tab-panel name="documents" class="q-pa-none">
-          <EmptyState v-if="!loading && !terms.length" icon="policy" title="Nenhum documento publicado" description="Crie a primeira versão dos termos e da política de privacidade.">
-            <q-btn color="primary" unelevated no-caps label="Criar documento" @click="openTerm()" />
-          </EmptyState>
+          <EmptyState v-if="!loading && !terms.length" icon="policy" title="Documentos indisponíveis" description="Os documentos legais pré-configurados ainda não puderam ser carregados." />
           <div v-else class="term-list">
             <article v-for="term in terms" :key="recordId(term)" class="term-row">
               <div class="term-icon"><q-icon name="description" /></div>
               <div class="term-copy"><strong>{{ term.title || typeLabel(term.type) }}</strong><span>{{ typeLabel(term.type) }} · versão {{ term.version || '1.0' }} · {{ formatDate(term.effectiveAt || term.updatedAt) }}</span></div>
               <q-badge :color="statusColor(term.status)" :label="term.status || 'draft'" />
-              <q-btn flat round dense icon="edit" aria-label="Editar documento" @click="openTerm(term)" />
+              <q-btn flat round dense icon="edit_document" aria-label="Criar nova versão" @click="openTerm(term)"><q-tooltip>Criar nova versão</q-tooltip></q-btn>
             </article>
           </div>
         </q-tab-panel>
@@ -210,27 +210,21 @@ onMounted(loadData)
       </q-tab-panels>
     </q-card>
 
-    <q-dialog v-model="dialog" persistent maximized-on-mobile>
+    <q-dialog v-model="dialog" persistent :maximized="$q.screen.lt.sm">
       <q-card class="terms-dialog">
-        <q-card-section class="row items-center q-px-lg"><div><div class="text-h6 text-weight-bold">{{ editingId ? 'Editar documento' : 'Novo documento' }}</div><div class="text-caption text-muted">Publicar uma nova versão não altera registros históricos.</div></div><q-space /><q-btn v-close-popup flat round dense icon="close" /></q-card-section>
+        <q-card-section class="row items-center q-px-lg terms-dialog__header"><div><div class="text-h6 text-weight-bold">{{ editingId ? `Nova versão · ${typeLabel(form.type)}` : typeLabel(form.type) }}</div><div class="text-caption text-muted">Ao salvar, a versão anterior permanece no histórico e a nova passa a ser a publicada.</div></div><q-space /><q-btn v-close-popup flat round dense icon="close" aria-label="Fechar" /></q-card-section>
         <q-separator />
-        <q-form @submit.prevent="save">
+        <q-form class="terms-dialog__form" @submit.prevent="save">
           <q-card-section class="terms-builder q-pa-lg">
-            <section>
-              <div class="form-grid">
-                <q-select v-model="form.type" outlined emit-value map-options :options="typeOptions" label="Tipo *" />
-                <q-input v-model.trim="form.title" outlined label="Título *" :rules="[(v) => Boolean(v) || 'Informe o título']" />
-                <q-input v-model.trim="form.version" outlined label="Versão *" />
-                <q-input v-model="form.effectiveAt" outlined type="date" label="Vigência" stack-label />
-                <q-select v-model="form.status" outlined emit-value map-options :options="[{label:'Rascunho',value:'draft'},{label:'Publicado',value:'published'}]" label="Status" class="full-span" />
-              </div>
-              <div class="text-weight-bold q-mt-lg q-mb-sm">Conteúdo *</div>
-              <q-editor v-model="form.content" min-height="400px" :toolbar="[['bold','italic','underline'],['title','subtitle','paragraph'],['unordered','ordered'],['link'],['undo','redo']]" />
+            <q-input v-model.trim="form.title" outlined stack-label label="Título *" :rules="[(v) => Boolean(v) || 'Informe o título']" />
+            <section class="legal-text-field">
+              <div class="text-weight-bold q-mb-sm">Texto *</div>
+              <q-editor v-model="form.content" min-height="420px" :toolbar="[['bold','italic','underline'],['title','subtitle','paragraph'],['unordered','ordered'],['link'],['undo','redo']]" />
+              <div class="text-caption text-muted q-mt-sm">Links e formatação são sanitizados novamente pela API antes da publicação.</div>
             </section>
-            <aside><div class="preview-label">Prévia sanitizada</div><div class="legal-preview" v-html="safePreview" /></aside>
           </q-card-section>
           <q-separator />
-          <q-card-actions align="right" class="q-pa-md q-px-lg"><q-btn v-close-popup flat no-caps label="Cancelar" /><q-btn type="submit" color="primary" unelevated no-caps icon="save" label="Salvar versão" :loading="saving" /></q-card-actions>
+          <q-card-actions align="right" class="q-pa-md q-px-lg terms-dialog__footer"><q-btn v-close-popup flat no-caps label="Cancelar" /><q-btn type="submit" color="primary" unelevated no-caps icon="publish" label="Publicar versão" :loading="saving" /></q-card-actions>
         </q-form>
       </q-card>
     </q-dialog>
@@ -295,47 +289,58 @@ onMounted(loadData)
 }
 
 .terms-dialog {
-  width: min(1220px, calc(100vw - 32px));
-  max-height: calc(100vh - 32px);
+  display: flex;
+  width: min(900px, calc(100vw - 32px));
+  max-width: 900px !important;
+  height: min(780px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px);
+  flex-direction: column;
+  overflow: hidden;
   border-radius: 24px;
   background: #f9fffd;
 }
 
+.terms-dialog__header,
+.terms-dialog__footer {
+  flex: 0 0 auto;
+}
+
+.terms-dialog__form {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
 .terms-builder {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
-  gap: 25px;
-  max-height: calc(100vh - 185px);
+  min-height: 0;
+  align-content: start;
+  flex: 1 1 auto;
+  gap: 18px;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
-.preview-label {
-  margin-bottom: 10px;
-  color: #617572;
-  font-size: 0.72rem;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.legal-preview {
-  min-height: 500px;
-  padding: 30px;
-  border: 1px solid rgba(3, 21, 21, 0.08);
-  border-radius: 16px;
-  background: #fff;
-  box-shadow: 0 12px 35px rgba(3, 62, 55, 0.07);
-  line-height: 1.65;
+.legal-text-field {
+  min-width: 0;
 }
 
 @media (max-width: 900px) {
   .terms-dialog {
     width: 100%;
+    max-width: 100% !important;
+    height: 100%;
     max-height: 100%;
     border-radius: 0;
   }
 
   .terms-builder {
-    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+
+  .terms-dialog__footer {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
 }
 </style>

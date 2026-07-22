@@ -6,6 +6,10 @@ import {
   shouldShowOperationalLog,
   whatsappPermissionCommandFromSettings,
 } from '../src/services/whatsapp-web.js'
+import {
+  DEFAULT_TELEGRAM_PERMISSION_COMMAND,
+  telegramPermissionCommandFromSettings,
+} from '../src/services/telegram.js'
 
 describe('estado em tempo real do WhatsApp Web', () => {
   it('normaliza sessão pronta e remove QR já consumido', () => {
@@ -24,6 +28,13 @@ describe('estado em tempo real do WhatsApp Web', () => {
     expect(whatsappPermissionCommandFromSettings({ configuration: { whatsappPermission: { command: ' /quero-alertas ' } } }))
       .toBe('/quero-alertas')
     expect(whatsappPermissionCommandFromSettings({})).toBe(DEFAULT_WHATSAPP_PERMISSION_COMMAND)
+  })
+
+  it('le o comando de onboarding Telegram e mantem /verify-me como padrao', () => {
+    expect(telegramPermissionCommandFromSettings({
+      configuration: { telegramPermission: { command: ' /validar-telegram ' } },
+    })).toBe('/validar-telegram')
+    expect(telegramPermissionCommandFromSettings({})).toBe(DEFAULT_TELEGRAM_PERMISSION_COMMAND)
   })
 
   it('oculta eventos do WhatsApp Web enquanto a sessão está desconectada', () => {

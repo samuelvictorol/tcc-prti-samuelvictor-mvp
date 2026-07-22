@@ -8,6 +8,7 @@ const ConsentEvent = require('../src/models/consent-event.model');
 const conversationsManager = require('../src/managers/conversations.manager');
 const contactsManager = require('../src/managers/contacts.manager');
 const socketService = require('../src/services/socket.service');
+const { env } = require('../src/config/env');
 const { encrypt, decrypt, searchHash } = require('../src/services/crypto.service');
 const { createApp } = require('../src/app');
 
@@ -31,15 +32,19 @@ test('historico criptografa identificadores e conteudo antes de persistir', asyn
 
   const conversationId = '507f1f77bcf86cd799439021';
   let upsertUpdate;
+  const conversationUpserts = [];
+  const conversationSummaries = [];
   let storedMessage;
   Conversation.findOneAndUpdate = (_filter, update) => {
     if (update.$setOnInsert) {
       upsertUpdate = update;
+      conversationUpserts.push(update);
       return selected({
         _id: conversationId,
-        channel: 'telegram',
+        channel: update.$setOnInsert.channel,
         externalIdEncrypted: update.$setOnInsert.externalIdEncrypted,
         displayNameEncrypted: update.$set.displayNameEncrypted,
+        retentionUntil: update.$set.retentionUntil,
         isGroup: false,
         unreadCount: 0,
         messageCount: 0
@@ -57,6 +62,7 @@ test('historico criptografa identificadores e conteudo antes de persistir', asyn
         messageCount: 0
       });
     }
+    conversationSummaries.push(update);
     return selected({
       _id: conversationId,
       channel: 'telegram',
@@ -96,6 +102,90 @@ test('historico criptografa identificadores e conteudo antes de persistir', asyn
   assert.equal(result.conversation.externalId, '123456789');
   assert.equal(result.conversation.unreadCount, 1);
   assert.deepEqual(events.map((item) => item.event), ['conversation:message', 'conversations:updated']);
+  assert.equal(storedMessage.retentionUntil, undefined);
+  assert.equal(conversationUpserts[0].$set.retentionUntil, undefined);
+  assert.equal(conversationSummaries[0].$set.retentionUntil, undefined);
+
+  const originalRetentionDays = env.whatsappWebMessageRetentionDays;
+  env.whatsappWebMessageRetentionDays = 7;
+  context.after(() => { env.whatsappWebMessageRetentionDays = originalRetentionDays; });
+  const retentionStartedAt = Date.now();
+  await conversationsManager.recordInbound({
+    channel: 'whatsapp_web',
+    externalId: '5511999999999@c.us',
+    contactId: '507f1f77bcf86cd799439011',
+    displayName: 'Ana',
+    providerMessageId: 'wweb-55',
+    body: 'mensagem com retencao',
+    sentAt: '2026-07-21T00:00:00Z'
+  });
+  const retentionMs = storedMessage.retentionUntil.getTime() - retentionStartedAt;
+  assert.ok(retentionMs >= 6.9 * 24 * 60 * 60 * 1000);
+  assert.ok(retentionMs <= 7.1 * 24 * 60 * 60 * 1000);
+  const conversationRetentionMs = conversationSummaries[1].$set.retentionUntil.getTime() - retentionStartedAt;
+  assert.ok(conversationRetentionMs >= 6.9 * 24 * 60 * 60 * 1000);
+  assert.ok(conversationRetentionMs <= 7.1 * 24 * 60 * 60 * 1000);
+  const messageTtlIndex = ConversationMessage.schema.indexes().find(([fields]) => fields.retentionUntil === 1);
+  const conversationTtlIndex = Conversation.schema.indexes().find(([fields]) => fields.retentionUntil === 1);
+  assert.ok(messageTtlIndex);
+  assert.ok(conversationTtlIndex);
+  assert.equal(messageTtlIndex[1].expireAfterSeconds, 0);
+  assert.equal(conversationTtlIndex[1].expireAfterSeconds, 0);
+});
+
+test('opt-in associa inbox Web existente ao contato sem recriar conversa ou duplicar mensagens', async (context) => {
+  const originals = {
+    conversation: Conversation.findOneAndUpdate,
+    messages: ConversationMessage.updateMany,
+    emit: socketService.emit
+  };
+  context.after(() => {
+    Conversation.findOneAndUpdate = originals.conversation;
+    ConversationMessage.updateMany = originals.messages;
+    socketService.emit = originals.emit;
+  });
+  let conversationFilter;
+  let conversationUpdate;
+  let conversationOptions;
+  Conversation.findOneAndUpdate = (filter, update, options) => {
+    conversationFilter = filter;
+    conversationUpdate = update;
+    conversationOptions = options;
+    return selected({
+      _id: '507f1f77bcf86cd799439071',
+      channel: 'whatsapp_web',
+      externalIdEncrypted: encrypt('556181748795@c.us'),
+      displayNameEncrypted: update.$set.displayNameEncrypted,
+      avatarUrlEncrypted: update.$set.avatarUrlEncrypted,
+      contact: update.$set.contact,
+      retentionUntil: update.$set.retentionUntil,
+      messageCount: 2
+    });
+  };
+  let messageMigration;
+  ConversationMessage.updateMany = async (filter, update) => {
+    messageMigration = { filter, update };
+    return { matchedCount: 2, modifiedCount: 2 };
+  };
+  const events = [];
+  socketService.emit = (event, payload) => events.push({ event, payload });
+
+  const result = await conversationsManager.attachContact(
+    'whatsapp_web',
+    '556181748795@c.us',
+    '507f1f77bcf86cd799439072',
+    { displayName: 'Samuel', avatarUrl: 'https://cdn.example/samuel.jpg' }
+  );
+
+  assert.equal(conversationFilter.channel, 'whatsapp_web');
+  assert.equal(conversationFilter.externalIdHash, searchHash('556181748795@c.us'));
+  assert.equal(conversationUpdate.$set.contact, '507f1f77bcf86cd799439072');
+  assert.equal(conversationOptions.upsert, undefined);
+  assert.equal(messageMigration.filter.conversation, '507f1f77bcf86cd799439071');
+  assert.equal(messageMigration.update.$set.contact, '507f1f77bcf86cd799439072');
+  assert.equal(result.contactId, '507f1f77bcf86cd799439072');
+  assert.equal(result.pendingRegistration, false);
+  assert.deepEqual(events.map((item) => item.event), ['conversations:updated']);
 });
 
 test('remocao concorrente vence inbound que ainda observava conversa visivel', async (context) => {
@@ -345,7 +435,7 @@ test('tombstone por geracao descarta mensagem reservada antes de uma remocao pos
   assert.deepEqual(events, []);
 });
 
-test('limpar historico preserva conversa e contato', async (context) => {
+test('limpar historico de inbox pendente preserva conversa sem criar contato', async (context) => {
   const originals = {
     clearTransition: Conversation.findOneAndUpdate,
     tombstoneMessages: ConversationMessage.updateMany,
@@ -364,8 +454,8 @@ test('limpar historico preserva conversa e contato', async (context) => {
     clearPipeline = update;
     return selected({
       _id: id,
-      channel: 'telegram',
-      externalIdEncrypted: encrypt('123'),
+      channel: 'whatsapp_web',
+      externalIdEncrypted: encrypt('556181748795@c.us'),
       activityVersion: 6,
       lastHiddenVersion: 6
     });
@@ -381,7 +471,8 @@ test('limpar historico preserva conversa e contato', async (context) => {
   const result = await conversationsManager.clearHistory(id);
   assert.equal(result.removedMessages, 7);
   assert.equal(result.conversationPreserved, true);
-  assert.equal(result.contactPreserved, true);
+  assert.equal(result.contactPreserved, false);
+  assert.equal(result.pendingRegistration, true);
   assert.equal(clearPipeline[0].$set.messageCount, 0);
   assert.equal(clearPipeline[0].$set.lastMessageAt, '$$REMOVE');
   assert.deepEqual(clearPipeline[0].$set.lastHiddenVersion, clearPipeline[0].$set.activityVersion);

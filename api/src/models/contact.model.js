@@ -43,9 +43,9 @@ const contactSchema = new mongoose.Schema({
   displayNameEncrypted: { type: String, required: true, select: false },
   displayNameHash: { type: String, required: true, index: true },
   emailEncrypted: { type: String, select: false },
-  emailHash: { type: String, sparse: true, index: true },
+  emailHash: { type: String },
   phoneEncrypted: { type: String, select: false },
-  phoneHash: { type: String, sparse: true, index: true },
+  phoneHash: { type: String },
   telegramUsernameEncrypted: { type: String, select: false },
   telegramUsernameHash: { type: String, sparse: true, index: true },
   avatarUrlEncrypted: { type: String, select: false },
@@ -62,6 +62,14 @@ const contactSchema = new mongoose.Schema({
 }, { timestamps: true, versionKey: false });
 
 contactSchema.index({ 'channels.channel': 1, 'channels.addressHash': 1 }, { unique: true, sparse: true });
+contactSchema.index(
+  { emailHash: 1 },
+  { unique: true, partialFilterExpression: { emailHash: { $type: 'string' } }, name: 'uniq_contact_email_hash' }
+);
+contactSchema.index(
+  { phoneHash: 1 },
+  { unique: true, partialFilterExpression: { phoneHash: { $type: 'string' } }, name: 'uniq_contact_phone_hash' }
+);
 contactSchema.index({ updatedAt: -1 });
 
 module.exports = mongoose.models.Contact || mongoose.model('Contact', contactSchema);

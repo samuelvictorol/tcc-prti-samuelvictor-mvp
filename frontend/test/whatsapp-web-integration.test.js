@@ -17,8 +17,11 @@ describe('integração visual do monitor WhatsApp Web', () => {
     expect(monitor).not.toContain("http.post('/whatsapp-web/session')")
     expect(monitor).not.toContain('qrDialog')
     expect(monitor).toContain('Conectar na tela Início')
-    expect(home).toContain('Toda interação recebida pelo WhatsApp Web ou Cloud identifica e atualiza o contato')
-    expect(home).toContain('o sistema autoriza Web e Cloud para o mesmo contato')
+    expect(home).toContain('mensagens comuns de um remetente desconhecido aparecem temporariamente no monitor')
+    expect(home).toContain('sem criar contato, consentimento ou aviso de novo usuário')
+    expect(home).toContain('O contato só é cadastrado automaticamente quando envia este texto exato')
+    expect(home).toContain('a conversa pendente é associada sem duplicar mensagens')
+    expect(home).toContain('o sistema autoriza as duas integrações para o mesmo contato')
     expect(home).toContain('sem criar um destino que ainda não foi identificado')
   })
 
@@ -41,9 +44,12 @@ describe('integração visual do monitor WhatsApp Web', () => {
     expect(monitor).toContain("socket.on('connect', onSocketConnected)")
     expect(monitor).toContain("socket.on('system:ready', onSocketConnected)")
     expect(monitor).toContain("loadData({ background: true, refreshSelected: true })")
+    expect(monitor).not.toContain("http.post('/whatsapp-web/sync')")
+    expect(monitor).not.toContain('/whatsapp-web/chats/')
+    expect(monitor).not.toContain('Sincronizar chats')
   })
 
-  it('mantém conversa não autorizada visível, mas bloqueia o composer', () => {
+  it('mantém histórico já registrado visível, mas bloqueia o composer após revogação', () => {
     const monitor = source('pages/WhatsappWebPage.vue')
 
     expect(monitor).toContain('selectedReplyAllowed')
@@ -51,5 +57,17 @@ describe('integração visual do monitor WhatsApp Web', () => {
     expect(monitor).toContain('whatsappPermissionCommandFromSettings')
     expect(monitor).toContain('autoriza as duas integrações WhatsApp')
     expect(monitor).toContain('Editar permissão')
+  })
+
+  it('mantém interação pendente somente leitura, sem ação manual de cadastrar contato', () => {
+    const monitor = source('pages/WhatsappWebPage.vue')
+
+    expect(monitor).toContain('Aguardando opt-in')
+    expect(monitor).toContain('ainda não criou um contato')
+    expect(monitor).toContain('v-if="selected.contactId && !selected.isGroup"')
+    expect(monitor).toContain('v-if="selected.contactId" #action')
+    expect(monitor).not.toContain('Cadastrar como contato')
+    expect(monitor).toContain('v-if="selectedReplyAllowed" class="message-composer"')
+    expect(monitor).toContain("http.delete(`/conversations/${chatId(chat)}/messages`)")
   })
 })

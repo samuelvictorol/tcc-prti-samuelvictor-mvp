@@ -174,10 +174,61 @@ a {
 }
 
 .dialog-card {
-  width: min(720px, calc(100vw - 32px));
-  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  width: min(860px, calc(100vw - 32px));
+  max-width: 860px !important;
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
   border-radius: 24px;
   background: #f9fffd;
+}
+
+.dialog-card--medium {
+  width: min(720px, calc(100vw - 32px));
+  max-width: 720px !important;
+}
+
+.dialog-card--compact {
+  width: min(620px, calc(100vw - 32px));
+  max-width: 620px !important;
+}
+
+.dialog-card > .q-card-section:first-child,
+.dialog-card > .q-card-actions,
+.dialog-card > .q-separator {
+  flex: 0 0 auto;
+}
+
+.dialog-scroll-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.dialog-card > .q-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dialog-card > .q-form > .q-card-section {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.dialog-card > .q-form > .q-card-actions {
+  flex: 0 0 auto;
+  background: #f9fffd;
+}
+
+.dialog-card > .q-card-actions,
+.dialog-card > .q-form > .q-card-actions {
+  flex-wrap: wrap;
 }
 
 .q-table__card {
@@ -294,6 +345,12 @@ a {
   }
 
   .section-card {
+    border-radius: 18px;
+  }
+
+  .dialog-card {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
     border-radius: 18px;
   }
 

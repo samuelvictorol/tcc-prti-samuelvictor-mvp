@@ -17,7 +17,7 @@ function historyKey(value = {}) {
   return `fallback:${direction}:${messageTime(value)}:${String(value.body || value.text || value.message || '')}`
 }
 
-export function normalizeWhatsappWebProviderMessage(value = {}) {
+function normalizeWhatsappWebMessage(value = {}) {
   const timestamp = messageTime(value)
   return {
     ...value,
@@ -27,22 +27,13 @@ export function normalizeWhatsappWebProviderMessage(value = {}) {
   }
 }
 
-export function mergeWhatsappWebHistory(localMessages = [], providerMessages = []) {
+export function mergeWhatsappWebHistory(localMessages = []) {
   const merged = new Map()
-  for (const raw of providerMessages) {
-    const message = normalizeWhatsappWebProviderMessage(raw)
-    merged.set(historyKey(message), message)
-  }
-  for (const message of localMessages) {
+  for (const raw of localMessages) {
+    const message = normalizeWhatsappWebMessage(raw)
     const key = historyKey(message)
-    const provider = merged.get(key)
-    merged.set(key, provider ? {
-      ...provider,
-      ...message,
-      fromMe: message.fromMe ?? provider.fromMe,
-      direction: message.direction || provider.direction,
-      providerMessageId: message.providerMessageId || provider.providerMessageId,
-    } : message)
+    const previous = merged.get(key)
+    merged.set(key, previous ? { ...message, ...previous } : message)
   }
   return [...merged.values()].sort((left, right) => messageTime(left) - messageTime(right))
 }
@@ -93,7 +84,6 @@ const $q = useQuasar()
 const app = useAppStore()
 const loading = ref(false)
 const loadingMessages = ref(false)
-const syncing = ref(false)
 const liveConnected = ref(false)
 const historyNote = ref('')
 const sending = ref(false)
@@ -226,22 +216,11 @@ async function selectChat(chat) {
   loadingMessages.value = true
   historyNote.value = ''
   try {
-    const localRequest = http.get(`/conversations/${selectedId}/messages`, { params: { limit: 100 } })
-    const providerRequest = monitorReady.value && chat.externalId
-      ? http.get(`/whatsapp-web/chats/${encodeURIComponent(chat.externalId)}/messages`, { params: { limit: 100 } })
-      : Promise.resolve(null)
-    const [localResult, providerResult] = await Promise.allSettled([localRequest, providerRequest])
+    const localResult = await http.get(`/conversations/${selectedId}/messages`, { params: { limit: 100 } })
     if (String(chatId(selected.value)) !== selectedId) return
-    if (localResult.status === 'rejected' && providerResult.status === 'rejected') throw localResult.reason
-    const localItems = localResult.status === 'fulfilled'
-      ? asList(unwrap(localResult.value), 'items').reverse()
-      : []
-    const providerItems = providerResult.status === 'fulfilled' && providerResult.value
-      ? asList(unwrap(providerResult.value), 'items')
-      : []
-    messages.value = mergeWhatsappWebHistory(localItems, providerItems)
+    const localItems = asList(unwrap(localResult), 'items').reverse()
+    messages.value = mergeWhatsappWebHistory(localItems)
     if (!messages.value.length) historyNote.value = 'Ainda não há histórico armazenado para esta conversa.'
-    else if (providerResult.status === 'rejected') historyNote.value = 'Exibindo o histórico armazenado; a sessão ao vivo está temporariamente indisponível.'
     await http.patch(`/conversations/${selectedId}/read`).catch(() => undefined)
     await scrollToBottom()
   } catch (error) {
@@ -254,41 +233,6 @@ async function selectChat(chat) {
     }
   } finally {
     if (String(chatId(selected.value)) === selectedId) loadingMessages.value = false
-  }
-}
-
-async function syncChats() {
-  syncing.value = true
-  try {
-    const status = await loadSessionStatus()
-    if (!status.ready) {
-      $q.notify({ type: 'warning', message: 'A sessão do WhatsApp Web não está pronta. Reconecte o QR Code na tela Início.' })
-      return
-    }
-    const result = unwrap(await http.post('/whatsapp-web/sync')) || {}
-    await loadData({ background: true, refreshSelected: true })
-    const count = Number(result.contacts) || 0
-    const recovered = Number(result.recoveredMessages) || 0
-    const failures = Number(result.failures) || 0
-    const partial = Boolean(result.degraded || failures)
-    const details = [`${count} conversa(s) sincronizada(s)`]
-    if (recovered) details.push(`${recovered} mensagem(ns) recuperada(s)`)
-    if (failures) details.push(`${failures} chat(s) com falha`)
-    $q.notify({
-      type: partial ? 'warning' : 'positive',
-      message: `${details.join(' · ')}.`,
-    })
-  } catch (error) {
-    const status = await loadSessionStatus()
-    if (status.ready) await loadData({ background: true, refreshSelected: true })
-    $q.notify({
-      type: status.ready ? 'negative' : 'warning',
-      message: status.ready
-        ? errorMessage(error, 'Não foi possível sincronizar os chats.')
-        : 'A sessão deixou de estar disponível. Reconecte o QR Code na tela Início.',
-    })
-  } finally {
-    syncing.value = false
   }
 }
 
@@ -342,7 +286,7 @@ function onConversationMessage(payload = {}) {
   if (messageItem && chatId(selected.value) === chatId(conversation)) {
     selected.value = conversation
     void loadSelectedContact(conversation)
-    messages.value = mergeWhatsappWebHistory([...messages.value, messageItem], [])
+    messages.value = mergeWhatsappWebHistory([...messages.value, messageItem])
     http.patch(`/conversations/${conversation.id}/read`).catch(() => undefined)
     void scrollToBottom()
   }
@@ -410,15 +354,16 @@ function onWhatsappDisconnected(payload = {}) {
 }
 
 async function openContact() {
-  if (!selected.value) return
+  if (!selected.value?.contactId) {
+    $q.notify({
+      type: 'info',
+      message: `O contato será criado automaticamente somente quando o remetente enviar ${permissionCommand.value}.`,
+    })
+    return
+  }
   try {
-    contactForDialog.value = selectedContactRecord.value || (selected.value.contactId
-      ? unwrap(await http.get(`/contacts/${selected.value.contactId}`))
-      : {
-          displayName: chatName(selected.value),
-          phone: String(selected.value.externalId || '').replace(/@.+$/, ''),
-          avatarUrl: selected.value.avatarUrl,
-        })
+    contactForDialog.value = selectedContactRecord.value
+      || unwrap(await http.get(`/contacts/${selected.value.contactId}`))
     contactDialog.value = true
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível abrir o contato.') })
@@ -426,9 +371,12 @@ async function openContact() {
 }
 
 function removeConversation(chat) {
+  const hasContact = Boolean(chat?.contactId)
   $q.dialog({
     title: 'Remover conversa?',
-    message: 'As mensagens armazenadas serão removidas. O contato continuará cadastrado.',
+    message: hasContact
+      ? 'As mensagens armazenadas serão removidas. O contato cadastrado será preservado.'
+      : 'As mensagens temporárias serão removidas. Nenhum contato foi criado para esta interação.',
     cancel: { flat: true, label: 'Cancelar' },
     ok: { color: 'negative', label: 'Remover conversa' },
     persistent: true,
@@ -438,9 +386,37 @@ function removeConversation(chat) {
       messages.value = []
       selected.value = null
       await loadData()
-      $q.notify({ type: 'positive', message: 'Conversa removida; contato preservado.' })
+      $q.notify({
+        type: 'positive',
+        message: hasContact ? 'Conversa removida; contato preservado.' : 'Interação temporária removida.',
+      })
     } catch (error) {
       $q.notify({ type: 'negative', message: errorMessage(error) })
+    }
+  })
+}
+
+function clearConversation(chat) {
+  const hasContact = Boolean(chat?.contactId)
+  $q.dialog({
+    title: 'Limpar mensagens armazenadas?',
+    message: hasContact
+      ? 'O histórico temporário será removido. O contato e suas permissões serão preservados.'
+      : 'As mensagens temporárias serão removidas. Nenhum contato ou consentimento foi criado para esta interação.',
+    cancel: { flat: true, label: 'Cancelar' },
+    ok: { color: 'negative', label: 'Limpar mensagens' },
+    persistent: true,
+  }).onOk(async () => {
+    try {
+      await http.delete(`/conversations/${chatId(chat)}/messages`)
+      if (chatId(selected.value) === chatId(chat)) {
+        messages.value = []
+        historyNote.value = 'O histórico temporário desta conversa foi removido.'
+      }
+      await loadData({ background: true })
+      $q.notify({ type: 'positive', message: 'Mensagens armazenadas removidas.' })
+    } catch (error) {
+      $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível limpar as mensagens.') })
     }
   })
 }
@@ -455,7 +431,6 @@ onMounted(() => {
   socket.on('conversation:removed', onConversationRemoved)
   socket.on('conversation:history-removed', onConversationHistoryRemoved)
   socket.on('whatsapp_web:message', onWhatsappProviderMessage)
-  socket.on('whatsapp_web:chats', scheduleRealtimeRefresh)
   socket.on('contact:auto_upserted', onWhatsappContactChanged)
   socket.on('admin_notification:created', onWhatsappContactChanged)
   socket.on('whatsapp_web:status', onWhatsappStatus)
@@ -480,7 +455,6 @@ onBeforeUnmount(() => {
   socket.off('conversation:removed', onConversationRemoved)
   socket.off('conversation:history-removed', onConversationHistoryRemoved)
   socket.off('whatsapp_web:message', onWhatsappProviderMessage)
-  socket.off('whatsapp_web:chats', scheduleRealtimeRefresh)
   socket.off('contact:auto_upserted', onWhatsappContactChanged)
   socket.off('admin_notification:created', onWhatsappContactChanged)
   socket.off('whatsapp_web:status', onWhatsappStatus)
@@ -498,7 +472,7 @@ onBeforeUnmount(() => {
     <PageHeader
       eyebrow="Monitor de conversas"
       title="WhatsApp Web"
-      description="Acompanhe todas as conversas. A resposta direta só é liberada após autorização do contato, sem incluir este canal em disparos em massa."
+      description="Acompanhe somente mensagens novas recebidas após a conexão. Interações sem opt-in ficam temporariamente visíveis e somente para leitura."
       icon="forum"
     >
       <template #actions>
@@ -506,10 +480,9 @@ onBeforeUnmount(() => {
           v-if="monitorReady"
           outline
           :color="liveConnected ? 'positive' : 'warning'"
-          :icon="liveConnected ? 'sync' : 'sync_problem'"
+          :icon="liveConnected ? 'sensors' : 'sync_problem'"
           :label="liveConnected ? 'Tempo real ativo' : 'Reconectando tempo real'"
         />
-        <q-btn v-if="monitorReady" color="primary" unelevated no-caps icon="refresh" label="Sincronizar chats" :loading="syncing" @click="syncChats" />
       </template>
     </PageHeader>
 
@@ -530,7 +503,7 @@ onBeforeUnmount(() => {
           <template #prepend><q-icon name="search" /></template>
         </q-input>
         <div v-if="loading" class="q-px-md"><q-skeleton v-for="n in 6" :key="n" type="QItem" /></div>
-        <EmptyState v-else-if="!filteredChats.length" icon="chat_bubble_outline" title="Sem conversas" description="Chats sincronizados aparecerão aqui." />
+        <EmptyState v-else-if="!filteredChats.length" icon="chat_bubble_outline" title="Sem conversas" :description="`Novas mensagens aparecerão aqui em tempo real. O contato só será cadastrado e poderá receber resposta após enviar ${permissionCommand}.`" />
         <q-list v-else separator class="whatsapp-chat-list">
           <q-item v-for="chat in filteredChats" :key="chatId(chat)" clickable :active="chatId(chat) === chatId(selected)" active-class="selected-chat" @click="selectChat(chat)">
             <q-item-section avatar>
@@ -543,7 +516,11 @@ onBeforeUnmount(() => {
               <q-item-label class="text-weight-bold truncate">{{ chatName(chat) }}</q-item-label>
               <q-item-label caption class="truncate">{{ chat.lastMessage?.preview || chat.lastMessage?.body || chat.lastMessage || chat.phone || 'Sem prévia' }}</q-item-label>
             </q-item-section>
-            <q-item-section side top><span class="chat-time">{{ formatTime(chat.updatedAt || chat.timestamp) }}</span><q-badge v-if="chat.unreadCount" rounded color="primary" :label="chat.unreadCount" /></q-item-section>
+            <q-item-section side top>
+              <span class="chat-time">{{ formatTime(chat.updatedAt || chat.timestamp) }}</span>
+              <q-badge v-if="!chat.contactId" outline color="warning" label="Aguardando opt-in" />
+              <q-badge v-if="chat.unreadCount" rounded color="primary" :label="chat.unreadCount" />
+            </q-item-section>
           </q-item>
         </q-list>
       </aside>
@@ -573,6 +550,13 @@ onBeforeUnmount(() => {
                 :label="`Cadastro automático: ${selectedRegistration.label}`"
               />
               <q-badge
+                v-if="!selected.contactId"
+                outline
+                color="warning"
+                icon="person_off"
+                :label="`Aguardando ${permissionCommand}`"
+              />
+              <q-badge
                 outline
                 :color="selectedReplyAllowed ? 'positive' : 'warning'"
                 :icon="selectedReplyAllowed ? 'verified_user' : 'visibility'"
@@ -580,8 +564,9 @@ onBeforeUnmount(() => {
               />
             </div>
             <q-space />
-            <q-btn v-if="!selected.isGroup" flat round icon="manage_accounts" aria-label="Editar contato" @click="openContact"><q-tooltip>{{ selected.contactId ? 'Editar contato' : 'Cadastrar como contato' }}</q-tooltip></q-btn>
-            <q-btn flat round color="negative" icon="delete_sweep" aria-label="Remover conversa" @click="removeConversation(selected)"><q-tooltip>Remover conversa mantendo o contato</q-tooltip></q-btn>
+            <q-btn v-if="selected.contactId && !selected.isGroup" flat round icon="manage_accounts" aria-label="Editar contato" @click="openContact"><q-tooltip>Editar contato</q-tooltip></q-btn>
+            <q-btn flat round color="warning" icon="cleaning_services" aria-label="Limpar mensagens" @click="clearConversation(selected)"><q-tooltip>Limpar somente as mensagens armazenadas</q-tooltip></q-btn>
+            <q-btn flat round color="negative" icon="delete_sweep" aria-label="Remover conversa" @click="removeConversation(selected)"><q-tooltip>{{ selected.contactId ? 'Remover conversa mantendo o contato' : 'Remover interação temporária' }}</q-tooltip></q-btn>
           </header>
 
           <div ref="messagesPanel" class="message-stream">
@@ -609,9 +594,10 @@ onBeforeUnmount(() => {
             <template #avatar><q-icon name="lock_person" color="warning" /></template>
             <div>
               <strong>Conversa disponível somente para leitura</strong>
-              <span>Ao enviar <code>{{ permissionCommand }}</code> pelo WhatsApp Web ou Cloud, o contato autoriza as duas integrações WhatsApp. A permissão de uma integração ainda não identificada fica pendente até a primeira interação real. O administrador também pode conceder apenas esta permissão manualmente.</span>
+              <span v-if="!selected.contactId">Esta interação está armazenada temporariamente, mas ainda não criou um contato. Somente o envio de <code>{{ permissionCommand }}</code> pelo remetente fará o cadastro e autorizará as integrações WhatsApp.</span>
+              <span v-else>Ao enviar <code>{{ permissionCommand }}</code> pelo WhatsApp Web ou Cloud, o contato autoriza as duas integrações WhatsApp. A permissão de uma integração ainda não identificada fica pendente até a primeira interação real. O administrador também pode conceder apenas esta permissão manualmente.</span>
             </div>
-            <template #action>
+            <template v-if="selected.contactId" #action>
               <q-btn flat color="primary" no-caps icon="manage_accounts" label="Editar permissão" @click="openContact" />
             </template>
           </q-banner>

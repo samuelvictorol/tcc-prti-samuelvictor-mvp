@@ -26,6 +26,17 @@ const whatsappPermissionCommand = optionalField(
   )
 );
 
+const whatsappDisplayPhoneNumber = optionalField(
+  z.string()
+    .trim()
+    .max(40)
+    .transform((value) => value.replace(/\D/g, ''))
+    .refine(
+      (value) => /^[1-9]\d{7,14}$/.test(value),
+      'Informe o numero publico do WhatsApp com DDI (8 a 15 digitos)'
+    )
+);
+
 const bulkSettingsSchema = z.object({
   body: z.object({
     telegram: z.object({
@@ -38,12 +49,16 @@ const bulkSettingsSchema = z.object({
     whatsappCloud: z.object({
       accessToken: optionalField(z.string().max(4000)),
       phoneNumberId: optionalField(z.string().max(100)),
+      displayPhoneNumber: whatsappDisplayPhoneNumber,
       businessAccountId: optionalField(z.string().max(100)),
       verifyToken: optionalField(z.string().max(500)),
       appSecret: optionalField(z.string().max(500)),
       apiVersion: optionalField(z.string().regex(/^v\d+\.\d+$/))
     }).optional(),
     whatsappPermission: z.object({
+      command: whatsappPermissionCommand
+    }).optional(),
+    telegramPermission: z.object({
       command: whatsappPermissionCommand
     }).optional(),
     email: z.object({
@@ -55,4 +70,4 @@ const bulkSettingsSchema = z.object({
   }).refine((body) => Object.keys(body).length > 0)
 });
 
-module.exports = { updateSettingSchema, deleteSettingSchema, bulkSettingsSchema };
+module.exports = { updateSettingSchema, deleteSettingSchema, bulkSettingsSchema, whatsappDisplayPhoneNumber };

@@ -36,6 +36,7 @@ const navigation = computed(() => [
   { separator: true, label: 'Governança' },
   { label: 'Convites', icon: 'link', to: '/invites', available: true },
   { label: 'Termos e LGPD', icon: 'verified_user', to: '/terms', available: true },
+  { label: 'Logins', caption: 'Acesso seguro dos contatos', icon: 'login', to: '/logins', available: true },
 ])
 
 function goTo(item) {

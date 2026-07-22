@@ -571,8 +571,8 @@ onBeforeUnmount(() => {
       </q-tab-panels>
     </q-card>
 
-    <q-dialog v-model="groupDialog" persistent>
-      <q-card class="dialog-card">
+    <q-dialog v-model="groupDialog" persistent :maximized="$q.screen.lt.sm">
+      <q-card class="dialog-card dialog-card--medium">
         <q-card-section class="row items-center"><div class="text-h6 text-weight-bold">{{ editingGroupId ? 'Editar' : 'Vincular' }} grupo</div><q-space /><q-btn v-close-popup flat round dense icon="close" /></q-card-section>
         <q-separator />
         <q-form @submit.prevent="saveGroup">
@@ -588,10 +588,10 @@ onBeforeUnmount(() => {
       </q-card>
     </q-dialog>
     <q-dialog v-model="groupSendDialog" persistent>
-      <q-card class="dialog-card">
+      <q-card class="dialog-card dialog-card--compact">
         <q-card-section class="row items-center"><div><div class="text-h6 text-weight-bold">Enviar ao grupo</div><div class="text-caption text-muted">{{ selectedGroup?.name || selectedGroup?.title }}</div></div><q-space /><q-btn v-close-popup flat round dense icon="close" /></q-card-section>
         <q-separator />
-        <q-card-section class="q-pa-lg">
+        <q-card-section class="q-pa-lg dialog-scroll-body">
           <q-btn-toggle v-model="sendMode" spread no-caps unelevated toggle-color="primary" color="white" text-color="dark" :options="[{label:'Mensagem rápida',value:'quick'},{label:'Template',value:'template'}]" class="q-mb-lg" />
           <q-input v-if="sendMode === 'quick'" v-model="message" outlined type="textarea" autogrow label="Mensagem" />
           <q-select v-else v-model="templateId" outlined emit-value map-options :options="templateOptions" label="Template do Telegram" />

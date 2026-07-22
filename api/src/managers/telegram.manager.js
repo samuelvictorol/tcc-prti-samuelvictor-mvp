@@ -18,6 +18,7 @@ const {
 } = require('../utils/telegram-templates');
 const { env } = require('../config/env');
 const { telegramTemplateDefinition } = require('../dtos/templates.dto');
+const { normalizeWhatsappE164 } = require('../utils/normalizers');
 const crypto = require('node:crypto');
 const ApiError = require('../utils/api-error');
 
@@ -33,7 +34,12 @@ const localMediaFileIds = new Map();
 const BOT_IDENTITY_TTL_MS = 5 * 60 * 1000;
 const BOT_IDENTITY_FAILURE_TTL_MS = 30 * 1000;
 const TELEGRAM_ALLOWED_UPDATES = Object.freeze(['message', 'channel_post', 'my_chat_member', 'callback_query']);
+const ONBOARDING_PHONE_CALLBACK = 'notify:onboarding:phone:v1';
+const ONBOARDING_PROFILE_CALLBACK = 'notify:onboarding:profile:v1';
+const ONBOARDING_HELP_CALLBACK = 'notify:onboarding:help:v1';
+const PUBLIC_PROFILE_URL_TTL_MS = 5 * 60 * 1000;
 let webhookRefreshPromise = null;
+let publicProfileUrlCache = { expiresAt: 0, value: null };
 
 async function throttleSend() {
   const now = Date.now();
@@ -108,6 +114,7 @@ function normalizeBotIdentity(value = {}) {
 function clearIdentityCache() {
   botIdentityCache = { fingerprint: null, expiresAt: 0, value: null };
   botIdentityProbe = null;
+  publicProfileUrlCache = { expiresAt: 0, value: null };
 }
 
 async function probeBotIdentity(options = {}) {
@@ -195,6 +202,7 @@ async function refreshWebhookRegistration() {
       if (!secret) return { refreshed: false, reason: 'secret_missing' };
       const info = await call('getWebhookInfo');
       if (!info?.url) return { refreshed: false, reason: 'url_missing' };
+      cachePublicProfileUrlFromWebhook(info.url);
       const result = await call('setWebhook', {
         url: normalizeWebhookUrl(info.url),
         secret_token: secret,
@@ -228,6 +236,189 @@ function displayName(user = {}, fallback) {
 function messageType(message = {}) {
   return ['text', 'photo', 'video', 'audio', 'voice', 'document', 'sticker', 'animation', 'location', 'contact', 'poll']
     .find((type) => message[type] !== undefined) || 'unknown';
+}
+
+function telegramStartPayload(command) {
+  const normalized = String(command || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .replace(/^\/+/, '')
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+  return normalized || 'notify-me';
+}
+
+function normalizeTelegramCommand(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLocaleLowerCase('pt-BR');
+}
+
+async function telegramPermissionInvocation(text) {
+  const normalized = normalizeTelegramCommand(text);
+  if (!normalized) return { matched: false, command: null, source: null };
+  const [notifyCommand, verifyCommand] = await Promise.all([
+    settingsManager.getWhatsappPermissionCommand(),
+    settingsManager.getTelegramPermissionCommand()
+  ]);
+  if (await settingsManager.isWhatsappPermissionCommand(text)) {
+    return { matched: true, command: notifyCommand, source: 'configured_notify_command' };
+  }
+  if (await settingsManager.isTelegramPermissionCommand(text)) {
+    return { matched: true, command: verifyCommand, source: 'configured_verify_command' };
+  }
+
+  const startMatch = normalized.match(/^\/start(?:@[a-z0-9_]{3,32})?\s+([a-z0-9_-]{1,64})$/i);
+  if (!startMatch) return { matched: false, command: notifyCommand, source: null };
+  const payload = startMatch[1].toLocaleLowerCase('pt-BR');
+  if (payload === telegramStartPayload(notifyCommand).toLocaleLowerCase('pt-BR')) {
+    return { matched: true, command: notifyCommand, source: 'configured_notify_deep_link' };
+  }
+  if (payload === telegramStartPayload(verifyCommand).toLocaleLowerCase('pt-BR')) {
+    return { matched: true, command: verifyCommand, source: 'configured_verify_deep_link' };
+  }
+  return { matched: false, command: notifyCommand, source: null };
+}
+
+function profileUrlFromPublicBase(value) {
+  try {
+    const base = new URL(String(value || ''));
+    const hostname = base.hostname.toLowerCase();
+    const localHostname = hostname === 'localhost'
+      || hostname.endsWith('.localhost')
+      || hostname.endsWith('.local')
+      || hostname === '127.0.0.1'
+      || hostname === '0.0.0.0'
+      || hostname === '::1'
+      || hostname === '[::1]';
+    if (base.protocol !== 'https:' || !hostname || localHostname || base.username || base.password) return null;
+    const url = new URL('/meu-perfil', base.origin);
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch (_error) {
+    return null;
+  }
+}
+
+function cachePublicProfileUrlFromWebhook(webhookUrl) {
+  const value = profileUrlFromPublicBase(webhookUrl);
+  publicProfileUrlCache = {
+    expiresAt: Date.now() + PUBLIC_PROFILE_URL_TTL_MS,
+    value
+  };
+  return value;
+}
+
+async function publicProfileUrl() {
+  const configured = profileUrlFromPublicBase(env.publicAppUrl);
+  if (configured) return configured;
+  if (publicProfileUrlCache.expiresAt > Date.now()) return publicProfileUrlCache.value;
+  try {
+    const info = await call('getWebhookInfo');
+    return cachePublicProfileUrlFromWebhook(info?.url);
+  } catch (_error) {
+    publicProfileUrlCache = { expiresAt: Date.now() + 30_000, value: null };
+    return null;
+  }
+}
+
+async function sendOnboardingMenu(chatId, command) {
+  const profileUrl = await publicProfileUrl();
+  if (!profileUrl) {
+    await logsManager.create({
+      level: 'warn',
+      channel: 'telegram',
+      action: 'onboarding.profile_url_unavailable',
+      message: 'Menu Telegram enviado sem link direto porque a URL publica do perfil nao esta disponivel',
+      context: { chatHashAvailable: true }
+    }).catch(() => undefined);
+  }
+  const result = await call('sendMessage', {
+    chat_id: String(chatId),
+    text: [
+      'Permissão de notificações ativada.',
+      '',
+      '1. Vincule seu telefone para unir Telegram e WhatsApp no mesmo cadastro.',
+      '2. Acesse Meu perfil para consultar seus dados e notificações.',
+      '3. Use Ajuda para entender estas opções.',
+      '',
+      `Comando atual: ${String(command || '/notify-me').slice(0, 80)}`
+    ].join('\n'),
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '1. Vincular meu telefone', callback_data: ONBOARDING_PHONE_CALLBACK }],
+        [{
+          text: '2. Acessar Meu perfil',
+          ...(profileUrl ? { url: profileUrl } : { callback_data: ONBOARDING_PROFILE_CALLBACK })
+        }],
+        [{ text: '3. Ajuda', callback_data: ONBOARDING_HELP_CALLBACK }]
+      ]
+    }
+  });
+  await logsManager.create({
+    channel: 'telegram',
+    action: 'onboarding.menu_sent',
+    message: 'Menu de onboarding Telegram enviado com sucesso',
+    context: {
+      chatHashAvailable: true,
+      messageId: result?.message_id || null,
+      profileLinkAvailable: Boolean(profileUrl)
+    }
+  }).catch(() => undefined);
+  return result;
+}
+
+function verifiedTelegramContactPhone(message = {}) {
+  if (!message.contact) return { provided: false, verified: false, phone: null, reason: null };
+  const senderId = message.from?.id === undefined || message.from?.id === null
+    ? null
+    : String(message.from.id);
+  const contactUserId = message.contact.user_id === undefined || message.contact.user_id === null
+    ? null
+    : String(message.contact.user_id);
+  if (!senderId || !contactUserId || senderId !== contactUserId) {
+    return { provided: true, verified: false, phone: null, reason: 'CONTACT_OWNER_MISMATCH' };
+  }
+  const phone = normalizeWhatsappE164(message.contact.phone_number);
+  if (!phone) return { provided: true, verified: false, phone: null, reason: 'INVALID_PHONE' };
+  return { provided: true, verified: true, phone, reason: null };
+}
+
+async function offerOptionalPhoneShare(chatId) {
+  return call('sendMessage', {
+    chat_id: String(chatId),
+    text: 'Se quiser unir este Telegram ao seu cadastro existente, compartilhe seu próprio telefone pelo botão abaixo. Isso é opcional.',
+    reply_markup: {
+      keyboard: [[{
+        text: 'Compartilhar meu telefone (opcional)',
+        request_contact: true
+      }]],
+      resize_keyboard: true,
+      one_time_keyboard: true,
+      input_field_placeholder: 'Compartilhamento opcional'
+    }
+  });
+}
+
+async function acknowledgePhoneShare(chatId) {
+  return call('sendMessage', {
+    chat_id: String(chatId),
+    text: 'Telefone confirmado e cadastro atualizado com segurança.',
+    reply_markup: { remove_keyboard: true }
+  });
+}
+
+async function rejectPhoneShare(chatId) {
+  return call('sendMessage', {
+    chat_id: String(chatId),
+    text: 'Não foi possível validar esse telefone. Use a opção "Vincular meu telefone" e compartilhe somente o seu próprio número pelo botão oficial do Telegram.',
+    reply_markup: { remove_keyboard: true }
+  });
 }
 
 function optionalAvatarUrl(...candidates) {
@@ -361,7 +552,7 @@ function realtimeMessage(update, message, context = {}) {
     contactId: context.contactId ? String(context.contactId) : null,
     groupId: context.groupId ? String(context.groupId) : null,
     type: messageType(message),
-    text: message.text || message.caption || null,
+    text: message.text || message.caption || (message.contact ? '[Contato compartilhado]' : null),
     sentAt
   };
 }
@@ -435,6 +626,71 @@ async function answerMenuCallback(queryId, text, showAlert = false) {
     callback_query_id: queryId,
     ...(text ? { text: String(text).slice(0, 200), show_alert: showAlert } : {})
   });
+}
+
+async function handleOnboardingCallback(update, query) {
+  const action = query.data === ONBOARDING_PHONE_CALLBACK
+    ? 'phone'
+    : query.data === ONBOARDING_PROFILE_CALLBACK
+      ? 'profile'
+      : query.data === ONBOARDING_HELP_CALLBACK ? 'help' : null;
+  if (!action) return null;
+
+  const chat = query.message?.chat;
+  const chatId = chat?.id === undefined || chat?.id === null ? null : String(chat.id);
+  const senderId = query.from?.id === undefined || query.from?.id === null ? null : String(query.from.id);
+  if (!chatId || chat?.type !== 'private' || !senderId || senderId !== chatId) {
+    await answerMenuCallback(query.id, 'Abra este menu na conversa privada com o bot.', true);
+    return { received: true, updateId: update.update_id, callback: 'onboarding_forbidden' };
+  }
+
+  if (action === 'phone') {
+    await answerMenuCallback(query.id, 'Use o botão abaixo para compartilhar seu próprio telefone.');
+    await offerOptionalPhoneShare(chatId);
+    await logsManager.create({
+      channel: 'telegram',
+      action: 'onboarding.phone_requested',
+      message: 'Usuario abriu o compartilhamento seguro de telefone no onboarding Telegram',
+      context: { chatHashAvailable: true, updateId: update.update_id }
+    }).catch(() => undefined);
+    return { received: true, updateId: update.update_id, callback: 'onboarding_phone' };
+  }
+
+  if (action === 'profile') {
+    const profileUrl = await publicProfileUrl();
+    if (!profileUrl) {
+      await answerMenuCallback(query.id, 'A URL publica do Meu perfil ainda nao esta disponivel. Tente novamente apos configurar o acesso HTTPS.', true);
+      return { received: true, updateId: update.update_id, callback: 'onboarding_profile_unavailable' };
+    }
+    await answerMenuCallback(query.id, 'Link do Meu perfil atualizado.');
+    await call('sendMessage', {
+      chat_id: chatId,
+      text: 'Acesse seu Meu perfil pelo botao abaixo.',
+      reply_markup: { inline_keyboard: [[{ text: 'Abrir Meu perfil', url: profileUrl }]] }
+    });
+    return { received: true, updateId: update.update_id, callback: 'onboarding_profile' };
+  }
+
+  await answerMenuCallback(query.id, 'Ajuda aberta.');
+  await call('sendMessage', {
+    chat_id: chatId,
+    text: [
+      'Ajuda do Notify App',
+      '',
+      '1. Vincular meu telefone: abre o botão oficial do Telegram para você compartilhar o seu próprio número. O sistema valida a titularidade e, quando encontra o mesmo telefone no WhatsApp, une os canais em um único contato.',
+      '',
+      '2. Acessar Meu perfil: abre a página segura onde você pode entrar, revisar seus dados, permissões e histórico de notificações.',
+      '',
+      'O compartilhamento do telefone é opcional e nunca é aceito quando pertence a outra pessoa.'
+    ].join('\n')
+  });
+  await logsManager.create({
+    channel: 'telegram',
+    action: 'onboarding.help_opened',
+    message: 'Usuario consultou a ajuda do onboarding Telegram',
+    context: { chatHashAvailable: true, updateId: update.update_id }
+  }).catch(() => undefined);
+  return { received: true, updateId: update.update_id, callback: 'onboarding_help' };
 }
 
 async function handleMenuCallback(update, query) {
@@ -543,7 +799,11 @@ async function webhook(update, providedSecret) {
   const claim = await claimUpdate(update.update_id);
   if (claim.duplicate) return { received: true, duplicate: true, updateId: update.update_id };
   try {
-  if (update.callback_query) return await handleMenuCallback(update, update.callback_query);
+  if (update.callback_query) {
+    const onboarding = await handleOnboardingCallback(update, update.callback_query);
+    if (onboarding) return onboarding;
+    return await handleMenuCallback(update, update.callback_query);
+  }
   const message = update.message || update.channel_post;
   const membership = update.my_chat_member;
   if (message?.chat) {
@@ -552,29 +812,77 @@ async function webhook(update, providedSecret) {
       const stopped = /^\/stop(?:@\w+)?(?:\s|$)/i.test(message.text || '');
       const started = /^\/start(?:@\w+)?(?:\s|$)/i.test(message.text || '');
       const writeAccessAllowed = Boolean(message.write_access_allowed);
+      const permissionInvocation = stopped
+        ? { matched: false, command: null, source: null }
+        : await telegramPermissionInvocation(message.text || '');
       const existing = await contactsManager.findByChannelAddress('telegram', String(chat.id));
       const wasBlocked = existing?.channels.some((identity) => identity.channel === 'telegram' && ['revoked', 'denied'].includes(identity.consentStatus));
-      const explicitAuthorization = started || writeAccessAllowed;
+      const explicitAuthorization = started || writeAccessAllowed || permissionInvocation.matched;
       const authorize = !stopped && (!wasBlocked || explicitAuthorization);
+      const sharedContact = verifiedTelegramContactPhone(message);
       const avatarUser = message.from || chat;
       const avatarUrl = optionalAvatarUrl(message.from?.photo_url, chat.photo_url);
       const contact = await contactsManager.upsertFromChannel({
         channel: 'telegram',
         address: String(chat.id),
         displayName: displayName(message.from || chat, String(chat.id)),
+        phone: sharedContact.phone,
+        phoneVerified: sharedContact.verified,
         avatarUrl,
         source: writeAccessAllowed ? 'telegram_write_access_allowed' : 'telegram_webhook',
         authorize,
         consentStatus: stopped || wasBlocked && !explicitAuthorization ? 'revoked' : 'granted',
+        ...(permissionInvocation.matched ? {
+          consentSource: 'automatic_permission_command',
+          consentCommand: permissionInvocation.command,
+          consentEvidence: {
+            provider: 'telegram',
+            commandSource: permissionInvocation.source,
+            updateId: update.update_id
+          }
+        } : {}),
         metadata: {
           chatId: String(chat.id),
           userId: message.from?.id === undefined ? String(chat.id) : String(message.from.id),
           username: message.from?.username || chat.username,
           languageCode: message.from?.language_code,
+          ...(sharedContact.verified ? {
+            phoneSharedByOwner: true,
+            phoneVerificationSource: 'telegram_contact_request',
+            contactUserId: String(message.contact.user_id)
+          } : {}),
+          ...(permissionInvocation.matched ? {
+            permissionCommandReceived: true,
+            permissionCommandReceivedVia: 'telegram',
+            permissionCommandSource: permissionInvocation.source
+          } : {}),
           autoRegisteredVia: 'telegram'
         }
       });
-      if (!existing) await notifyNewContact(contact, 'telegram', { source: 'private_message' });
+      if (!existing && contact.upsertState?.created !== false) {
+        await notifyNewContact(contact, 'telegram', { source: 'private_message' });
+      }
+      if (contact.upsertState?.merged) {
+        await logsManager.create({
+          channel: 'telegram',
+          action: 'contact.identity_merged',
+          message: 'Identidade Telegram vinculada ao contato existente por telefone compartilhado pelo proprio usuario',
+          context: {
+            contactId: contact.id,
+            mergedSourceContactId: contact.upsertState.mergedSourceContactId,
+            updateId: update.update_id
+          }
+        }).catch(() => undefined);
+      }
+      if (sharedContact.provided && !sharedContact.verified) {
+        await logsManager.create({
+          level: 'warn',
+          channel: 'telegram',
+          action: 'contact.phone_share_rejected',
+          message: 'Telefone compartilhado no Telegram foi ignorado porque nao pertence com seguranca ao remetente',
+          context: { contactId: contact.id, reason: sharedContact.reason, updateId: update.update_id }
+        }).catch(() => undefined);
+      }
       if (message.from?.username || chat.username) {
         await contactsManager.update(contact.id, { telegramUsername: message.from?.username || chat.username });
       }
@@ -586,7 +894,7 @@ async function webhook(update, providedSecret) {
         avatarUrl,
         isGroup: false,
         providerMessageId: message.message_id,
-        body: message.text || message.caption || '',
+        body: message.text || message.caption || (message.contact ? '[Contato compartilhado]' : ''),
         type: messageType(message),
         hasMedia: Boolean(message.photo || message.video || message.audio || message.voice || message.document || message.sticker || message.animation),
         sentAt: Number(message.date) * 1000,
@@ -605,6 +913,39 @@ async function webhook(update, providedSecret) {
       });
       await logsManager.create({ channel: 'telegram', action: 'message.received', message: 'Mensagem recebida em chat privado', context: { contactId: contact.id, updateId: update.update_id } });
       publishMessage(update, message, { contactId: contact.id });
+      if (sharedContact.provided && !sharedContact.verified) {
+        await rejectPhoneShare(chat.id).catch(async (error) => {
+          await logsManager.create({
+            level: 'warn', channel: 'telegram', action: 'contact.phone_rejection_notice_failed',
+            message: 'Telefone invalido foi rejeitado, mas o Telegram nao exibiu a orientacao',
+            context: { contactId: contact.id, error: error.message }
+          }).catch(() => undefined);
+        });
+      } else if (sharedContact.verified) {
+        await acknowledgePhoneShare(chat.id).catch(async (error) => {
+          await logsManager.create({
+            level: 'warn', channel: 'telegram', action: 'contact.phone_ack_failed',
+            message: 'Telefone foi vinculado, mas o Telegram nao exibiu a confirmacao',
+            context: { contactId: contact.id, error: error.message }
+          }).catch(() => undefined);
+        });
+      } else if (permissionInvocation.matched) {
+        await sendOnboardingMenu(chat.id, permissionInvocation.command).catch(async (error) => {
+          await logsManager.create({
+            level: 'warn', channel: 'telegram', action: 'onboarding.menu_send_failed',
+            message: 'Contato autorizado, mas o bot nao conseguiu exibir o menu de onboarding',
+            context: { contactId: contact.id, phase: 'onboarding_menu', error: error.message }
+          }).catch(() => undefined);
+        });
+      } else if ((started || writeAccessAllowed) && !contact.phone) {
+        await offerOptionalPhoneShare(chat.id).catch(async (error) => {
+          await logsManager.create({
+            level: 'warn', channel: 'telegram', action: 'contact.phone_request_failed',
+            message: 'Contato autorizado, mas o bot nao conseguiu oferecer o compartilhamento opcional de telefone',
+            context: { contactId: contact.id, error: error.message }
+          }).catch(() => undefined);
+        });
+      }
     } else {
       const group = await groupsManager.findByExternalId('telegram', String(chat.id));
       let contact;
@@ -750,24 +1091,27 @@ async function send(input) {
     if (error.details?.providerErrorCode === 403) await contactsManager.setConsentByAddress('telegram', destination, 'revoked');
     throw error;
   }
-  await logsManager.create({ channel: 'telegram', action: 'message.sent', message: 'Mensagem Telegram enviada', context: { contactId, chatHashAvailable: true, messageId: result.message_id } });
-  try {
-    await conversationsManager.recordOutbound({
-      channel: 'telegram',
-      externalId: String(result.chat.id),
-      contactId,
-      groupId: input.groupId,
-      displayName: result.chat.title || [result.chat.first_name, result.chat.last_name].filter(Boolean).join(' ') || String(result.chat.id),
-      isGroup: ['group', 'supergroup', 'channel'].includes(result.chat.type),
-      providerMessageId: result.message_id,
-      body: historyBody,
-      type: deliveryType,
-      hasMedia: ['photo', 'video'].includes(deliveryType),
-      sentAt: Number(result.date) * 1000
-    });
-  } catch (error) {
-    await logsManager.create({ level: 'warn', channel: 'telegram', action: 'conversation.store_failed', message: 'Mensagem enviada, mas o historico local nao foi atualizado', context: { error: error.message } }).catch(() => undefined);
+  if (input.useCase !== 'profile_auth') {
+    await logsManager.create({ channel: 'telegram', action: 'message.sent', message: 'Mensagem Telegram enviada', context: { contactId, chatHashAvailable: true, messageId: result.message_id } });
+    try {
+      await conversationsManager.recordOutbound({
+        channel: 'telegram',
+        externalId: String(result.chat.id),
+        contactId,
+        groupId: input.groupId,
+        displayName: result.chat.title || [result.chat.first_name, result.chat.last_name].filter(Boolean).join(' ') || String(result.chat.id),
+        isGroup: ['group', 'supergroup', 'channel'].includes(result.chat.type),
+        providerMessageId: result.message_id,
+        body: historyBody,
+        type: deliveryType,
+        hasMedia: ['photo', 'video'].includes(deliveryType),
+        sentAt: Number(result.date) * 1000
+      });
+    } catch (error) {
+      await logsManager.create({ level: 'warn', channel: 'telegram', action: 'conversation.store_failed', message: 'Mensagem enviada, mas o historico local nao foi atualizado', context: { error: error.message } }).catch(() => undefined);
+    }
   }
+  if (input.useCase === 'profile_auth') return { delivered: true };
   return { providerMessageId: String(result.message_id), chatId: String(result.chat.id), raw: result };
 }
 
@@ -879,6 +1223,7 @@ async function registerWebhook(url, actorId) {
     webhookSecretGenerated = true;
   }
   const result = await call('setWebhook', { url: webhookUrl, secret_token: secret, allowed_updates: TELEGRAM_ALLOWED_UPDATES });
+  cachePublicProfileUrlFromWebhook(webhookUrl);
   return { registered: Boolean(result), url: webhookUrl, webhookSecretGenerated };
 }
 

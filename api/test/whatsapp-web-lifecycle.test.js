@@ -9,8 +9,6 @@ const webService = require('../src/services/whatsapp-web.service');
 const webManager = require('../src/managers/whatsapp-web.manager');
 const settingsManager = require('../src/managers/settings.manager');
 const logsManager = require('../src/managers/logs.manager');
-const contactsManager = require('../src/managers/contacts.manager');
-const conversationsManager = require('../src/managers/conversations.manager');
 
 test('WhatsApp Web remove apenas locks obsoletos do Chromium antes de gerar QR', async (context) => {
   const originalAuthPath = env.whatsappWebAuthPath;
@@ -150,6 +148,7 @@ test('ciclo do cliente publica QR, status, ready e desconexao em tempo real', as
   const relativeRoot = '.tmp-wweb-events-test-' + process.pid;
   const root = path.resolve(process.cwd(), relativeRoot);
   let fakeClient;
+  let providerHistoryCalls = 0;
 
   class FakeClient extends EventEmitter {
     constructor() {
@@ -161,6 +160,8 @@ test('ciclo do cliente publica QR, status, ready e desconexao em tempo real', as
     initialize() { return new Promise(() => undefined); }
     async logout() {}
     async destroy() {}
+    async getChats() { providerHistoryCalls += 1; return []; }
+    async getChatById() { providerHistoryCalls += 1; return null; }
   }
 
   context.after(async () => {
@@ -201,6 +202,7 @@ test('ciclo do cliente publica QR, status, ready e desconexao em tempo real', as
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(freshService.snapshot().ready, true);
   assert.equal(freshService.snapshot().attemptActive, false);
+  assert.equal(providerHistoryCalls, 0);
 
   await freshService.logout();
   assert.equal(freshService.snapshot().state, 'not_initialized');
@@ -241,7 +243,7 @@ test('shim restaura _serialized a partir de $1 nos identificadores da versao atu
   assert.equal(serialized.id._serialized, 'false_274985348251713@lid_DEF456');
 });
 
-test('service limita historico e avatar travados dentro da pagina sem acionar fallback lento', async (context) => {
+test('service limita avatar travado no evento inbound sem acionar fallback lento', async (context) => {
   const servicePath = require.resolve('../src/services/whatsapp-web.service');
   const whatsappModulePath = require.resolve('whatsapp-web.js');
   const originalServiceCache = require.cache[servicePath];
@@ -250,10 +252,9 @@ test('service limita historico e avatar travados dentro da pagina sem acionar fa
   const relativeRoot = '.tmp-wweb-history-timeout-' + process.pid;
   const root = path.resolve(process.cwd(), relativeRoot);
   let fakeClient;
-  let fallbackCalls = 0;
   let avatarFallbackCalls = 0;
 
-  const chat = { msgs: { getModelsArray: () => [] } };
+  const chat = {};
   const page = {
     WWebJS: { getMessageModel: (message) => ({ ...message }), getMsgKeyId: () => null },
     require: (name) => {
@@ -263,7 +264,6 @@ test('service limita historico e avatar travados dentro da pagina sem acionar fa
         return { Chat: { getModelsArray: () => [], get: () => chat } };
       }
       if (name === 'WAWebFindChatAction') return { findOrCreateLatestChat: async () => ({ chat }) };
-      if (name === 'WAWebChatLoadMessages') return { loadEarlierMsgs: () => new Promise(() => undefined) };
       if (name === 'WAWebContactProfilePicThumbBridge') {
         return { requestProfilePicFromServer: () => new Promise(() => undefined) };
       }
@@ -287,7 +287,6 @@ test('service limita historico e avatar travados dentro da pagina sem acionar fa
     initialize() { return new Promise(() => undefined); }
     async logout() {}
     async destroy() {}
-    async getChatById() { fallbackCalls += 1; return null; }
     async getProfilePicUrl() { avatarFallbackCalls += 1; return null; }
   }
 
@@ -313,13 +312,6 @@ test('service limita historico e avatar travados dentro da pagina sem acionar fa
   fakeClient.emit('ready');
   await new Promise((resolve) => setImmediate(resolve));
 
-  const startedAt = Date.now();
-  await assert.rejects(
-    () => freshService.getMessages('551199999999@c.us', 25, { timeoutMs: 150 }),
-    (error) => error.code === 'WHATSAPP_WEB_PROVIDER_TIMEOUT' && error.stage === 'history'
-  );
-  assert.ok(Date.now() - startedAt < 350);
-  assert.equal(fallbackCalls, 0);
   await assert.rejects(
     () => freshService.getProfilePicUrl('551199999999@c.us', { timeoutMs: 150 }),
     (error) => error.code === 'WHATSAPP_WEB_PROVIDER_TIMEOUT' && error.stage === 'avatar'
@@ -337,118 +329,6 @@ test('rota de regeneracao de QR permanece separada do inicio recuperavel', () =>
   assert.ok(routes.some((route) => route.path === '/session' && route.methods.post));
   assert.ok(routes.some((route) => route.path === '/session/regenerate' && route.methods.post));
   assert.ok(routes.some((route) => route.path === '/session' && route.methods.delete));
-});
-
-test('sync limita historico travado e ainda conclui os demais chats com resultado parcial', async (context) => {
-  const originals = {
-    listChats: webService.listChats,
-    getMessages: webService.getMessages,
-    getProfilePicUrl: webService.getProfilePicUrl,
-    findByChannelAddress: contactsManager.findByChannelAddress,
-    findByChannelOrPhone: contactsManager.findByChannelOrPhone,
-    upsertFromChannel: contactsManager.upsertFromChannel,
-    upsertConversation: conversationsManager.upsertConversation,
-    log: logsManager.create
-  };
-  context.after(() => Object.assign(webService, {
-    listChats: originals.listChats,
-    getMessages: originals.getMessages,
-    getProfilePicUrl: originals.getProfilePicUrl
-  }) && Object.assign(contactsManager, {
-    findByChannelAddress: originals.findByChannelAddress,
-    findByChannelOrPhone: originals.findByChannelOrPhone,
-    upsertFromChannel: originals.upsertFromChannel
-  }) && Object.assign(conversationsManager, { upsertConversation: originals.upsertConversation })
-    && Object.assign(logsManager, { create: originals.log }));
-
-  const chats = [
-    { id: 'travado@c.us', phone: '551100000001', name: 'Travado', imageUrl: 'https://example.test/a.jpg' },
-    { id: 'rapido@c.us', phone: '551100000002', name: 'Rapido', imageUrl: 'https://example.test/b.jpg' }
-  ];
-  webService.listChats = async () => chats;
-  webService.getMessages = (chatId) => chatId === 'travado@c.us'
-    ? new Promise(() => undefined)
-    : Promise.resolve([]);
-  let profileCalls = 0;
-  webService.getProfilePicUrl = async () => { profileCalls += 1; return null; };
-  const known = (chatId) => ({
-    id: 'contact-' + chatId,
-    displayName: chatId,
-    channels: [{ channel: 'whatsapp_web', authorized: false, consentStatus: 'unknown' }]
-  });
-  contactsManager.findByChannelAddress = async (_channel, chatId) => known(chatId);
-  contactsManager.findByChannelOrPhone = async (_channel, chatId) => known(chatId);
-  contactsManager.upsertFromChannel = async (input) => ({ ...known(input.address), upsertState: { created: false } });
-  conversationsManager.upsertConversation = async () => ({});
-  logsManager.create = async () => ({});
-
-  const startedAt = Date.now();
-  const result = await webManager.syncChats({
-    concurrency: 2,
-    historyTimeoutMs: 30,
-    avatarTimeoutMs: 30,
-    chatTimeoutMs: 100,
-    totalTimeoutMs: 250,
-    logTimeoutMs: 30
-  });
-
-  assert.ok(Date.now() - startedAt < 200);
-  assert.equal(result.total, 2);
-  assert.equal(result.processed, 2);
-  assert.equal(result.contacts, 2);
-  assert.equal(result.failures, 1);
-  assert.equal(result.timedOut, 1);
-  assert.equal(result.partial, true);
-  assert.equal(result.degraded, true);
-  assert.equal(profileCalls, 0);
-});
-
-test('sync compartilha a varredura ativa entre requisicoes simultaneas', async (context) => {
-  const originalListChats = webService.listChats;
-  context.after(() => { webService.listChats = originalListChats; });
-  let calls = 0;
-  webService.listChats = async () => {
-    calls += 1;
-    await new Promise((resolve) => setTimeout(resolve, 35));
-    return [];
-  };
-
-  const [first, second] = await Promise.all([
-    webManager.syncChats({ listTimeoutMs: 100, totalTimeoutMs: 200 }),
-    webManager.syncChats({ listTimeoutMs: 100, totalTimeoutMs: 200 })
-  ]);
-
-  assert.equal(calls, 1);
-  assert.deepEqual(first, second);
-  assert.equal(first.partial, false);
-});
-
-test('sync respeita o orcamento total e informa chats ainda nao tentados', async (context) => {
-  const originals = { listChats: webService.listChats, getMessages: webService.getMessages, log: logsManager.create };
-  context.after(() => Object.assign(webService, {
-    listChats: originals.listChats,
-    getMessages: originals.getMessages
-  }) && Object.assign(logsManager, { create: originals.log }));
-  webService.listChats = async () => Array.from({ length: 20 }, (_, index) => ({
-    id: `pendente-${index}@c.us`, phone: `55119999${String(index).padStart(4, '0')}`,
-    name: `Pendente ${index}`, imageUrl: null, isGroup: false
-  }));
-  webService.getMessages = async () => new Promise(() => undefined);
-  logsManager.create = async () => ({});
-
-  const startedAt = Date.now();
-  const result = await webManager.syncChats({
-    concurrency: 2,
-    historyTimeoutMs: 1_000,
-    chatTimeoutMs: 70,
-    totalTimeoutMs: 120,
-    logTimeoutMs: 25
-  });
-
-  assert.ok(Date.now() - startedAt < 250);
-  assert.equal(result.total, 20);
-  assert.ok(result.processed >= 2 && result.processed < 20);
-  assert.equal(result.remaining, result.total - result.processed);
-  assert.ok(result.timedOut >= 2);
-  assert.equal(result.partial, true);
+  assert.equal(webService.listChats, undefined);
+  assert.equal(webService.getMessages, undefined);
 });

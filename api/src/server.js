@@ -8,6 +8,9 @@ const queueService = require('./services/queue.service');
 const authManager = require('./managers/auth.manager');
 const notificationsManager = require('./managers/notifications.manager');
 const telegramManager = require('./managers/telegram.manager');
+const contactsManager = require('./managers/contacts.manager');
+const templatesManager = require('./managers/templates.manager');
+const termsManager = require('./managers/terms.manager');
 
 let server;
 let shuttingDown = false;
@@ -15,6 +18,18 @@ let shuttingDown = false;
 async function start() {
   validateEnv();
   await connectDatabase();
+  const templateSeed = await templatesManager.ensureSystemTemplates();
+  if (templateSeed.created || templateSeed.protected) {
+    console.log('[templates] modelos padrao verificados', templateSeed);
+  }
+  const legalSeed = await termsManager.ensureDefaultTerms();
+  if (legalSeed.created) {
+    console.log('[terms] documentos legais padrao verificados', legalSeed);
+  }
+  const phoneRepair = await contactsManager.repairLegacyWhatsappPhones();
+  if (phoneRepair.repaired || phoneRepair.cleared) {
+    console.log('[contacts] telefones legados corrigidos', phoneRepair);
+  }
   await authManager.bootstrapAdmins();
   await connectRedis();
   queueService.registerNotificationProcessor(notificationsManager.processJob, notificationsManager.recoverStale);

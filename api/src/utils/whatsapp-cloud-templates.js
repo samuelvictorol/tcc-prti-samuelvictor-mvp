@@ -46,7 +46,7 @@ const PARAMETER_ALIASES = Object.freeze({
 
 const CUSTOM_COMPONENT_TYPES = Object.freeze(['header', 'body', 'button']);
 const CUSTOM_PARAMETER_TYPES = Object.freeze(['text', 'currency', 'date_time', 'image', 'document', 'video', 'payload', 'coupon_code']);
-const BUTTON_SUB_TYPES = Object.freeze(['url', 'quick_reply', 'copy_code']);
+const BUTTON_SUB_TYPES = Object.freeze(['url', 'quick_reply', 'copy_code', 'otp_copy_code']);
 
 function clonePreset(preset) {
   return {
@@ -132,7 +132,7 @@ function normalizeBuilder(builder) {
     const subType = component.subType || component.sub_type;
     const buttonIndex = component.index;
     if (type === 'button') {
-      if (!BUTTON_SUB_TYPES.includes(subType)) templateError('Botao exige subType url, quick_reply ou copy_code', { componentIndex });
+      if (!BUTTON_SUB_TYPES.includes(subType)) templateError('Botao exige subType url, quick_reply, copy_code ou otp_copy_code', { componentIndex });
       if (!/^[0-9]$/.test(String(buttonIndex ?? ''))) templateError('Botao exige index entre 0 e 9', { componentIndex });
       const normalizedButtonIndex = String(buttonIndex);
       if (seenButtonIndexes.has(normalizedButtonIndex)) {
@@ -171,6 +171,9 @@ function normalizeBuilder(builder) {
       }
       if (type === 'button' && subType === 'copy_code' && parameterType !== 'coupon_code') {
         templateError('Botao copy_code aceita parametro coupon_code', { componentIndex, parameterIndex });
+      }
+      if (type === 'button' && subType === 'otp_copy_code' && parameterType !== 'text') {
+        templateError('Botao OTP para copiar codigo aceita parametro text', { componentIndex, parameterIndex });
       }
       if (type !== 'header' && ['image', 'document', 'video'].includes(parameterType)) {
         templateError('Midia image/document/video so pode ser usada no header', { componentIndex, parameterIndex });
@@ -251,7 +254,7 @@ function builderComponents(builder) {
   const normalized = normalizeBuilder(builder);
   return normalized.components.map((component) => ({
     type: component.type,
-    ...(component.type === 'button' ? { sub_type: component.subType, index: component.index } : {}),
+    ...(component.type === 'button' ? { sub_type: component.subType === 'otp_copy_code' ? 'url' : component.subType, index: component.index } : {}),
     parameters: component.parameters.map((parameter) => ({
       ...placeholderForParameter(parameter),
       ...(parameter.parameterName ? { parameter_name: parameter.parameterName } : {})
@@ -336,7 +339,7 @@ function buildCustomTemplateMessage(customTemplate) {
     .filter((component) => component.parameters.length > 0)
     .map((component) => ({
       type: component.type,
-      ...(component.type === 'button' ? { sub_type: component.subType, index: component.index } : {}),
+      ...(component.type === 'button' ? { sub_type: component.subType === 'otp_copy_code' ? 'url' : component.subType, index: component.index } : {}),
       parameters: component.parameters.map((parameter) => ({
         ...runtimeParameter(parameter, customTemplate.variables || {}),
         ...(parameter.parameterName ? { parameter_name: parameter.parameterName } : {})

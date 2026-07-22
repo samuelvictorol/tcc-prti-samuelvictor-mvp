@@ -1,7 +1,9 @@
 const Term = require('../models/term.model');
+const crypto = require('node:crypto');
 const sanitizeHtml = require('sanitize-html');
 const { parsePagination, pageResult } = require('../utils/pagination');
 const ApiError = require('../utils/api-error');
+const { INITIAL_LEGAL_VERSION, listDefaultLegalDocuments } = require('../utils/default-legal-documents');
 
 async function enforceSinglePublished(term) {
   if (term.status !== 'published') return term;
@@ -22,9 +24,27 @@ function clean(input) {
   };
 }
 
+function automaticVersion(now = new Date()) {
+  const timestamp = now.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+  return timestamp + '-' + crypto.randomBytes(3).toString('hex');
+}
+
+function createDefaults(input) {
+  const status = input.status || 'published';
+  const now = new Date();
+  return {
+    ...input,
+    version: input.version || automaticVersion(now),
+    status,
+    effectiveAt: input.effectiveAt || (status === 'published' ? now : undefined),
+    publishedAt: status === 'published' ? now : undefined
+  };
+}
+
 async function create(input, actorId) {
   try {
-    const term = await Term.create({ ...clean(input), createdBy: actorId, updatedBy: actorId, publishedAt: input.status === 'published' ? new Date() : undefined, effectiveAt: input.effectiveAt || (input.status === 'published' ? new Date() : undefined) });
+    const prepared = createDefaults(clean(input));
+    const term = await Term.create({ ...prepared, createdBy: actorId, updatedBy: actorId });
     await enforceSinglePublished(term);
     return term.toObject();
   } catch (error) {
@@ -75,4 +95,43 @@ async function getPublished(type) {
   return term;
 }
 
-module.exports = { create, getById, list, update, remove, getPublished };
+async function ensureDefaultTerms() {
+  const summary = { created: 0, adopted: 0 };
+
+  for (const definition of listDefaultLegalDocuments()) {
+    const existing = await Term.exists({ type: definition.type });
+    if (existing) {
+      summary.adopted += 1;
+      continue;
+    }
+
+    const now = new Date();
+    try {
+      await Term.create({
+        ...clean(definition),
+        version: INITIAL_LEGAL_VERSION,
+        status: 'published',
+        effectiveAt: now,
+        publishedAt: now
+      });
+      summary.created += 1;
+    } catch (error) {
+      if (error?.code !== 11000) throw error;
+      summary.adopted += 1;
+    }
+  }
+
+  return summary;
+}
+
+module.exports = {
+  create,
+  getById,
+  list,
+  update,
+  remove,
+  getPublished,
+  automaticVersion,
+  createDefaults,
+  ensureDefaultTerms
+};

@@ -1,9 +1,23 @@
 const Contact = require('../models/contact.model');
 const ContactGroup = require('../models/contact-group.model');
 const ConsentEvent = require('../models/consent-event.model');
+const AdminNotification = require('../models/admin-notification.model');
+const Conversation = require('../models/conversation.model');
+const ConversationMessage = require('../models/conversation-message.model');
+const Invite = require('../models/invite.model');
+const InviteClick = require('../models/invite-click.model');
+const Notification = require('../models/notification.model');
+const ProfileAuthChallenge = require('../models/profile-auth-challenge.model');
 const ApiError = require('../utils/api-error');
 const { encrypt, decrypt, searchHash } = require('../services/crypto.service');
-const { normalizeEmail, normalizePhone, normalizeTelegramUsername, normalizeSearch } = require('../utils/normalizers');
+const {
+  normalizeEmail,
+  normalizePhone,
+  normalizeWhatsappE164,
+  whatsappLidDigits,
+  normalizeTelegramUsername,
+  normalizeSearch
+} = require('../utils/normalizers');
 const { parsePagination, pageResult } = require('../utils/pagination');
 const { removeContactArtifacts } = require('../services/contact-artifacts-cleanup.service');
 
@@ -48,6 +62,21 @@ function manualIdentityInput(input) {
   };
 }
 
+function duplicateContactError(error) {
+  if (error?.code !== 11000) return null;
+  if (error.keyPattern?.emailHash || error.keyPattern?.phoneHash
+    || String(error.message || '').includes('uniq_contact_email_hash')
+    || String(error.message || '').includes('uniq_contact_phone_hash')) {
+    return new ApiError(
+      409,
+      'Email ou telefone ja pertence a outro contato',
+      null,
+      'DUPLICATE_CONTACT_IDENTIFIER'
+    );
+  }
+  return new ApiError(409, 'Identificador de canal ja cadastrado', error.keyPattern, 'DUPLICATE_CONTACT');
+}
+
 function consentStatusFromInput(input = {}) {
   return input.consentStatus || (input.authorized === true ? 'granted' : 'unknown');
 }
@@ -80,7 +109,7 @@ function applyConsent(identity, status, context = {}, changedAt = new Date()) {
 
 function normalizeAddress(channel, value) {
   if (channel === 'email') return normalizeEmail(value);
-  if (channel === 'whatsapp_cloud') return normalizePhone(value) || String(value).trim();
+  if (channel === 'whatsapp_cloud') return normalizeWhatsappE164(value);
   return value === undefined || value === null ? null : String(value).trim();
 }
 
@@ -89,9 +118,87 @@ function safeDecrypt(value, json = false) {
   try { return decrypt(value, { json }); } catch (_error) { return null; }
 }
 
+function decodedIdentities(value) {
+  return (value.channels || []).map((identity) => ({
+    raw: identity,
+    address: safeDecrypt(identity.addressEncrypted),
+    metadata: safeDecrypt(identity.metadataEncrypted, true) || {}
+  }));
+}
+
+function providerIdentifierDigits(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits || null;
+}
+
+function cloudDeliveryAddress(identity) {
+  if (!identity || identity.raw.channel !== 'whatsapp_cloud') return null;
+  const metadata = identity.metadata || {};
+  const trustedWaId = normalizeWhatsappE164(metadata.waId);
+  if (trustedWaId) return trustedWaId;
+  const blockedIdentifiers = [
+    metadata.userId,
+    metadata.fromUserId,
+    metadata.logicalId,
+    metadata.fromLogicalId
+  ].map(providerIdentifierDigits).filter(Boolean);
+  return normalizeWhatsappE164(identity.address, { blockedIdentifiers });
+}
+
+function webPhoneAddress(identity) {
+  if (!identity || identity.raw.channel !== 'whatsapp_web') return null;
+  const metadata = identity.metadata || {};
+  return [identity.address, metadata.contactId, metadata.serializedId]
+    .map((candidate) => normalizeWhatsappE164(candidate))
+    .find(Boolean) || null;
+}
+
+function blockedPhoneIdentifiers(identities) {
+  const blocked = new Set();
+  for (const identity of identities) {
+    if (identity.raw.channel === 'whatsapp_web') {
+      for (const candidate of [identity.address, identity.metadata.chatId, identity.metadata.messageFrom]) {
+        const lid = whatsappLidDigits(candidate);
+        if (lid) blocked.add(lid);
+      }
+    }
+    for (const candidate of [identity.metadata.logicalId, identity.metadata.fromLogicalId]) {
+      const digits = providerIdentifierDigits(candidate);
+      if (digits) blocked.add(digits);
+    }
+  }
+  return [...blocked];
+}
+
+function contactPhoneResolution(value, identities = decodedIdentities(value)) {
+  const storedRaw = safeDecrypt(value.phoneEncrypted);
+  const stored = normalizeWhatsappE164(storedRaw, { blockedIdentifiers: blockedPhoneIdentifiers(identities) });
+  if (stored) return { phone: stored, source: 'stored', storedUnsafe: false, unavailableReason: null };
+  const trustedProviderPhone = [
+    ...identities.filter((identity) => identity.raw.channel === 'whatsapp_cloud').map(cloudDeliveryAddress),
+    ...identities.filter((identity) => identity.raw.channel === 'whatsapp_web').map(webPhoneAddress)
+  ].find(Boolean);
+  if (trustedProviderPhone) {
+    return {
+      phone: trustedProviderPhone,
+      source: 'verified_provider_identity',
+      storedUnsafe: Boolean(storedRaw),
+      unavailableReason: null
+    };
+  }
+  return {
+    phone: null,
+    source: null,
+    storedUnsafe: Boolean(storedRaw),
+    unavailableReason: storedRaw ? 'PROVIDER_IDENTIFIER_IS_NOT_PHONE' : null
+  };
+}
+
 function serialize(contact, options = {}) {
   const value = contact?.toObject ? contact.toObject() : contact;
   if (!value) return null;
+  const identities = decodedIdentities(value);
+  const phoneResolution = contactPhoneResolution(value, identities);
   const channelAvatars = (value.channelAvatars || []).map((item) => ({
     channel: item.channel,
     url: safeDecrypt(item.urlEncrypted),
@@ -108,24 +215,32 @@ function serialize(contact, options = {}) {
     id: String(value._id),
     displayName: safeDecrypt(value.displayNameEncrypted),
     email: safeDecrypt(value.emailEncrypted),
-    phone: safeDecrypt(value.phoneEncrypted),
+    phone: phoneResolution.phone,
+    phoneSource: phoneResolution.source,
+    phoneUnavailableReason: phoneResolution.unavailableReason,
     telegramUsername: safeDecrypt(value.telegramUsernameEncrypted),
     avatarUrl: preferredAvatar?.url || (includeInlineAvatar ? safeDecrypt(value.avatarUrlEncrypted) : null),
     avatarSource: preferredAvatar?.channel || (includeInlineAvatar && value.avatarUrlEncrypted ? 'manual' : null),
-    channels: (value.channels || []).map((identity) => ({
-      id: String(identity._id),
-      channel: identity.channel,
-      address: safeDecrypt(identity.addressEncrypted),
-      authorized: identity.authorized,
-      consentStatus: identity.consentStatus,
-      source: identity.source,
-      interactedAt: identity.interactedAt,
-      consentedAt: identity.consentedAt,
-      consentSource: identity.consentSource || null,
-      consentCommand: identity.consentCommand || null,
-      consentChangedAt: identity.consentChangedAt || null,
-      consentChangedBy: identity.consentChangedBy ? String(identity.consentChangedBy._id || identity.consentChangedBy) : null,
-      metadata: safeDecrypt(identity.metadataEncrypted, true)
+    channels: identities.map((identity) => ({
+      id: String(identity.raw._id),
+      channel: identity.raw.channel,
+      address: identity.address,
+      deliveryAddress: identity.raw.channel === 'whatsapp_cloud'
+        ? cloudDeliveryAddress(identity)
+        : identity.address,
+      addressUnavailableReason: identity.raw.channel === 'whatsapp_cloud' && !cloudDeliveryAddress(identity)
+        ? 'WHATSAPP_PHONE_UNAVAILABLE'
+        : null,
+      authorized: identity.raw.authorized,
+      consentStatus: identity.raw.consentStatus,
+      source: identity.raw.source,
+      interactedAt: identity.raw.interactedAt,
+      consentedAt: identity.raw.consentedAt,
+      consentSource: identity.raw.consentSource || null,
+      consentCommand: identity.raw.consentCommand || null,
+      consentChangedAt: identity.raw.consentChangedAt || null,
+      consentChangedBy: identity.raw.consentChangedBy ? String(identity.raw.consentChangedBy._id || identity.raw.consentChangedBy) : null,
+      metadata: identity.metadata
     })),
     pendingWhatsappConsents: (value.pendingWhatsappConsents || []).map((pending) => ({
       channel: pending.channel,
@@ -277,7 +392,8 @@ async function create(input, actorId, options = {}) {
     }
     return getById(contact._id);
   } catch (error) {
-    if (error.code === 11000) throw new ApiError(409, 'Identificador de canal ja cadastrado', error.keyPattern, 'DUPLICATE_CONTACT');
+    const duplicate = duplicateContactError(error);
+    if (duplicate) throw duplicate;
     throw error;
   }
 }
@@ -409,7 +525,8 @@ async function update(id, input) {
   try {
     await contact.save();
   } catch (error) {
-    if (error.code === 11000) throw new ApiError(409, 'Identificador de canal ja cadastrado');
+    const duplicate = duplicateContactError(error);
+    if (duplicate) throw duplicate;
     throw error;
   }
   return getById(id);
@@ -595,9 +712,10 @@ async function grantWhatsappConsentFromCommand(id, sourceChannel, context = {}) 
   return serialize(contact);
 }
 
-function mergePhoneIdentity(channel, phone) {
-  if (!['whatsapp_web', 'whatsapp_cloud'].includes(channel)) return null;
-  const normalized = normalizePhone(phone);
+function mergePhoneIdentity(channel, phone, options = {}) {
+  const verifiedTelegramPhone = channel === 'telegram' && options.verified === true;
+  if (!['whatsapp_web', 'whatsapp_cloud'].includes(channel) && !verifiedTelegramPhone) return null;
+  const normalized = normalizeWhatsappE164(phone);
   const digits = String(normalized || '').replace(/\D/g, '');
   if (!/^\d{8,15}$/.test(digits)) return null;
   const aliases = new Set([digits]);
@@ -613,13 +731,143 @@ function mergePhoneIdentity(channel, phone) {
   };
 }
 
-async function findUniquePhoneContact(channel, phone) {
-  const identity = mergePhoneIdentity(channel, phone);
+async function findUniquePhoneContact(channel, phone, options = {}) {
+  const identity = mergePhoneIdentity(channel, phone, options);
   if (!identity) return null;
   const matches = await Contact.find({ deletedAt: null, phoneHash: { $in: identity.hashes } })
     .select(SECRET_SELECT)
     .limit(2);
   return matches.length === 1 ? matches[0] : null;
+}
+
+function plainIdentity(identity) {
+  if (identity?.toObject) return identity.toObject({ depopulate: true });
+  return { ...identity };
+}
+
+function restoreArchivedTelegramSource(source, snapshot) {
+  source.channels = snapshot.channels;
+  source.emailEncrypted = snapshot.emailEncrypted;
+  source.emailHash = snapshot.emailHash;
+  source.phoneEncrypted = snapshot.phoneEncrypted;
+  source.phoneHash = snapshot.phoneHash;
+  source.telegramUsernameEncrypted = snapshot.telegramUsernameEncrypted;
+  source.telegramUsernameHash = snapshot.telegramUsernameHash;
+  source.channelAvatars = snapshot.channelAvatars;
+  source.metadataEncrypted = snapshot.metadataEncrypted;
+  source.deletedAt = snapshot.deletedAt;
+}
+
+async function migrateMergedContactReferences(sourceId, targetId) {
+  const source = String(sourceId);
+  const target = String(targetId);
+  await Promise.all([
+    AdminNotification.updateMany({ contact: source }, { $set: { contact: target } }),
+    Conversation.updateMany({ contact: source }, { $set: { contact: target } }),
+    ConversationMessage.updateMany({ contact: source }, { $set: { contact: target } }),
+    Invite.updateMany({ recipientContact: source }, { $set: { recipientContact: target } }),
+    InviteClick.updateMany({ contact: source }, { $set: { contact: target } }),
+    ProfileAuthChallenge.updateMany({ contact: source }, { $set: { contact: target } }),
+    ConsentEvent.updateMany(
+      { contact: source },
+      { $set: { contact: target, contactReferenceHash: searchHash(target) } }
+    ),
+    Notification.updateMany(
+      { 'deliveries.contact': source },
+      { $set: { 'deliveries.$[delivery].contact': target } },
+      { arrayFilters: [{ 'delivery.contact': source }] }
+    )
+  ]);
+  await ContactGroup.updateMany({ contacts: source }, { $addToSet: { contacts: target } });
+  await ContactGroup.updateMany({ contacts: source }, { $pull: { contacts: source } });
+  await Notification.updateMany({ recipientContacts: source }, { $addToSet: { recipientContacts: target } });
+  await Notification.updateMany({ recipientContacts: source }, { $pull: { recipientContacts: source } });
+}
+
+async function mergeTelegramSourceIntoPhoneTarget(source, target, addressHash, verifiedPhone) {
+  if (!source || !target || String(source._id) === String(target._id)) {
+    return { contact: target || source, sourceContactId: null };
+  }
+  const transferableIdentity = source.channels.find((identity) => (
+    identity.channel === 'telegram' && identity.addressHash === addressHash
+  ));
+  if (!transferableIdentity) return { contact: target, sourceContactId: null };
+
+  const sourceChannels = source.channels || [];
+  const sourcePhone = normalizeWhatsappE164(safeDecrypt(source.phoneEncrypted));
+  const sourceEmail = normalizeEmail(safeDecrypt(source.emailEncrypted));
+  const targetEmail = normalizeEmail(safeDecrypt(target.emailEncrypted));
+  const hasNonTelegramIdentity = sourceChannels.some((identity) => identity.channel !== 'telegram');
+  const hasConflictingProfileData = (sourcePhone && sourcePhone !== verifiedPhone)
+    || (sourceEmail && sourceEmail !== targetEmail);
+  if (hasNonTelegramIdentity || hasConflictingProfileData) {
+    throw new ApiError(
+      409,
+      'A identidade Telegram ja pertence a outro perfil com dados que exigem revisao administrativa',
+      null,
+      'TELEGRAM_CONTACT_MERGE_CONFLICT'
+    );
+  }
+
+  const transferred = plainIdentity(transferableIdentity);
+  const sourceTelegramAvatar = (source.channelAvatars || []).find((avatar) => avatar.channel === 'telegram');
+  const sourceUsername = safeDecrypt(source.telegramUsernameEncrypted);
+  const sourceName = safeDecrypt(source.displayNameEncrypted);
+  const sourceMetadata = safeDecrypt(source.metadataEncrypted, true) || {};
+  const snapshot = {
+    channels: sourceChannels.map(plainIdentity),
+    emailEncrypted: source.emailEncrypted,
+    emailHash: source.emailHash,
+    phoneEncrypted: source.phoneEncrypted,
+    phoneHash: source.phoneHash,
+    telegramUsernameEncrypted: source.telegramUsernameEncrypted,
+    telegramUsernameHash: source.telegramUsernameHash,
+    channelAvatars: (source.channelAvatars || []).map((avatar) => (
+      avatar?.toObject ? avatar.toObject({ depopulate: true }) : { ...avatar }
+    )),
+    metadataEncrypted: source.metadataEncrypted,
+    deletedAt: source.deletedAt
+  };
+
+  // Libera primeiro os indices unicos da identidade Telegram. Caso a gravacao
+  // do destino falhe, o perfil de origem e restaurado antes de propagar o erro.
+  source.channels = [];
+  source.emailEncrypted = undefined;
+  source.emailHash = undefined;
+  source.phoneEncrypted = undefined;
+  source.phoneHash = undefined;
+  source.telegramUsernameEncrypted = undefined;
+  source.telegramUsernameHash = undefined;
+  source.channelAvatars = [];
+  source.metadataEncrypted = encrypt({ ...sourceMetadata, mergedIntoContactId: String(target._id) });
+  source.deletedAt = new Date();
+  await source.save();
+
+  target.channels.push(transferred);
+  if (sourceUsername && !safeDecrypt(target.telegramUsernameEncrypted)) {
+    target.telegramUsernameEncrypted = encrypt(sourceUsername);
+    target.telegramUsernameHash = searchHash(normalizeTelegramUsername(sourceUsername));
+  }
+  if (sourceTelegramAvatar) {
+    const avatarUrl = safeDecrypt(sourceTelegramAvatar.urlEncrypted);
+    if (avatarUrl) setChannelAvatar(target, 'telegram', avatarUrl);
+  }
+  if (sourceName && target.displayNameSource !== 'manual') {
+    target.displayNameEncrypted = encrypt(sourceName);
+    target.displayNameHash = searchHash(normalizeSearch(sourceName));
+    target.displayNameSource = 'telegram';
+  }
+  target.tags = [...new Set([...(target.tags || []), ...(source.tags || [])])];
+
+  try {
+    await target.save();
+  } catch (error) {
+    restoreArchivedTelegramSource(source, snapshot);
+    await source.save();
+    throw error;
+  }
+  await migrateMergedContactReferences(source._id, target._id);
+  return { contact: target, sourceContactId: String(source._id) };
 }
 
 async function findByChannelOrPhone(channel, address, phone) {
@@ -632,16 +880,34 @@ async function findByChannelOrPhone(channel, address, phone) {
 async function upsertFromChannelUnlocked({
   channel, address, displayName, phone, avatarUrl, metadata, source = 'inbound', authorize = false,
   consentStatus, consentSource, consentCommand, consentChangedBy, consentEvidence, refreshProfile = false,
-  skipPendingWhatsappConsent = false
+  skipPendingWhatsappConsent = false, matchedContactId, phoneVerified = false
 }) {
   const normalizedAddress = normalizeAddress(channel, address);
   const addressHash = searchHash(normalizedAddress);
+  const trustedPhone = channel === 'telegram' && phoneVerified !== true ? null : phone;
+  let mergedSourceContactId = null;
   let contact = await Contact.findOne({ channels: { $elemMatch: { channel, addressHash } } }).select(SECRET_SELECT);
-  if (!contact) contact = await findUniquePhoneContact(channel, phone);
+  const phoneContact = trustedPhone && (!contact || channel === 'telegram')
+    ? await findUniquePhoneContact(channel, trustedPhone, { verified: channel === 'telegram' })
+    : null;
+  if (contact && phoneContact && String(contact._id) !== String(phoneContact._id) && channel === 'telegram') {
+    const merged = await mergeTelegramSourceIntoPhoneTarget(
+      contact,
+      phoneContact,
+      addressHash,
+      mergePhoneIdentity('telegram', trustedPhone, { verified: true }).normalized
+    );
+    contact = merged.contact;
+    mergedSourceContactId = merged.sourceContactId;
+  }
+  if (!contact) contact = phoneContact;
+  if (!contact && matchedContactId) {
+    contact = await Contact.findOne({ _id: matchedContactId, deletedAt: null }).select(SECRET_SELECT);
+  }
   if (!contact) {
     const created = await create({
       displayName: displayName || normalizedAddress,
-      phone,
+      phone: trustedPhone,
       channels: [{
         channel,
         address: normalizedAddress,
@@ -742,8 +1008,16 @@ async function upsertFromChannelUnlocked({
     contact.displayNameHash = searchHash(normalizeSearch(displayName));
     contact.displayNameSource = channel;
   }
-  if (phone && (refreshProfile || !contact.phoneEncrypted)) {
-    const normalizedPhone = normalizePhone(phone);
+  const currentPhoneResolution = contactPhoneResolution(contact);
+  const normalizedPhone = normalizeWhatsappE164(trustedPhone, {
+    blockedIdentifiers: blockedPhoneIdentifiers(decodedIdentities(contact))
+  });
+  if (normalizedPhone && (
+    refreshProfile
+    || !contact.phoneEncrypted
+    || currentPhoneResolution.storedUnsafe
+    || !currentPhoneResolution.phone
+  )) {
     contact.phoneEncrypted = encrypt(normalizedPhone);
     contact.phoneHash = searchHash(normalizedPhone);
   }
@@ -760,7 +1034,7 @@ async function upsertFromChannelUnlocked({
     if (error.code !== 11000) throw error;
     const concurrent = await Contact.findOne({ channels: { $elemMatch: { channel, addressHash } } }).select(SECRET_SELECT);
     if (concurrent) return { ...serialize(concurrent), upsertState: { created: false, identityAdded: false } };
-    throw new ApiError(409, 'Identificador de canal ja cadastrado', null, 'DUPLICATE_CONTACT');
+    throw duplicateContactError(error);
   }
   const blockingAuditRetry = ['revoked', 'denied'].includes(explicitConsentStatus);
   if (desiredConsentStatus !== 'granted' && DECIDED_CONSENT_STATUSES.includes(desiredConsentStatus)
@@ -769,19 +1043,26 @@ async function upsertFromChannelUnlocked({
     // evento falhar, o retry volta a esta linha mesmo sem uma nova mudanca.
     await auditConsent(contact._id, channel, desiredConsentStatus, consentContext);
   }
-  return { ...serialize(contact), upsertState: { created: false, identityAdded } };
+  return {
+    ...serialize(contact),
+    upsertState: {
+      created: false,
+      identityAdded,
+      ...(mergedSourceContactId ? { merged: true, mergedSourceContactId } : {})
+    }
+  };
 }
 
-function providerUpsertKey(channel, address, phone) {
-  const phoneIdentity = mergePhoneIdentity(channel, phone);
+function providerUpsertKey(channel, address, phone, phoneVerified = false) {
+  const phoneIdentity = mergePhoneIdentity(channel, phone, { verified: channel === 'telegram' && phoneVerified === true });
   if (phoneIdentity?.aliases?.length) {
-    return 'whatsapp:' + [...phoneIdentity.aliases].sort((left, right) => left.length - right.length || left.localeCompare(right))[0];
+    return 'phone:' + [...phoneIdentity.aliases].sort((left, right) => left.length - right.length || left.localeCompare(right))[0];
   }
   return channel + ':' + String(normalizeAddress(channel, address) || 'unknown');
 }
 
 async function upsertFromChannel(input) {
-  const key = providerUpsertKey(input.channel, input.address, input.phone);
+  const key = providerUpsertKey(input.channel, input.address, input.phone, input.phoneVerified);
   const previous = providerUpsertLocks.get(key) || Promise.resolve();
   let release;
   const current = new Promise((resolve) => { release = resolve; });
@@ -813,6 +1094,7 @@ async function upsertFromChannel(input) {
 
 async function findByChannelAddress(channel, address) {
   const normalizedAddress = normalizeAddress(channel, address);
+  if (!normalizedAddress) return null;
   const contact = await Contact.findOne({ channels: { $elemMatch: { channel, addressHash: searchHash(normalizedAddress) } } }).select(SECRET_SELECT);
   return contact ? serialize(contact) : null;
 }
@@ -829,7 +1111,82 @@ async function getDestination(contactId, channel, options = {}) {
   const identities = contact.channels.filter((item) => item.channel === channel);
   const identity = identities.find((item) => options.allowUnconsented || (item.authorized && item.consentStatus === 'granted'));
   if (!identity) throw new ApiError(409, 'Contato nao autorizou o canal ' + channel, null, 'CHANNEL_NOT_AUTHORIZED');
-  return { address: decrypt(identity.addressEncrypted), addressHash: identity.addressHash, contact: serialize(contact) };
+  let address = decrypt(identity.addressEncrypted);
+  if (channel === 'whatsapp_cloud') {
+    address = cloudDeliveryAddress({
+      raw: identity,
+      address,
+      metadata: safeDecrypt(identity.metadataEncrypted, true) || {}
+    });
+    if (!address) {
+      throw new ApiError(
+        409,
+        'O contato nao possui telefone E.164 verificado para WhatsApp Cloud',
+        null,
+        'WHATSAPP_PHONE_UNAVAILABLE'
+      );
+    }
+  }
+  return { address, addressHash: identity.addressHash, contact: serialize(contact) };
+}
+
+async function ensureEmailIdentity(id) {
+  const contact = await getRawById(id);
+  const email = normalizeEmail(safeDecrypt(contact.emailEncrypted));
+  if (!email) {
+    throw new ApiError(409, 'Cadastre um email antes de ativar este canal', null, 'EMAIL_IDENTITY_UNAVAILABLE');
+  }
+  const addressHash = searchHash(email);
+  if (contact.channels.some((identity) => identity.channel === 'email' && identity.addressHash === addressHash)) {
+    return serialize(contact);
+  }
+  contact.channels.push(encryptedIdentity({
+    channel: 'email',
+    address: email,
+    authorized: false,
+    consentStatus: 'unknown',
+    source: 'self_service_profile',
+    interactedAt: new Date()
+  }));
+  try {
+    await contact.save();
+  } catch (error) {
+    const duplicate = duplicateContactError(error);
+    if (duplicate) throw duplicate;
+    throw error;
+  }
+  return serialize(contact);
+}
+
+async function repairLegacyWhatsappPhones() {
+  const contacts = await Contact.find({
+    deletedAt: null,
+    phoneEncrypted: { $exists: true, $ne: null }
+  }).select(SECRET_SELECT);
+  const summary = { scanned: contacts.length, repaired: 0, cleared: 0, conflicts: 0 };
+  for (const contact of contacts) {
+    const resolution = contactPhoneResolution(contact);
+    if (!resolution.storedUnsafe) continue;
+    let replacement = resolution.phone;
+    if (replacement) {
+      const identity = mergePhoneIdentity('whatsapp_cloud', replacement);
+      const duplicate = identity && await Contact.exists({
+        _id: { $ne: contact._id },
+        deletedAt: null,
+        phoneHash: { $in: identity.hashes }
+      });
+      if (duplicate) {
+        replacement = null;
+        summary.conflicts += 1;
+      }
+    }
+    contact.phoneEncrypted = replacement ? encrypt(replacement) : undefined;
+    contact.phoneHash = replacement ? searchHash(replacement) : undefined;
+    await contact.save();
+    if (replacement) summary.repaired += 1;
+    else summary.cleared += 1;
+  }
+  return summary;
 }
 
 async function setChannelConsent(id, channel, status, context = {}) {
@@ -939,8 +1296,11 @@ module.exports = {
   getDestination,
   setChannelConsent,
   grantWhatsappConsentFromCommand,
+  ensureEmailIdentity,
+  repairLegacyWhatsappPhones,
   updateChannelAvatar,
   serialize,
   mergePhoneIdentity,
+  contactPhoneResolution,
   SECRET_SELECT
 };

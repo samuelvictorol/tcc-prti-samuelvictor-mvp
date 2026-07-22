@@ -8,7 +8,11 @@ import { useAppStore } from '../stores/app.js'
 import { channelSettingsPayload, normalizeTelegramWebhookUrl } from '../services/channels.js'
 import { asList, errorMessage, http, paginationOf, unwrap } from '../services/http.js'
 import { connectSocket, getSocket } from '../services/socket.js'
-import { telegramBotIdentity } from '../services/telegram.js'
+import {
+  DEFAULT_TELEGRAM_PERMISSION_COMMAND,
+  telegramBotIdentity,
+  telegramPermissionCommandFromSettings,
+} from '../services/telegram.js'
 import {
   DEFAULT_WHATSAPP_PERMISSION_COMMAND,
   normalizeWhatsappWebStatus,
@@ -22,6 +26,7 @@ const loading = ref(true)
 const savingChannel = reactive({ telegram: false, whatsappCloud: false, email: false })
 const registeringWebhook = ref(false)
 const savingWhatsappPermission = ref(false)
+const savingTelegramPermission = ref(false)
 const connectingWhatsappWeb = ref(false)
 const regeneratingWhatsappWeb = ref(false)
 const disconnectingWhatsappWeb = ref(false)
@@ -33,8 +38,9 @@ const logPages = ref(1)
 const stats = reactive({ contacts: 0, deliveries: 0, failed: 0 })
 const settings = reactive({
   telegram: { botToken: '', webhookSecret: '', webhookUrl: '', bot: null },
-  whatsappCloud: { accessToken: '', phoneNumberId: '', businessAccountId: '', verifyToken: '', appSecret: '', apiVersion: 'v25.0' },
+  whatsappCloud: { accessToken: '', phoneNumberId: '', displayPhoneNumber: '', businessAccountId: '', verifyToken: '', appSecret: '', apiVersion: 'v25.0' },
   whatsappPermission: { command: DEFAULT_WHATSAPP_PERMISSION_COMMAND },
+  telegramPermission: { command: DEFAULT_TELEGRAM_PERMISSION_COMMAND },
   email: { user: '', appPassword: '', from: '', fromName: '' },
 })
 
@@ -108,6 +114,7 @@ function applySettings(value = {}) {
   Object.assign(settings.whatsappCloud, source.whatsappCloud || source.whatsapp_cloud || source.meta || {})
   Object.assign(settings.email, source.email || source.gmail || {})
   settings.whatsappPermission.command = whatsappPermissionCommandFromSettings(value)
+  settings.telegramPermission.command = telegramPermissionCommandFromSettings(value)
 }
 
 function stopWhatsappWebPolling() {
@@ -217,6 +224,24 @@ async function saveWhatsappPermission() {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível salvar o comando de autorização.') })
   } finally {
     savingWhatsappPermission.value = false
+  }
+}
+
+async function saveTelegramPermission() {
+  const command = String(settings.telegramPermission.command || '').trim()
+  if (!command) {
+    $q.notify({ type: 'warning', message: 'Informe o comando que abre o onboarding do Telegram.' })
+    return
+  }
+  savingTelegramPermission.value = true
+  try {
+    const result = await app.saveSettings({ telegramPermission: { command } })
+    settings.telegramPermission.command = telegramPermissionCommandFromSettings(result)
+    $q.notify({ type: 'positive', message: 'Comando de onboarding do Telegram salvo.' })
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível salvar o comando do Telegram.') })
+  } finally {
+    savingTelegramPermission.value = false
   }
 }
 
@@ -513,7 +538,21 @@ onBeforeUnmount(() => {
               <q-icon name="verified_user" />
               <span>Use o mesmo <strong>Webhook verify token</strong> abaixo no painel da Meta e assine o campo <strong>messages</strong>.</span>
             </div>
-            <q-input v-model="settings.whatsappCloud.phoneNumberId" outlined label="Phone Number ID" />
+            <q-input
+              v-model="settings.whatsappCloud.phoneNumberId"
+              outlined
+              label="Phone Number ID"
+              hint="Identificador técnico fornecido pela Meta; não é o número de telefone"
+            />
+            <q-input
+              v-model="settings.whatsappCloud.displayPhoneNumber"
+              outlined
+              label="Número público do WhatsApp (com DDI)"
+              mask="+## (##) #####-####"
+              unmasked-value
+              placeholder="+55 (61) 98174-8795"
+              hint="Usado nos links wa.me dos convites. Salvo separado do Phone Number ID."
+            />
             <q-input v-model="settings.whatsappCloud.businessAccountId" outlined label="Business Account ID" />
             <q-input v-model.trim="settings.whatsappCloud.apiVersion" outlined label="Versão da Graph API" hint="Use v25.0 para reproduzir os exemplos deste ambiente de testes" />
             <q-input v-model="settings.whatsappCloud.accessToken" outlined type="password" label="Access token" autocomplete="off" />
@@ -569,7 +608,7 @@ onBeforeUnmount(() => {
           />
           <template v-else-if="whatsappWebReady">
             <q-icon name="phonelink_lock" />
-            <div><strong>Sessão autenticada</strong><span>Chats e respostas estão sincronizados em tempo real.</span></div>
+            <div><strong>Sessão autenticada</strong><span>Novas mensagens autorizadas aparecem em tempo real.</span></div>
           </template>
           <template v-else-if="whatsappWebAttemptActive">
             <q-spinner color="primary" size="48px" />
@@ -627,15 +666,44 @@ onBeforeUnmount(() => {
             :disable="!whatsappWebReady"
           />
         </div>
-        <p class="whatsapp-web-footnote">O WhatsApp Web monitora todas as conversas diretas. A resposta só é liberada para contatos autorizados e este canal não participa de notificações em massa.</p>
+        <p class="whatsapp-web-footnote">O WhatsApp Web mostra somente mensagens novas recebidas após a conexão. Interações sem permissão ficam em uma inbox temporária e somente para leitura; não há importação de chats ou histórico.</p>
       </q-card>
     </section>
+
+    <q-card flat class="glass-card section-card whatsapp-permission-card q-mb-lg">
+      <div class="whatsapp-permission-card__icon"><q-icon name="send_to_mobile" /></div>
+      <div class="whatsapp-permission-card__copy">
+        <h2 class="section-title">Onboarding automático do Telegram</h2>
+        <p class="section-copy">Quando o usuário enviar este comando ao bot, ele será autorizado e receberá um menu com vínculo seguro de telefone, acesso ao Meu perfil e Ajuda. O comando dinâmico do WhatsApp também continua válido no Telegram e abre o mesmo menu.</p>
+        <code>START_VERIFY_TELEGRAM_PERMISSION</code>
+      </div>
+      <q-input
+        v-model="settings.telegramPermission.command"
+        outlined
+        label="Comando do onboarding Telegram"
+        placeholder="/verify-me"
+        hint="Pode ser alterado; /notify-me permanece dinâmico conforme a configuração do WhatsApp"
+        maxlength="100"
+        counter
+        class="whatsapp-permission-card__input"
+        @keydown.enter.prevent="saveTelegramPermission"
+      />
+      <q-btn
+        color="primary"
+        unelevated
+        no-caps
+        icon="save"
+        label="Salvar comando Telegram"
+        :loading="savingTelegramPermission"
+        @click="saveTelegramPermission"
+      />
+    </q-card>
 
     <q-card flat class="glass-card section-card whatsapp-permission-card q-mb-lg">
       <div class="whatsapp-permission-card__icon"><q-icon name="how_to_reg" /></div>
       <div class="whatsapp-permission-card__copy">
         <h2 class="section-title">Autorização automática de contatos do WhatsApp</h2>
-        <p class="section-copy">Toda interação recebida pelo WhatsApp Web ou Cloud identifica e atualiza o contato sem duplicação. Quando este texto exato chega por qualquer uma das integrações WhatsApp, o sistema autoriza Web e Cloud para o mesmo contato. A integração já identificada é liberada imediatamente; a outra é liberada quando sua identidade real existir. As permissões continuam separadas para ajustes e revogações individuais.</p>
+        <p class="section-copy">No WhatsApp Web, mensagens comuns de um remetente desconhecido aparecem temporariamente no monitor, sem criar contato, consentimento ou aviso de novo usuário. O contato só é cadastrado automaticamente quando envia este texto exato. Quando o comando chega pelo Web ou Cloud, a conversa pendente é associada sem duplicar mensagens e o sistema autoriza as duas integrações para o mesmo contato. A integração já identificada é liberada imediatamente; a outra é liberada quando sua identidade real existir. As permissões continuam separadas para ajustes e revogações individuais.</p>
         <code>START_NOTIFY_WHATSAPP_PERMISSION</code>
       </div>
       <q-input

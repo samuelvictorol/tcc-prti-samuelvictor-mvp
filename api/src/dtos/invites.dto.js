@@ -1,10 +1,10 @@
-const { z, idParams, booleanQuery, paginationQuery, inviteUrl } = require('./common.dto');
+const { z, idParams, booleanQuery, paginationQuery, inviteUrl, publicHttpsUrl } = require('./common.dto');
 const { DELIVERY_CHANNELS } = require('../enums/channels');
 
 const inviteBody = z.object({
-  slug: z.string().min(3).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  title: z.string().min(1).max(200),
+  title: z.string().trim().min(1).max(200),
   description: z.string().max(2000).nullish(),
+  iconeUrl: publicHttpsUrl.nullish(),
   links: z.array(z.object({
     label: z.string().min(1).max(100),
     url: inviteUrl,

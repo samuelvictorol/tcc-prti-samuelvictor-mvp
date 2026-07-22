@@ -1,6 +1,7 @@
 const Conversation = require('../models/conversation.model');
 const ConversationMessage = require('../models/conversation-message.model');
 const ApiError = require('../utils/api-error');
+const { env } = require('../config/env');
 const { encrypt, decrypt, searchHash } = require('../services/crypto.service');
 const { parsePagination, pageResult } = require('../utils/pagination');
 const socketService = require('../services/socket.service');
@@ -36,6 +37,8 @@ function serializeConversation(conversation) {
     } : null,
     unreadCount: value.unreadCount || 0,
     messageCount: value.messageCount || 0,
+    retentionUntil: value.retentionUntil || null,
+    pendingRegistration: value.channel === 'whatsapp_web' && !value.contact,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt
   };
@@ -64,6 +67,10 @@ function serializeMessage(message) {
 function normalizeDate(value) {
   const date = value instanceof Date ? value : new Date(value || Date.now());
   return Number.isNaN(date.getTime()) ? new Date() : date;
+}
+
+function whatsappWebRetentionUntil(now = Date.now()) {
+  return new Date(now + env.whatsappWebMessageRetentionDays * 24 * 60 * 60 * 1000);
 }
 
 function conversationAvatar(value) {
@@ -231,6 +238,7 @@ async function record(input) {
     };
   }
   const activityVersion = Number(reserved.activityVersion || 0);
+  const retentionUntil = normalized.channel === 'whatsapp_web' ? whatsappWebRetentionUntil() : undefined;
   const messageValues = {
     conversation: conversation._id,
     contact: normalized.contactId,
@@ -243,6 +251,7 @@ async function record(input) {
     type: normalized.type,
     hasMedia: Boolean(normalized.hasMedia),
     sentAt: normalized.sentAt,
+    retentionUntil,
     activityVersion,
     metadataEncrypted: normalized.metadata ? encrypt(normalized.metadata) : undefined
   };
@@ -260,7 +269,8 @@ async function record(input) {
       lastMessagePreviewEncrypted: encrypt(normalized.body.slice(0, 240)),
       lastMessageDirection: normalized.direction,
       lastMessageType: normalized.type,
-      lastMessageAt: normalized.sentAt
+      lastMessageAt: normalized.sentAt,
+      ...(retentionUntil ? { retentionUntil } : {})
     },
     $inc: {
       messageCount: 1,
@@ -311,6 +321,31 @@ async function recordOutbound(input) {
 async function upsertConversation(input) {
   const normalized = normalizeInput({ ...input, body: '', direction: 'inbound' });
   const conversation = await findOrCreateConversation(normalized);
+  const result = serializeConversation(conversation);
+  socketService.emit('conversations:updated', { conversation: result });
+  return result;
+}
+
+async function attachContact(channel, externalId, contactId, profile = {}) {
+  if (!contactId) throw new ApiError(422, 'Contato obrigatorio para associar conversa');
+  const normalized = normalizeInput({ channel, externalId, body: '', direction: 'inbound' });
+  const set = { contact: contactId };
+  if (profile.displayName) set.displayNameEncrypted = encrypt(String(profile.displayName).slice(0, 200));
+  if (profile.avatarUrl) set.avatarUrlEncrypted = encrypt(conversationAvatar(profile.avatarUrl));
+  if (normalized.channel === 'whatsapp_web') set.retentionUntil = whatsappWebRetentionUntil();
+  const conversation = await Conversation.findOneAndUpdate(
+    { channel: normalized.channel, externalIdHash: searchHash(normalized.externalId) },
+    { $set: set },
+    { new: true }
+  ).select(CONVERSATION_SECRET_SELECT);
+  if (!conversation) return null;
+  await ConversationMessage.updateMany(
+    {
+      conversation: conversation._id,
+      $or: [{ contact: { $exists: false } }, { contact: null }]
+    },
+    { $set: { contact: contactId } }
+  );
   const result = serializeConversation(conversation);
   socketService.emit('conversations:updated', { conversation: result });
   return result;
@@ -387,11 +422,18 @@ async function clearHistory(id) {
     ]
   });
   socketService.emit('conversation:history-removed', { conversationId: String(id) });
-  return { id: String(id), historyRemoved: true, removedMessages, conversationPreserved: true, contactPreserved: true };
+  return {
+    id: String(id),
+    historyRemoved: true,
+    removedMessages,
+    conversationPreserved: true,
+    contactPreserved: Boolean(clearedConversation.contact),
+    pendingRegistration: clearedConversation.channel === 'whatsapp_web' && !clearedConversation.contact
+  };
 }
 
 async function remove(id) {
-  await getRawById(id);
+  const existing = await getRawById(id);
   const nextVersion = { $add: [{ $ifNull: ['$activityVersion', 0] }, 1] };
   const removedConversation = await Conversation.findOneAndUpdate(
     { _id: id },
@@ -422,7 +464,10 @@ async function remove(id) {
   });
   return {
     id: String(id), removed: true, hiddenUntilNextInbound: true,
-    removedMessages, contactPreserved: true, groupPreserved: true
+    removedMessages,
+    contactPreserved: Boolean(existing.contact),
+    groupPreserved: Boolean(existing.group),
+    pendingRegistration: existing.channel === 'whatsapp_web' && !existing.contact
   };
 }
 
@@ -440,7 +485,7 @@ async function visibleExternalIds(channel, externalIds = []) {
 }
 
 module.exports = {
-  record, recordInbound, recordOutbound, upsertConversation, list, listMessages, markRead, clearHistory, remove,
+  record, recordInbound, recordOutbound, upsertConversation, attachContact, list, listMessages, markRead, clearHistory, remove,
   serializeConversation, serializeMessage, visibleExternalIds, MAX_MESSAGES_PER_CONVERSATION, MAX_BODY_LENGTH,
-  _trimHistory: trimHistory
+  whatsappWebRetentionUntil, _trimHistory: trimHistory
 };

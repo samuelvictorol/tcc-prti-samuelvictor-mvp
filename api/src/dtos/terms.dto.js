@@ -4,7 +4,7 @@ const termBody = z.object({
   type: z.enum(['terms_of_use', 'terms_of_service', 'privacy_policy']),
   title: z.string().min(1).max(200),
   content: z.string().min(1).max(1000000),
-  version: z.string().min(1).max(40),
+  version: z.string().min(1).max(40).optional(),
   effectiveAt: z.coerce.date().nullish(),
   status: z.enum(['draft', 'published', 'archived']).optional()
 });

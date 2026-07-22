@@ -2,6 +2,17 @@ function payloadOf(source) {
   return source?.data?.data ?? source?.data ?? source ?? {}
 }
 
+export const DEFAULT_TELEGRAM_PERMISSION_COMMAND = '/verify-me'
+
+export function telegramPermissionCommandFromSettings(source = {}) {
+  const payload = payloadOf(source)
+  const configuration = payload.configuration || payload.settings || payload
+  const command = configuration.telegramPermission?.command
+    || configuration.telegram_permission?.command
+    || configuration.telegram?.permissionCommand
+  return String(command || DEFAULT_TELEGRAM_PERMISSION_COMMAND).trim() || DEFAULT_TELEGRAM_PERMISSION_COMMAND
+}
+
 function cleanUsername(value) {
   const username = String(value || '').trim().replace(/^@/, '')
   return username || null

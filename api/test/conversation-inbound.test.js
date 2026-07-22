@@ -10,6 +10,14 @@ const whatsappWebService = require('../src/services/whatsapp-web.service');
 const telegramManager = require('../src/managers/telegram.manager');
 const whatsappWebManager = require('../src/managers/whatsapp-web.manager');
 
+const originalWhatsappWebSnapshot = whatsappWebService.snapshot;
+test.beforeEach(() => {
+  whatsappWebService.snapshot = () => ({ initialized: true, ready: true, state: 'ready' });
+});
+test.afterEach(() => {
+  whatsappWebService.snapshot = originalWhatsappWebSnapshot;
+});
+
 test('Telegram cria contato, conversa e aviso administrativo somente no primeiro inbound', async (context) => {
   const originals = {
     setting: settingsManager.getValue,
@@ -73,6 +81,7 @@ test('WhatsApp Web cadastra chat privado com o comando mesmo quando getChat do p
     find: contactsManager.findByChannelAddress,
     findByPhone: contactsManager.findByChannelOrPhone,
     upsert: contactsManager.upsertFromChannel,
+    attach: conversationsManager.attachContact,
     log: logsManager.create,
     record: conversationsManager.recordInbound,
     notify: adminNotificationsManager.create
@@ -83,6 +92,7 @@ test('WhatsApp Web cadastra chat privado com o comando mesmo quando getChat do p
     contactsManager.findByChannelAddress = originals.find;
     contactsManager.findByChannelOrPhone = originals.findByPhone;
     contactsManager.upsertFromChannel = originals.upsert;
+    conversationsManager.attachContact = originals.attach;
     logsManager.create = originals.log;
     conversationsManager.recordInbound = originals.record;
     adminNotificationsManager.create = originals.notify;
@@ -95,6 +105,11 @@ test('WhatsApp Web cadastra chat privado com o comando mesmo quando getChat do p
   contactsManager.upsertFromChannel = async (input) => {
     contactInput = input;
     return { id: '507f1f77bcf86cd799439012', displayName: 'Bruno' };
+  };
+  let attached;
+  conversationsManager.attachContact = async (...args) => {
+    attached = args;
+    return { id: '507f1f77bcf86cd799439022', contactId: '507f1f77bcf86cd799439012' };
   };
   logsManager.create = async () => ({});
   let conversationInput;
@@ -127,13 +142,18 @@ test('WhatsApp Web cadastra chat privado com o comando mesmo quando getChat do p
   assert.equal(contactInput.metadata.permissionCommandReceivedVia, 'whatsapp_web');
   assert.equal(contactInput.metadata.sharedWhatsappConsent, true);
   assert.equal(contactInput.metadata.chatId, '556199999999@c.us');
+  assert.deepEqual(attached.slice(0, 3), [
+    'whatsapp_web',
+    '556199999999@c.us',
+    '507f1f77bcf86cd799439012'
+  ]);
   assert.equal(conversationInput.externalId, '556199999999@c.us');
   assert.equal(conversationInput.contactId, '507f1f77bcf86cd799439012');
   assert.equal(notices.length, 1);
   assert.equal(notices[0].channel, 'whatsapp_web');
 });
 
-test('WhatsApp Web salva contato e conversa sem liberar resposta antes do comando', async (context) => {
+test('WhatsApp Web exibe inbox temporaria de desconhecido sem criar contato ou consentimento', async (context) => {
   const originals = {
     profile: whatsappWebService.getProfilePicUrl,
     permission: settingsManager.isWhatsappPermissionCommand,
@@ -157,29 +177,29 @@ test('WhatsApp Web salva contato e conversa sem liberar resposta antes do comand
     socketService.emit = originals.emit;
   });
   settingsManager.isWhatsappPermissionCommand = async () => false;
-  whatsappWebService.getProfilePicUrl = async () => 'https://cdn.example/pending.jpg';
+  let profileCalls = 0;
+  whatsappWebService.getProfilePicUrl = async () => { profileCalls += 1; return 'https://cdn.example/pending.jpg'; };
   contactsManager.findByChannelAddress = async () => null;
   contactsManager.findByChannelOrPhone = async () => null;
-  let contactInput;
-  contactsManager.upsertFromChannel = async (input) => {
-    contactInput = input;
-    return {
-      id: '507f1f77bcf86cd799439013',
-      displayName: 'Contato pendente',
-      channels: [{ channel: 'whatsapp_web', authorized: false, consentStatus: 'unknown' }],
-      upsertState: { created: true, identityAdded: true }
-    };
-  };
-  let conversationInput;
+  let contactWrites = 0;
+  contactsManager.upsertFromChannel = async () => { contactWrites += 1; return {}; };
+  let conversationWrites = 0;
+  let pendingInput;
   conversationsManager.recordInbound = async (input) => {
-    conversationInput = input;
-    return { conversation: { id: '507f1f77bcf86cd799439023' }, message: { id: '507f1f77bcf86cd799439024' }, duplicate: false };
+    conversationWrites += 1;
+    pendingInput = input;
+    return {
+      conversation: { id: '507f1f77bcf86cd799439066', channel: 'whatsapp_web', contactId: null },
+      message: { id: '507f1f77bcf86cd799439067', body: input.body },
+      duplicate: false
+    };
   };
   let notices = 0;
   adminNotificationsManager.create = async () => { notices += 1; return {}; };
-  const actions = [];
-  logsManager.create = async (input) => { actions.push(input.action); return {}; };
-  socketService.emit = () => undefined;
+  let logs = 0;
+  logsManager.create = async () => { logs += 1; return {}; };
+  const socketEvents = [];
+  socketService.emit = (event, payload) => { socketEvents.push({ event, payload }); };
 
   const result = await whatsappWebManager.processIncoming({
     fromMe: false,
@@ -192,228 +212,292 @@ test('WhatsApp Web salva contato e conversa sem liberar resposta antes do comand
   });
 
   assert.equal(result.ignored, false);
+  assert.equal(result.pendingRegistration, true);
   assert.equal(result.permissionRequired, true);
-  assert.equal(contactInput.authorize, false);
-  assert.equal(contactInput.consentStatus, undefined);
-  assert.equal(contactInput.avatarUrl, 'https://cdn.example/pending.jpg');
-  assert.equal(conversationInput.body, 'Ola, quero informacoes');
-  assert.equal(notices, 1);
-  assert.deepEqual(actions, ['contact.auto_created', 'message.received']);
+  assert.equal(profileCalls, 1);
+  assert.equal(contactWrites, 0);
+  assert.equal(conversationWrites, 1);
+  assert.equal(pendingInput.contactId, undefined);
+  assert.equal(pendingInput.externalId, '556188888888@c.us');
+  assert.equal(pendingInput.avatarUrl, 'https://cdn.example/pending.jpg');
+  assert.equal(notices, 0);
+  assert.equal(logs, 1);
+  assert.deepEqual(socketEvents.map((item) => item.event), [
+    'whatsapp_web:permission_required',
+    'whatsapp_web:message'
+  ]);
+  assert.equal(socketEvents[1].payload.entityId, null);
 });
 
-test('sincronizacao WhatsApp Web retropreenche somente chats individuais sem inventar mensagens', async (context) => {
-  const originals = {
-    setting: settingsManager.getValue,
-    listChats: whatsappWebService.listChats,
-    getMessages: whatsappWebService.getMessages,
-    find: contactsManager.findByChannelAddress,
-    upsertContact: contactsManager.upsertFromChannel,
-    upsertConversation: conversationsManager.upsertConversation,
-    visibleExternalIds: conversationsManager.visibleExternalIds,
-    log: logsManager.create,
-    notify: adminNotificationsManager.create
-  };
-  context.after(() => {
-    settingsManager.getValue = originals.setting;
-    whatsappWebService.listChats = originals.listChats;
-    whatsappWebService.getMessages = originals.getMessages;
-    contactsManager.findByChannelAddress = originals.find;
-    contactsManager.upsertFromChannel = originals.upsertContact;
-    conversationsManager.upsertConversation = originals.upsertConversation;
-    conversationsManager.visibleExternalIds = originals.visibleExternalIds;
-    logsManager.create = originals.log;
-    adminNotificationsManager.create = originals.notify;
-  });
-  settingsManager.getValue = async () => null;
-  whatsappWebService.listChats = async () => [
-    { id: '5511999@c.us', name: 'Ana', phone: '5511999', isGroup: false, imageUrl: 'https://cdn.example/ana.jpg' },
-    { id: '120@g.us', name: 'Equipe', isGroup: true, imageUrl: null }
-  ];
-  whatsappWebService.getMessages = async () => [];
-  contactsManager.findByChannelAddress = async () => ({
-    id: '507f1f77bcf86cd799439011',
-    displayName: 'Ana',
-    channels: [{ channel: 'whatsapp_web', address: '5511999@c.us', authorized: true, consentStatus: 'granted' }]
-  });
-  contactsManager.upsertFromChannel = async () => ({
-    id: '507f1f77bcf86cd799439011',
-    displayName: 'Ana',
-    upsertState: { created: false, identityAdded: false }
-  });
-  logsManager.create = async () => ({});
-  const notices = [];
-  adminNotificationsManager.create = async (input) => { notices.push(input); return input; };
-  const summaries = [];
-  conversationsManager.upsertConversation = async (input) => { summaries.push(input); return input; };
-  conversationsManager.visibleExternalIds = async (_channel, externalIds) => new Set(externalIds);
-
-  const result = await whatsappWebManager.syncChats();
-  assert.equal(result.contacts, 1);
-  assert.equal(result.recoveredMessages, 0);
-  assert.equal(result.failures, 0);
-  assert.equal(result.partial, false);
-  assert.equal(result.remaining, 0);
-  assert.equal(summaries.length, 1);
-  assert.equal(summaries[0].contactId, '507f1f77bcf86cd799439011');
-  assert.equal(summaries[0].isGroup, false);
-  assert.equal(notices.length, 0);
-});
-
-test('sync recupera comando de permissao perdido e mensagens seguintes sem exigir reenvio', async (context) => {
+test('WhatsApp Web descarta evento que disputa com desconexao antes do ready', async (context) => {
   const originals = {
     permission: settingsManager.isWhatsappPermissionCommand,
-    listChats: whatsappWebService.listChats,
-    getMessages: whatsappWebService.getMessages,
+    find: contactsManager.findByChannelAddress,
+    record: conversationsManager.recordInbound
+  };
+  context.after(() => {
+    settingsManager.isWhatsappPermissionCommand = originals.permission;
+    contactsManager.findByChannelAddress = originals.find;
+    conversationsManager.recordInbound = originals.record;
+  });
+  whatsappWebService.snapshot = () => ({ initialized: true, ready: false, state: 'disconnected' });
+  let sideEffects = 0;
+  settingsManager.isWhatsappPermissionCommand = async () => { sideEffects += 1; return true; };
+  contactsManager.findByChannelAddress = async () => { sideEffects += 1; return null; };
+  conversationsManager.recordInbound = async () => { sideEffects += 1; return {}; };
+
+  const result = await whatsappWebManager.processIncoming({
+    from: '556188888888@c.us',
+    body: '/notify-me',
+    id: { _serialized: 'event-after-disconnect' }
+  });
+
+  assert.deepEqual(result, { ignored: true, reason: 'session_not_ready' });
+  assert.equal(sideEffects, 0);
+});
+
+test('WhatsApp Web conhecido sem consentimento permanece visivel e sem direito de resposta', async (context) => {
+  const originals = {
+    profile: whatsappWebService.getProfilePicUrl,
+    permission: settingsManager.isWhatsappPermissionCommand,
+    find: contactsManager.findByChannelAddress,
+    findByPhone: contactsManager.findByChannelOrPhone,
+    upsert: contactsManager.upsertFromChannel,
+    record: conversationsManager.recordInbound,
+    log: logsManager.create,
+    notify: adminNotificationsManager.create,
+    emit: socketService.emit
+  };
+  context.after(() => {
+    whatsappWebService.getProfilePicUrl = originals.profile;
+    settingsManager.isWhatsappPermissionCommand = originals.permission;
+    contactsManager.findByChannelAddress = originals.find;
+    contactsManager.findByChannelOrPhone = originals.findByPhone;
+    contactsManager.upsertFromChannel = originals.upsert;
+    conversationsManager.recordInbound = originals.record;
+    logsManager.create = originals.log;
+    adminNotificationsManager.create = originals.notify;
+    socketService.emit = originals.emit;
+  });
+
+  settingsManager.isWhatsappPermissionCommand = async () => false;
+  let consentStatus = 'unknown';
+  const contact = () => ({
+    id: '507f1f77bcf86cd799439055',
+    channels: [{
+      channel: 'whatsapp_web',
+      address: '556177777777@c.us',
+      authorized: false,
+      consentStatus
+    }]
+  });
+  contactsManager.findByChannelAddress = async () => contact();
+  contactsManager.findByChannelOrPhone = async () => contact();
+  let profileCalls = 0;
+  whatsappWebService.getProfilePicUrl = async () => { profileCalls += 1; return null; };
+  const upserts = [];
+  contactsManager.upsertFromChannel = async (input) => {
+    upserts.push(input);
+    return { ...contact(), upsertState: { created: false, identityAdded: false } };
+  };
+  const records = [];
+  conversationsManager.recordInbound = async (input) => {
+    records.push(input);
+    return {
+      conversation: { id: `507f1f77bcf86cd7994390${records.length}1`, contactId: input.contactId },
+      message: { id: `507f1f77bcf86cd7994390${records.length}2` },
+      duplicate: false
+    };
+  };
+  let logs = 0;
+  logsManager.create = async () => { logs += 1; return {}; };
+  let notices = 0;
+  adminNotificationsManager.create = async () => { notices += 1; return {}; };
+  const socketEvents = [];
+  socketService.emit = (event) => { socketEvents.push(event); };
+
+  for (const status of ['unknown', 'revoked']) {
+    consentStatus = status;
+    const result = await whatsappWebManager.processIncoming({
+      from: '556177777777@c.us',
+      body: 'Mensagem comum',
+      id: { _serialized: `known-${status}` },
+      getContact: async () => ({ id: { _serialized: '556177777777@c.us' }, number: '556177777777' })
+    });
+    assert.equal(result.ignored, false);
+    assert.equal(result.permissionRequired, true);
+    assert.equal(result.pendingRegistration, false);
+  }
+  assert.equal(profileCalls, 2);
+  assert.equal(upserts.length, 2);
+  assert.ok(upserts.every((input) => input.authorize === false && input.consentStatus === undefined));
+  assert.equal(records.length, 2);
+  assert.ok(records.every((input) => input.contactId === '507f1f77bcf86cd799439055'));
+  assert.equal(logs, 2);
+  assert.equal(notices, 0);
+  assert.deepEqual(socketEvents, [
+    'whatsapp_web:permission_required', 'whatsapp_web:message',
+    'whatsapp_web:permission_required', 'whatsapp_web:message'
+  ]);
+});
+
+test('WhatsApp Web persiste e emite mensagem somente para identidade ja autorizada', async (context) => {
+  const originals = {
+    permission: settingsManager.isWhatsappPermissionCommand,
     profile: whatsappWebService.getProfilePicUrl,
     find: contactsManager.findByChannelAddress,
     findByPhone: contactsManager.findByChannelOrPhone,
     upsertContact: contactsManager.upsertFromChannel,
     record: conversationsManager.recordInbound,
-    upsertConversation: conversationsManager.upsertConversation,
     log: logsManager.create,
-    notify: adminNotificationsManager.create
+    notify: adminNotificationsManager.create,
+    emit: socketService.emit
   };
   context.after(() => {
     settingsManager.isWhatsappPermissionCommand = originals.permission;
-    whatsappWebService.listChats = originals.listChats;
-    whatsappWebService.getMessages = originals.getMessages;
     whatsappWebService.getProfilePicUrl = originals.profile;
     contactsManager.findByChannelAddress = originals.find;
     contactsManager.findByChannelOrPhone = originals.findByPhone;
     contactsManager.upsertFromChannel = originals.upsertContact;
     conversationsManager.recordInbound = originals.record;
-    conversationsManager.upsertConversation = originals.upsertConversation;
     logsManager.create = originals.log;
     adminNotificationsManager.create = originals.notify;
+    socketService.emit = originals.emit;
   });
 
-  settingsManager.isWhatsappPermissionCommand = async (value) => value === '/notify-me';
-  whatsappWebService.listChats = async () => [{
-    id: '274985348251713@lid', name: 'Samuel', phone: '556181748795', isGroup: false,
-    imageUrl: null, unreadCount: 1
-  }];
-  whatsappWebService.getMessages = async () => [
-    { id: 'out-before', fromMe: true, body: 'Mensagem enviada', type: 'chat', timestamp: 100 },
-    { id: 'permission-lost', fromMe: false, body: '/notify-me', type: 'chat', timestamp: 101 },
-    { id: 'after-permission', fromMe: false, body: 'Agora posso receber?', type: 'chat', timestamp: 102 }
-  ];
+  const chatId = '274985348251713@lid';
+  settingsManager.isWhatsappPermissionCommand = async () => false;
   whatsappWebService.getProfilePicUrl = async () => 'https://cdn.example/samuel.jpg';
-  let currentContact = null;
+  const currentContact = {
+    id: '507f1f77bcf86cd799439099',
+    displayName: 'Samuel',
+    channels: [{ channel: 'whatsapp_web', address: chatId, authorized: true, consentStatus: 'granted' }],
+    upsertState: { created: false, identityAdded: false }
+  };
   contactsManager.findByChannelAddress = async () => currentContact;
   contactsManager.findByChannelOrPhone = async () => currentContact;
+  let upsertInput;
   contactsManager.upsertFromChannel = async (input) => {
-    currentContact = {
-      id: '507f1f77bcf86cd799439099', displayName: input.displayName,
-      avatarUrl: input.avatarUrl,
-      channels: [{
-        channel: 'whatsapp_web', address: input.address, authorized: true,
-        consentStatus: 'granted', source: input.source
-      }],
-      upsertState: { created: !currentContact, identityAdded: !currentContact }
-    };
+    upsertInput = input;
     return currentContact;
   };
-  const recorded = [];
+  let recorded;
   conversationsManager.recordInbound = async (input) => {
-    recorded.push(input);
+    recorded = input;
     return {
       conversation: { id: '507f1f77bcf86cd799439088' },
       message: { id: '507f1f77bcf86cd799439077' },
       duplicate: false
     };
   };
-  conversationsManager.upsertConversation = async (input) => input;
   logsManager.create = async () => ({});
-  adminNotificationsManager.create = async () => ({});
+  let notices = 0;
+  adminNotificationsManager.create = async () => { notices += 1; return {}; };
+  const emitted = [];
+  socketService.emit = (event) => emitted.push(event);
 
-  const result = await whatsappWebManager.syncChats();
+  const result = await whatsappWebManager.processIncoming({
+    fromMe: false,
+    from: chatId,
+    body: 'Mensagem em tempo real',
+    type: 'chat',
+    timestamp: 102,
+    id: { _serialized: 'provider-live-1' },
+    getContact: async () => ({ id: { _serialized: chatId }, number: '556181748795', pushname: 'Samuel' })
+  });
 
-  assert.equal(result.contacts, 1);
-  assert.equal(result.recoveredMessages, 2);
-  assert.equal(result.failures, 0);
-  assert.equal(result.partial, false);
-  assert.equal(result.remaining, 0);
-  assert.deepEqual(recorded.map((item) => item.body), ['/notify-me', 'Agora posso receber?']);
-  assert.deepEqual(recorded.map((item) => item.providerMessageId), ['permission-lost', 'after-permission']);
-  assert.equal(currentContact.avatarUrl, 'https://cdn.example/samuel.jpg');
-  assert.equal(currentContact.channels[0].consentStatus, 'granted');
+  assert.equal(result.ignored, false);
+  assert.equal(result.permissionRequired, false);
+  assert.equal(upsertInput.authorize, true);
+  assert.equal(recorded.body, 'Mensagem em tempo real');
+  assert.equal(recorded.providerMessageId, 'provider-live-1');
+  assert.equal(notices, 0);
+  assert.ok(emitted.includes('whatsapp_web:message'));
 });
 
-test('sync salva chat com inbound sem comando e mantem permissao unknown', async (context) => {
+test('primeiro evento Web consome opt-in compartilhado pendente vindo do WhatsApp Cloud', async (context) => {
   const originals = {
     permission: settingsManager.isWhatsappPermissionCommand,
-    listChats: whatsappWebService.listChats,
-    getMessages: whatsappWebService.getMessages,
     profile: whatsappWebService.getProfilePicUrl,
     find: contactsManager.findByChannelAddress,
     findByPhone: contactsManager.findByChannelOrPhone,
-    upsertContact: contactsManager.upsertFromChannel,
+    upsert: contactsManager.upsertFromChannel,
     record: conversationsManager.recordInbound,
-    upsertConversation: conversationsManager.upsertConversation,
     log: logsManager.create,
     notify: adminNotificationsManager.create
   };
   context.after(() => {
     settingsManager.isWhatsappPermissionCommand = originals.permission;
-    whatsappWebService.listChats = originals.listChats;
-    whatsappWebService.getMessages = originals.getMessages;
     whatsappWebService.getProfilePicUrl = originals.profile;
     contactsManager.findByChannelAddress = originals.find;
     contactsManager.findByChannelOrPhone = originals.findByPhone;
-    contactsManager.upsertFromChannel = originals.upsertContact;
+    contactsManager.upsertFromChannel = originals.upsert;
     conversationsManager.recordInbound = originals.record;
-    conversationsManager.upsertConversation = originals.upsertConversation;
     logsManager.create = originals.log;
     adminNotificationsManager.create = originals.notify;
   });
+
   settingsManager.isWhatsappPermissionCommand = async () => false;
-  whatsappWebService.listChats = async () => [{
-    id: '556188888888@c.us', name: 'Contato pendente', phone: '556188888888', isGroup: false, imageUrl: null
-  }];
-  whatsappWebService.getMessages = async () => [
-    { id: 'pending-1', fromMe: false, body: 'Ola', type: 'chat', timestamp: 101 },
-    { id: 'pending-2', fromMe: false, body: 'Pode me ajudar?', type: 'chat', timestamp: 102 }
-  ];
   whatsappWebService.getProfilePicUrl = async () => null;
-  let currentContact = null;
-  contactsManager.findByChannelAddress = async () => currentContact;
-  contactsManager.findByChannelOrPhone = async () => currentContact;
+  contactsManager.findByChannelAddress = async () => null;
+  contactsManager.findByChannelOrPhone = async () => ({
+    id: '507f1f77bcf86cd799439044',
+    channels: [{ channel: 'whatsapp_cloud', address: '556181748795', authorized: true, consentStatus: 'granted' }],
+    pendingWhatsappConsents: [{ channel: 'whatsapp_web', status: 'granted', sourceChannel: 'whatsapp_cloud' }]
+  });
+  let upsertInput;
   contactsManager.upsertFromChannel = async (input) => {
-    const created = !currentContact;
-    currentContact = {
-      id: '507f1f77bcf86cd799439066',
-      displayName: input.displayName,
-      channels: [{ channel: 'whatsapp_web', address: input.address, authorized: false, consentStatus: 'unknown' }],
-      upsertState: { created, identityAdded: created }
+    upsertInput = input;
+    return {
+      id: '507f1f77bcf86cd799439044',
+      channels: [{ channel: 'whatsapp_web', address: input.address, authorized: true, consentStatus: 'granted' }],
+      upsertState: { created: false, identityAdded: true }
     };
-    return currentContact;
   };
-  const recorded = [];
-  conversationsManager.recordInbound = async (input) => {
-    recorded.push(input);
-    return { conversation: { id: '507f1f77bcf86cd799439067' }, message: { id: input.providerMessageId }, duplicate: false };
+  let recorded = 0;
+  conversationsManager.recordInbound = async () => {
+    recorded += 1;
+    return { conversation: { id: '507f1f77bcf86cd799439045' }, message: null, duplicate: false };
   };
-  conversationsManager.upsertConversation = async (input) => input;
   logsManager.create = async () => ({});
-  adminNotificationsManager.create = async () => ({});
+  let notices = 0;
+  adminNotificationsManager.create = async () => { notices += 1; return {}; };
 
-  const result = await whatsappWebManager.syncChats();
+  const result = await whatsappWebManager.processIncoming({
+    from: '274985348251713@lid',
+    body: 'Mensagem depois do opt-in Cloud',
+    id: { _serialized: 'provider-pending-cloud-1' },
+    getContact: async () => ({
+      id: { _serialized: '274985348251713@lid' },
+      number: '556181748795',
+      pushname: 'Samuel'
+    })
+  });
 
-  assert.equal(result.contacts, 1);
-  assert.equal(result.recoveredMessages, 2);
-  assert.equal(result.failures, 0);
-  assert.equal(result.partial, false);
-  assert.equal(result.remaining, 0);
-  assert.deepEqual(recorded.map((item) => item.body), ['Ola', 'Pode me ajudar?']);
-  assert.equal(currentContact.channels[0].authorized, false);
-  assert.equal(currentContact.channels[0].consentStatus, 'unknown');
+  assert.equal(result.ignored, false);
+  assert.equal(upsertInput.authorize, false);
+  assert.equal(upsertInput.consentStatus, undefined);
+  assert.equal(recorded, 1);
+  assert.equal(notices, 0);
+});
+
+test('rotas legadas de importacao e historico WhatsApp Web ficam explicitamente desativadas', async () => {
+  for (const operation of [
+    () => whatsappWebManager.chats(),
+    () => whatsappWebManager.messages('5511999999999@c.us', 100),
+    () => whatsappWebManager.syncChats()
+  ]) {
+    await assert.rejects(
+      operation,
+      (error) => error.statusCode === 410 && error.code === 'WHATSAPP_WEB_HISTORY_DISABLED'
+    );
+  }
 });
 
 test('monitor WhatsApp Web permite visualizar, mas bloqueia resposta ate o consentimento', async (context) => {
   const originals = {
     setting: settingsManager.getValue,
     snapshot: whatsappWebService.snapshot,
-    summary: whatsappWebService.getChatSummary,
     send: whatsappWebService.sendMessage,
     find: contactsManager.findByChannelAddress,
     log: logsManager.create,
@@ -422,7 +506,6 @@ test('monitor WhatsApp Web permite visualizar, mas bloqueia resposta ate o conse
   context.after(() => {
     settingsManager.getValue = originals.setting;
     whatsappWebService.snapshot = originals.snapshot;
-    whatsappWebService.getChatSummary = originals.summary;
     whatsappWebService.sendMessage = originals.send;
     contactsManager.findByChannelAddress = originals.find;
     logsManager.create = originals.log;
@@ -432,13 +515,6 @@ test('monitor WhatsApp Web permite visualizar, mas bloqueia resposta ate o conse
   const chatId = '5561999999999@c.us';
   settingsManager.getValue = async () => null;
   whatsappWebService.snapshot = () => ({ initialized: true, ready: true, state: 'ready' });
-  whatsappWebService.getChatSummary = async (value) => ({
-    id: value,
-    name: 'Ana',
-    phone: '5561999999999',
-    isGroup: false,
-    imageUrl: null
-  });
   let sends = 0;
   whatsappWebService.sendMessage = async (destination, text) => {
     sends += 1;

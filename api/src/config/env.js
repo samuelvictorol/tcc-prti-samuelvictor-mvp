@@ -1,4 +1,5 @@
 const path = require('node:path');
+const crypto = require('node:crypto');
 const dotenv = require('dotenv');
 
 dotenv.config({ path: process.env.DOTENV_PATH || path.resolve(process.cwd(), '.env') });
@@ -45,12 +46,28 @@ const env = {
   ipBlockAfter: number('IP_BLOCK_AFTER', 20),
   ipBlockSeconds: number('IP_BLOCK_SECONDS', 900),
   whatsappWebSessionMaxAgeDays: number('WHATSAPP_WEB_SESSION_MAX_AGE_DAYS', 90),
+  whatsappWebMessageRetentionDays: Math.min(3650, Math.max(1, Math.trunc(number('WHATSAPP_WEB_MESSAGE_RETENTION_DAYS', 90)))),
   whatsappWebAutoInit: boolean('WHATSAPP_WEB_AUTO_INIT'),
   whatsappWebAuthPath: process.env.WHATSAPP_WEB_AUTH_PATH || '.wwebjs_auth',
   puppeteerExecutablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
   whatsappCloudApiVersion: process.env.WHATSAPP_CLOUD_API_VERSION || 'v25.0',
-  startNotifyWhatsappPermission: process.env.START_NOTIFY_WHATSAPP_PERMISSION || '/notify-me'
+  startNotifyWhatsappPermission: process.env.START_NOTIFY_WHATSAPP_PERMISSION || '/notify-me',
+  startVerifyTelegramPermission: process.env.START_VERIFY_TELEGRAM_PERMISSION || '/verify-me'
 };
+
+// Segredo com separacao de dominio: mesmo sem uma variavel adicional, tokens
+// de contato nunca compartilham literalmente a chave dos administradores.
+env.profileJwtSecret = process.env.PROFILE_JWT_SECRET || crypto.createHmac('sha256', env.jwtAccessSecret)
+  .update('notify-app:contact-profile:' + env.searchHashKey)
+  .digest('hex');
+env.profileJwtTtl = process.env.PROFILE_JWT_TTL || '10m';
+env.profileCodeTtlSeconds = number('PROFILE_CODE_TTL_SECONDS', 600);
+env.profileCodeMaxAttempts = number('PROFILE_CODE_MAX_ATTEMPTS', 5);
+env.profileCodeMaxRequests = number('PROFILE_CODE_MAX_REQUESTS', 5);
+env.profileCodeWindowSeconds = number('PROFILE_CODE_WINDOW_SECONDS', 3600);
+env.profileCodeResendSeconds = number('PROFILE_CODE_RESEND_SECONDS', 60);
+env.telegramBotUsername = process.env.TELEGRAM_BOT_USERNAME || null;
+env.whatsappCloudDisplayPhoneNumber = process.env.WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER || null;
 
 const productionRequired = [
   ['JWT_ACCESS_SECRET', env.jwtAccessSecret],

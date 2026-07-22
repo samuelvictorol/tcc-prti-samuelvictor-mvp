@@ -3,7 +3,14 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
-import { errorMessage, fetchAll, http } from '../services/http.js'
+import { errorMessage, fetchAll, http, unwrap } from '../services/http.js'
+import {
+  defaultInviteActionLink,
+  safeInviteIconUrl,
+  slugifyInviteTitle,
+} from '../services/public-invites.js'
+import { telegramBotIdentity } from '../services/telegram.js'
+import { DEFAULT_WHATSAPP_PERMISSION_COMMAND } from '../services/whatsapp-web.js'
 
 const $q = useQuasar()
 const loading = ref(false)
@@ -12,20 +19,36 @@ const dialog = ref(false)
 const editingId = ref(null)
 const invites = ref([])
 const contacts = ref([])
+const previewIconFailed = ref(false)
+const failedInviteIcons = ref(new Set())
+const inviteActionContext = reactive({
+  whatsappPhoneNumber: '',
+  whatsappPermissionCommand: DEFAULT_WHATSAPP_PERMISSION_COMMAND,
+  telegramBotUsername: '',
+})
+
+function defaultLinks() {
+  return [
+    defaultInviteActionLink('whatsapp_cloud', inviteActionContext),
+    defaultInviteActionLink('telegram', inviteActionContext),
+  ]
+}
 
 const emptyForm = () => ({
   title: '',
   slug: '',
   description: '',
+  iconeUrl: '',
   gradientStart: '#82F8E6',
   gradientEnd: '#35BCA4',
   active: true,
   recipientContact: null,
-  links: [{ label: 'Iniciar Telegram', url: '', channel: 'telegram', active: true }],
+  links: defaultLinks(),
 })
 const form = reactive(emptyForm())
 
 const previewGradient = computed(() => `linear-gradient(145deg, ${safeColor(form.gradientStart)}, ${safeColor(form.gradientEnd)})`)
+const previewIcon = computed(() => previewIconFailed.value ? '' : safeInviteIconUrl(form.iconeUrl))
 const contactOptions = computed(() => contacts.value.map((contact) => ({
   label: contact.displayName || contact.name || contact.email || contact.phone || 'Contato',
   value: contact.id || contact._id,
@@ -43,16 +66,39 @@ function publicUrl(invite = form) {
   return invite.publicUrl || `${window.location.origin}/invite/${invite.slug}`
 }
 
-function slugify(value) {
-  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+function inviteIcon(invite) {
+  return failedInviteIcons.value.has(recordId(invite)) ? '' : safeInviteIconUrl(invite?.iconeUrl)
 }
 
-function onTitleInput() {
-  if (!editingId.value && !form.slug) form.slug = slugify(form.title)
+function markInviteIconFailed(invite) {
+  failedInviteIcons.value = new Set([...failedInviteIcons.value, recordId(invite)])
+}
+
+function onTitleInput(value) {
+  form.slug = slugifyInviteTitle(value)
+}
+
+function onIconInput() {
+  previewIconFailed.value = false
+}
+
+function iconUrlRule(value) {
+  return !String(value || '').trim() || Boolean(safeInviteIconUrl(value)) || 'Informe uma URL HTTPS pública e segura'
+}
+
+function actionLinkHint(link) {
+  if (link.channel === 'telegram' && !link.url) return 'Bot não identificado. Configure e valide o token do Telegram na tela Início.'
+  if (link._generated && (link.channel === 'whatsapp_cloud' || link.channel === 'whatsapp_web')) {
+    return inviteActionContext.whatsappPhoneNumber
+      ? 'Gerada com o número público e o comando de autorização atuais; você pode editar.'
+      : 'Sem número público configurado: o link abre o seletor do WhatsApp com o comando preenchido.'
+  }
+  return link._generated ? 'Gerada pelas configurações atuais; você pode editar.' : undefined
 }
 
 async function loadInvites() {
   loading.value = true
+  const defaultsPromise = loadInviteDefaults()
   try {
     const [inviteItems, contactItems] = await Promise.all([
       fetchAll('/invites', { preferredKey: 'invites' }),
@@ -63,8 +109,38 @@ async function loadInvites() {
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível carregar os convites.') })
   } finally {
+    await defaultsPromise
     loading.value = false
   }
+}
+
+function refreshGeneratedLinks() {
+  form.links.forEach((link) => {
+    if (!link._generated) return
+    Object.assign(link, defaultInviteActionLink(link.channel, inviteActionContext))
+  })
+}
+
+async function loadInviteDefaults() {
+  const [settingsResult, telegramResult] = await Promise.allSettled([
+    http.get('/settings'),
+    http.get('/telegram/status', { params: { probe: true } }),
+  ])
+  if (settingsResult.status === 'fulfilled') {
+    const payload = unwrap(settingsResult.value) || {}
+    const configuration = payload.configuration || payload.settings || payload
+    inviteActionContext.whatsappPhoneNumber = configuration.whatsappCloud?.displayPhoneNumber
+      || configuration.whatsapp_cloud?.displayPhoneNumber
+      || ''
+    inviteActionContext.whatsappPermissionCommand = configuration.whatsappPermission?.command
+      || configuration.whatsapp_permission?.command
+      || configuration.whatsappCloud?.permissionCommand
+      || DEFAULT_WHATSAPP_PERMISSION_COMMAND
+  }
+  if (telegramResult.status === 'fulfilled') {
+    inviteActionContext.telegramBotUsername = telegramBotIdentity(unwrap(telegramResult.value))?.username || ''
+  }
+  refreshGeneratedLinks()
 }
 
 function openInvite(invite) {
@@ -73,24 +149,35 @@ function openInvite(invite) {
     title: invite.title || '',
     slug: invite.slug || '',
     description: invite.description || '',
+    iconeUrl: invite.iconeUrl || '',
     gradientStart: invite.gradientStart || invite.theme?.gradientStart || '#82F8E6',
     gradientEnd: invite.gradientEnd || invite.theme?.gradientEnd || '#35BCA4',
     active: invite.active !== false,
     recipientContact: typeof invite.recipientContact === 'object'
       ? (invite.recipientContact?.id || invite.recipientContact?._id)
       : (invite.recipientContact || null),
-    links: (invite.links || []).map((link) => ({
+    links: (invite.links || []).length ? invite.links.map((link) => ({
       label: link.label || link.title || '',
       url: link.url || link.linkUrl || link.link_url || '',
       channel: link.channel || link.type || 'other',
       active: link.active ?? link.enabled ?? true,
-    })),
+      _generated: false,
+    })) : defaultLinks(),
   } : {})
+  previewIconFailed.value = false
   dialog.value = true
 }
 
 function addLink() {
-  form.links.push({ label: '', url: '', channel: 'other', active: true })
+  form.links.push(defaultInviteActionLink('other', inviteActionContext))
+}
+
+function onLinkChannelChange(link, channel) {
+  Object.assign(link, defaultInviteActionLink(channel, inviteActionContext))
+}
+
+function markLinkEdited(link) {
+  link._generated = false
 }
 
 function removeLink(index) {
@@ -101,8 +188,8 @@ async function save() {
   saving.value = true
   const payload = {
     title: form.title,
-    slug: slugify(form.slug),
     description: form.description,
+    iconeUrl: safeInviteIconUrl(form.iconeUrl) || null,
     active: form.active,
     recipientContact: form.recipientContact || null,
     gradientStart: safeColor(form.gradientStart),
@@ -168,7 +255,10 @@ onMounted(loadInvites)
     <section v-else class="invite-grid">
       <q-card v-for="invite in invites" :key="recordId(invite)" flat class="glass-card invite-card">
         <div class="invite-cover" :style="{ background: `linear-gradient(145deg, ${safeColor(invite.gradientStart || invite.theme?.gradientStart)}, ${safeColor(invite.gradientEnd || invite.theme?.gradientEnd)})` }">
-          <q-icon name="notifications_active" size="34px" />
+          <div class="invite-cover-icon">
+            <img v-if="inviteIcon(invite)" :src="inviteIcon(invite)" :alt="`Ícone de ${invite.title}`" referrerpolicy="no-referrer" @error="markInviteIconFailed(invite)" />
+            <q-icon v-else name="notifications_active" size="29px" />
+          </div>
           <q-badge :color="invite.active === false ? 'grey-7' : 'positive'" :label="invite.active === false ? 'Inativo' : 'Publicado'" />
         </div>
         <q-card-section>
@@ -181,17 +271,18 @@ onMounted(loadInvites)
       </q-card>
     </section>
 
-    <q-dialog v-model="dialog" persistent maximized-on-mobile>
+    <q-dialog v-model="dialog" persistent :maximized="$q.screen.lt.md">
       <q-card class="invite-dialog">
-        <q-card-section class="row items-center q-px-lg"><div><div class="text-h6 text-weight-bold">{{ editingId ? 'Editar convite' : 'Novo convite' }}</div><div class="text-caption text-muted">A prévia reflete a página pública.</div></div><q-space /><q-btn v-close-popup flat round dense icon="close" /></q-card-section>
+        <q-card-section class="row items-center q-px-lg invite-dialog__header"><div><div class="text-h6 text-weight-bold">{{ editingId ? 'Editar convite' : 'Novo convite' }}</div><div class="text-caption text-muted">A prévia reflete a página pública.</div></div><q-space /><q-btn v-close-popup flat round dense icon="close" /></q-card-section>
         <q-separator />
-        <q-form @submit.prevent="save">
+        <q-form class="invite-dialog__form" @submit.prevent="save">
           <q-card-section class="invite-builder q-pa-lg">
             <section>
               <div class="form-grid">
                 <q-input v-model.trim="form.title" outlined label="Título *" :rules="[(v) => Boolean(v) || 'Informe o título']" @update:model-value="onTitleInput" />
-                <q-input v-model.trim="form.slug" outlined label="Slug *" prefix="/invite/" :rules="[(v) => Boolean(v) || 'Informe o slug']" />
+                <q-input v-model="form.slug" outlined readonly label="Slug automático" prefix="/invite/" hint="A API adiciona um sufixo automaticamente se este endereço já estiver em uso" />
                 <q-input v-model="form.description" outlined type="textarea" label="Descrição" class="full-span" />
+                <q-input v-model.trim="form.iconeUrl" outlined type="url" label="URL HTTPS do ícone" hint="Imagem pública usada no lugar do ícone padrão" :rules="[iconUrlRule]" class="full-span" @update:model-value="onIconInput" />
                 <q-input v-model="form.gradientStart" outlined label="Cor inicial" type="color" />
                 <q-input v-model="form.gradientEnd" outlined label="Cor final" type="color" />
                 <q-toggle v-model="form.active" label="Página publicada" class="full-span" />
@@ -199,15 +290,35 @@ onMounted(loadInvites)
               </div>
               <div class="row items-center q-mt-lg q-mb-sm"><div class="text-weight-bold">Links de ação</div><q-space /><q-btn flat color="primary" no-caps icon="add" label="Adicionar" @click="addLink" /></div>
               <div v-for="(link, index) in form.links" :key="index" class="link-row">
-                <q-input v-model.trim="link.label" dense outlined label="Título" />
-                <q-input v-model.trim="link.url" dense outlined type="url" label="URL" />
-                <q-select v-model="link.channel" dense outlined emit-value map-options :options="[{label:'Telegram',value:'telegram'},{label:'WhatsApp Web',value:'whatsapp_web'},{label:'WhatsApp Cloud',value:'whatsapp_cloud'},{label:'Email',value:'email'},{label:'Outro',value:'other'}]" label="Canal" />
+                <q-input v-model.trim="link.label" dense outlined label="Título" @update:model-value="markLinkEdited(link)" />
+                <q-input
+                  v-model.trim="link.url"
+                  dense
+                  outlined
+                  type="url"
+                  label="URL"
+                  :hint="actionLinkHint(link)"
+                  @update:model-value="markLinkEdited(link)"
+                />
+                <q-select
+                  v-model="link.channel"
+                  dense
+                  outlined
+                  emit-value
+                  map-options
+                  :options="[{label:'Telegram',value:'telegram'},{label:'WhatsApp Web',value:'whatsapp_web'},{label:'WhatsApp Cloud',value:'whatsapp_cloud'},{label:'Email',value:'email'},{label:'Outro',value:'other'}]"
+                  label="Canal"
+                  @update:model-value="onLinkChannelChange(link, $event)"
+                />
                 <q-btn flat round dense color="negative" icon="delete" aria-label="Remover link" @click="removeLink(index)" />
               </div>
             </section>
 
             <aside class="public-preview" :style="{ background: previewGradient }">
-              <div class="preview-logo"><q-icon name="notifications_active" /></div>
+              <div class="preview-logo">
+                <img v-if="previewIcon" :src="previewIcon" alt="Prévia do ícone" referrerpolicy="no-referrer" @error="previewIconFailed = true" />
+                <q-icon v-else name="notifications_active" />
+              </div>
               <h2>{{ form.title || 'Seu convite' }}</h2>
               <p>{{ form.description || 'Explique por que a pessoa deve escolher um dos canais abaixo.' }}</p>
               <button v-for="(link, index) in form.links.filter((item) => item.label)" :key="index" type="button">{{ link.label }}</button>
@@ -215,7 +326,7 @@ onMounted(loadInvites)
             </aside>
           </q-card-section>
           <q-separator />
-          <q-card-actions align="right" class="q-pa-md q-px-lg"><q-btn v-close-popup flat no-caps label="Cancelar" /><q-btn type="submit" color="primary" unelevated no-caps icon="save" label="Salvar convite" :loading="saving" /></q-card-actions>
+          <q-card-actions align="right" class="q-pa-md q-px-lg invite-dialog__footer"><q-btn v-close-popup flat no-caps label="Cancelar" /><q-btn type="submit" color="primary" unelevated no-caps icon="save" label="Salvar convite" :loading="saving" /></q-card-actions>
         </q-form>
       </q-card>
     </q-dialog>
@@ -242,6 +353,23 @@ onMounted(loadInvites)
   color: #031515;
 }
 
+.invite-cover-icon {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  overflow: hidden;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  place-items: center;
+}
+
+.invite-cover-icon img,
+.preview-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .invite-description {
   min-height: 44px;
   color: #617572;
@@ -257,18 +385,43 @@ onMounted(loadInvites)
 }
 
 .invite-dialog {
+  display: flex;
   width: min(1180px, calc(100vw - 32px));
-  max-height: calc(100vh - 32px);
+  max-width: 1180px !important;
+  height: min(820px, calc(100dvh - 32px));
+  max-height: calc(100dvh - 32px);
+  flex-direction: column;
+  overflow: hidden;
   border-radius: 24px;
   background: #f9fffd;
 }
 
+.invite-dialog__form {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.invite-dialog__header,
+.invite-dialog__footer {
+  flex: 0 0 auto;
+  background: #f9fffd;
+}
+
+.invite-dialog__footer {
+  flex-wrap: wrap;
+}
+
 .invite-builder {
   display: grid;
+  min-height: 0;
   grid-template-columns: minmax(0, 1.15fr) minmax(330px, 0.85fr);
+  align-content: start;
+  flex: 1 1 auto;
   gap: 28px;
-  max-height: calc(100vh - 185px);
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .link-row {
@@ -298,6 +451,7 @@ onMounted(loadInvites)
   background: rgba(255, 255, 255, 0.72);
   font-size: 27px;
   place-items: center;
+  overflow: hidden;
 }
 
 .public-preview h2 {
@@ -345,8 +499,27 @@ onMounted(loadInvites)
 
   .invite-dialog {
     width: 100%;
+    max-width: 100% !important;
+    height: 100%;
     max-height: 100%;
     border-radius: 0;
+  }
+
+  .invite-dialog__header,
+  .invite-builder {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .invite-dialog__footer {
+    padding-right: 16px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    padding-left: 16px;
+  }
+
+  .public-preview {
+    min-height: 440px;
+    padding: 24px 18px;
   }
 
   .link-row {

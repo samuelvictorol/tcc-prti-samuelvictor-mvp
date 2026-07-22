@@ -68,7 +68,9 @@ async function send(input) {
     text: input.text || undefined,
     html: input.html || undefined
   });
-  await logsManager.create({ channel: 'email', action: 'message.sent', message: 'Email enviado', context: { contactId: input.contactId, messageId: info.messageId } });
+  if (input.useCase !== 'profile_auth') {
+    await logsManager.create({ channel: 'email', action: 'message.sent', message: 'Email enviado', context: { contactId: input.contactId, messageId: info.messageId } });
+  }
   return { providerMessageId: info.messageId, accepted: info.accepted, rejected: info.rejected };
 }
 

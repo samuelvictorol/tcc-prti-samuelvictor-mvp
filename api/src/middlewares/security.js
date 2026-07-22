@@ -68,4 +68,21 @@ const authLimiter = rateLimit({
   skipSuccessfulRequests: true
 });
 
-module.exports = { requestContext, ipBlock, registerSecurityStrike, apiLimiter, webhookLimiter, authLimiter };
+const profileCodeRequestLimiter = rateLimit({
+  windowMs: env.profileCodeWindowSeconds * 1000,
+  limit: env.profileCodeMaxRequests,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false
+});
+
+const profileCodeVerifyLimiter = rateLimit({
+  windowMs: env.profileCodeWindowSeconds * 1000,
+  limit: Math.max(10, env.profileCodeMaxRequests * env.profileCodeMaxAttempts),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false
+});
+
+module.exports = {
+  requestContext, ipBlock, registerSecurityStrike, apiLimiter, webhookLimiter, authLimiter,
+  profileCodeRequestLimiter, profileCodeVerifyLimiter
+};

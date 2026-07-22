@@ -12,6 +12,7 @@ const inviteSchema = new mongoose.Schema({
   slug: { type: String, required: true, unique: true, lowercase: true, trim: true },
   title: { type: String, required: true },
   description: { type: String },
+  iconeUrl: { type: String },
   links: { type: [inviteLinkSchema], default: [] },
   gradientStart: { type: String, default: '#82F8E6' },
   gradientEnd: { type: String, default: '#35BCA4' },

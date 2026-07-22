@@ -14,7 +14,7 @@ describe('histórico do monitor WhatsApp Web', () => {
     expect(whatsappWebConversationId(null)).toBe('')
   })
 
-  it('mescla histórico local e do provider, remove duplicados e ordena', () => {
+  it('remove duplicados e ordena exclusivamente o histórico persistido', () => {
     const result = mergeWhatsappWebHistory([
       {
         id: 'local-1',
@@ -23,7 +23,6 @@ describe('histórico do monitor WhatsApp Web', () => {
         body: 'Mensagem persistida',
         sentAt: '2026-07-21T10:00:00.000Z',
       },
-    ], [
       { id: 'wamid-2', fromMe: true, body: 'Resposta recente', timestamp: 1784628060 },
       { id: 'wamid-1', fromMe: false, body: 'Mensagem persistida', timestamp: 1784628000 },
     ])

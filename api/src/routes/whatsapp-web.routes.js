@@ -16,9 +16,11 @@ router.post('/session/regenerate', asyncHandler(controller.regenerate));
 router.delete('/session', asyncHandler(controller.logout));
 router.post('/initialize', asyncHandler(controller.initialize));
 router.post('/logout', asyncHandler(controller.logout));
-router.get('/chats', requireWhatsappWebReady, asyncHandler(controller.chats));
-router.get('/chats/:chatId/messages', requireWhatsappWebReady, validate(whatsappWebMessagesSchema), asyncHandler(controller.messages));
-router.post('/sync', requireWhatsappWebReady, asyncHandler(controller.sync));
+// Rotas legadas permanecem para clientes antigos, mas sempre respondem 410.
+// Conversas Web agora nascem exclusivamente dos eventos inbound apos opt-in.
+router.get('/chats', asyncHandler(controller.chats));
+router.get('/chats/:chatId/messages', validate(whatsappWebMessagesSchema), asyncHandler(controller.messages));
+router.post('/sync', asyncHandler(controller.sync));
 router.post('/send', requireWhatsappWebReady, validate(whatsappWebSendSchema), asyncHandler(controller.send));
 
 module.exports = { basePath: env.apiPrefix + '/whatsapp-web', router };

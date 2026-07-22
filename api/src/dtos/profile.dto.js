@@ -1,0 +1,56 @@
+const { z, paginationQuery } = require('./common.dto');
+
+const requestProfileCodeSchema = z.object({
+  body: z.object({
+    identifier: z.string().trim().min(7).max(254)
+  })
+});
+
+const verifyProfileCodeSchema = z.object({
+  body: z.object({
+    challengeId: z.string().uuid(),
+    code: z.string().trim().regex(/^\d{6}$/, 'Codigo deve conter 6 digitos')
+  })
+});
+
+const updateOwnProfileSchema = z.object({
+  body: z.object({
+    displayName: z.string().trim().min(1).max(200).optional(),
+    email: z.union([z.string().trim().email().max(254), z.null()]).optional(),
+    phone: z.union([z.string().trim().min(7).max(40), z.null()]).optional(),
+    telegramUsername: z.union([z.string().trim().min(1).max(64), z.null()]).optional()
+  }).refine((body) => Object.keys(body).length > 0, 'Informe ao menos um campo')
+});
+
+const revokeOwnConsentSchema = z.object({
+  body: z.object({
+    channel: z.enum(['telegram', 'whatsapp_web', 'whatsapp_cloud', 'email']),
+    confirmed: z.literal(true)
+  })
+});
+
+const setOwnEmailConsentSchema = z.object({
+  body: z.object({
+    enabled: z.boolean(),
+    confirmed: z.literal(true)
+  })
+});
+
+const profileHistorySchema = z.object({ query: paginationQuery });
+
+const profileLoginLogsSchema = z.object({
+  query: paginationQuery.extend({
+    identifierType: z.enum(['email', 'phone']).optional(),
+    deliveryChannel: z.enum(['email', 'whatsapp_cloud', 'telegram']).optional()
+  })
+});
+
+module.exports = {
+  requestProfileCodeSchema,
+  verifyProfileCodeSchema,
+  updateOwnProfileSchema,
+  revokeOwnConsentSchema,
+  setOwnEmailConsentSchema,
+  profileHistorySchema,
+  profileLoginLogsSchema
+};
