@@ -22,6 +22,7 @@ ENV PORT=80 \
 
 # A imagem oficial processa templates em runtime. Isso mantém o mesmo artefato
 # compatível com o DNS do Docker Compose e com o host privado injetado pelo Render.
+COPY --chmod=755 docker-entrypoint.d/16-normalize-api-upstream.envsh /docker-entrypoint.d/16-normalize-api-upstream.envsh
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 

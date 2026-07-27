@@ -5,10 +5,11 @@ services:
     name: notify-flow
     runtime: docker
     plan: starter
+    region: oregon
     dockerContext: ./frontend
     dockerfilePath: ./frontend/Dockerfile
     autoDeployTrigger: commit
-    healthCheckPath: /api/health
+    healthCheckPath: /healthz
     maxShutdownDelaySeconds: 30
     envVars:
       - key: VITE_API_BASE_URL
@@ -27,6 +28,7 @@ services:
     name: api
     runtime: docker
     plan: starter
+    region: oregon
     dockerContext: ./api
     dockerfilePath: ./api/Dockerfile
     autoDeployTrigger: commit
@@ -42,9 +44,9 @@ services:
       - key: API_PREFIX
         value: /api
       - key: PUBLIC_APP_URL
-        sync: false
+        value: https://notify-flow.onrender.com
       - key: CORS_ORIGINS
-        sync: false
+        value: https://notify-flow.onrender.com
       - key: TRUST_PROXY
         value: "1"
       - key: COOKIE_SECURE
@@ -133,5 +135,6 @@ services:
   - type: keyvalue
     name: notify-flow-redis
     plan: starter
+    region: oregon
     ipAllowList: []
     maxmemoryPolicy: noeviction

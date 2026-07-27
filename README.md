@@ -124,6 +124,10 @@ Use `.env.example` como catálogo e nunca versione `.env`.
 
 Credenciais de canal podem ser cadastradas na tela **Início**. Valores runtime ficam criptografados no MongoDB, prevalecem sobre o ambiente e são retornados à UI apenas como “configurado/não configurado”. `PUBLIC_APP_URL` continua sendo a fonte para links públicos; não há URL ngrok fixa no código.
 
+`API_PORT` e `FRONTEND_PORT` controlam somente as portas publicadas pelo Docker
+Compose na máquina local. Não os cadastre nos serviços do Render; em produção,
+o backend usa `PORT` e o frontend recebe a porta automaticamente da plataforma.
+
 ## Fila, retries e observabilidade
 
 - BullMQ processa até cinco jobs simultâneos no worker atual.
@@ -157,7 +161,13 @@ O arquivo suportado pelo Render é **[`render.yaml`](render.yaml)** — não exi
 - disco persistente pago para `/app/.wwebjs_auth`;
 - `MONGODB_URI` solicitado durante o sync para uma instância MongoDB Atlas.
 
-Antes do primeiro deploy, informe a URL pública do frontend em `PUBLIC_APP_URL` e `CORS_ORIGINS`, as credenciais administrativas e a URI do Atlas. No Atlas, autorize a saída do Render e exija TLS. Integrações externas podem ser configuradas depois pela UI.
+Antes do primeiro deploy, informe as credenciais administrativas e a URI do
+Atlas. O Blueprint já configura `PUBLIC_APP_URL` e `CORS_ORIGINS` como
+`https://notify-flow.onrender.com`. No Atlas, autorize a saída do Render e
+exija TLS. Integrações externas podem ser configuradas depois pela UI. Os
+modelos completos, sem segredos reais, estão em
+[`api/render.env.example`](api/render.env.example) e
+[`frontend/render.env.example`](frontend/render.env.example).
 
 Os três recursos do Blueprint usam `plan: starter`: é o menor tipo de instância
 pago para o frontend, a API privada e o Render Key Value. Assim, nenhum deles
@@ -167,8 +177,11 @@ define `maxShutdownDelaySeconds` enquanto esse disco estiver anexado.
 
 O frontend usa um template de configuração do Nginx em runtime. No Compose,
 `API_UPSTREAM=api:3000`; no Render, o Blueprint injeta automaticamente o
-`hostport` privado real da API. Assim, o proxy não depende de um hostname local
-que não existe na rede privada do Render.
+`hostport` privado real da API. O entrypoint acrescenta ao hostname curto o
+domínio de busca de `/etc/resolv.conf`, porque o resolver assíncrono do Nginx
+não aplica esse sufixo sozinho. A API permanece privada e não recebe subdomínio
+`onrender.com`; sua borda pública é
+`https://notify-flow.onrender.com/api`, encaminhada pelo frontend.
 
 O WhatsApp Web impõe restrições importantes no Render: Chromium consome memória/CPU, o [disco persistente](https://render.com/docs/disks) é pago e limita a API a uma instância, deploys interrompem a sessão e o filesystem não garante que o WhatsApp manterá a autenticação. Por isso ele continua opcional. [WebSockets são suportados](https://render.com/docs/websocket), mas o cliente deve reconectar após deploys ou manutenção. Para MongoDB, siga as recomendações de [deploy e backup do Render](https://render.com/docs/deploy-mongodb) ou use Atlas gerenciado.
 

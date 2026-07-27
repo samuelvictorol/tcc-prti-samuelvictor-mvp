@@ -303,7 +303,14 @@ Settings cadastrados pela UI são cifrados no MongoDB e têm precedência sobre 
 
 ## Render
 
-O Blueprint da raiz usa esta API como private service Docker. No Compose, o frontend recebe `API_UPSTREAM=api:3000`; no Render, o mesmo valor é injetado com o `hostport` real da rede privada. A sessão Web exige disco persistente em `/app/.wwebjs_auth`, o que limita o serviço a uma instância e impede deploy sem interrupção. MongoDB é externo (Atlas) e Redis usa Render Key Value.
+O Blueprint da raiz usa esta API como private service Docker. Ela não recebe
+subdomínio público próprio: chamadas externas, webhooks e Socket.IO passam pelo
+frontend público em `https://notify-flow.onrender.com/api` e
+`https://notify-flow.onrender.com/socket.io`. No Compose, o frontend recebe
+`API_UPSTREAM=api:3000`; no Render, o mesmo valor é injetado com o `hostport`
+real da rede privada. A sessão Web exige disco persistente em
+`/app/.wwebjs_auth`, o que limita o serviço a uma instância e impede deploy sem
+interrupção. MongoDB é externo (Atlas) e Redis usa Render Key Value.
 
 Para escalar horizontalmente, primeiro separe o worker, isole o cliente WhatsApp Web em um serviço single-instance e adicione um adapter Redis ao Socket.IO.
 

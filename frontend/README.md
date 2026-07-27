@@ -161,10 +161,18 @@ Blueprint injeta o `hostport` privado real da API com `fromService`. Os dois
 serviços precisam permanecer na mesma região/rede privada.
 
 O proxy usa os nameservers fornecidos em `/etc/resolv.conf` e resolve
-`API_UPSTREAM` dinamicamente. Dessa forma, uma propagação tardia do DNS privado
-gera respostas temporárias `502`, mas não derruba o processo Nginx; a conexão é
-retomada sem reiniciar o frontend assim que a API passa a resolver.
+`API_UPSTREAM` dinamicamente. Antes de gerar a configuração, o entrypoint
+transforma o hostname curto do Render no FQDN usando o primeiro domínio
+`search` de `/etc/resolv.conf`. Isso é necessário porque o resolver interno do
+Nginx não aplica o domínio de busca automaticamente. Uma propagação tardia do
+DNS privado gera respostas temporárias `502`, mas não derruba o processo; a
+conexão é retomada sem reiniciar o frontend assim que a API passa a resolver.
 
-O health check recomendado no Blueprint é `/api/health`, pois atravessa o proxy e comprova frontend, API, MongoDB e Redis. `PUBLIC_APP_URL` e `CORS_ORIGINS` são variáveis da API e devem conter a URL HTTPS pública deste frontend.
+O health check do serviço web é `/healthz`, para que uma indisponibilidade
+temporária da API não cancele o deploy do frontend. Depois do deploy,
+`/api/health` continua sendo o teste ponta a ponta de frontend, proxy, API,
+MongoDB e Redis. A API é privada e não possui URL pública própria: o frontend
+expõe `https://notify-flow.onrender.com/api`. `PUBLIC_APP_URL` e
+`CORS_ORIGINS` devem conter `https://notify-flow.onrender.com`.
 
 WebSockets funcionam pelo mesmo domínio. Conexões podem cair em deploy/manutenção; o client reconecta e refaz o fetch de estado.

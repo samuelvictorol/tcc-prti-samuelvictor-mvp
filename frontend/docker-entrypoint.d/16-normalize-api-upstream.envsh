@@ -1,0 +1,61 @@
+#!/bin/sh
+
+# O hostname privado curto do Render depende do sufixo "search" definido em
+# /etc/resolv.conf. O resolver assíncrono do Nginx não aplica esse sufixo por
+# conta própria, então transformamos "api-xxxx:3000" no FQDN antes do envsubst.
+
+if [ -z "${API_UPSTREAM:-}" ]; then
+  echo >&2 "API_UPSTREAM não foi configurado"
+  return 1
+fi
+
+api_upstream="${API_UPSTREAM#http://}"
+
+case "$api_upstream" in
+  https://*)
+    echo >&2 "API_UPSTREAM deve usar o hostport privado sem https://"
+    return 1
+    ;;
+esac
+
+case "$api_upstream" in
+  *:*)
+    api_host="${api_upstream%:*}"
+    api_port="${api_upstream##*:}"
+    ;;
+  *)
+    api_host="$api_upstream"
+    api_port="3000"
+    ;;
+esac
+
+case "$api_port" in
+  ''|*[!0-9]*)
+    echo >&2 "API_UPSTREAM deve estar no formato hostname:porta"
+    return 1
+    ;;
+esac
+
+case "$api_host" in
+  *.*|localhost)
+    ;;
+  *)
+    api_search_domain="$(
+      awk '
+        ($1 == "search" || $1 == "domain") && NF > 1 {
+          print $2
+          exit
+        }
+      ' /etc/resolv.conf
+    )"
+
+    if [ -n "$api_search_domain" ] && [ "$api_search_domain" != "." ]; then
+      api_host="${api_host}.${api_search_domain}"
+    fi
+    ;;
+esac
+
+API_UPSTREAM="${api_host}:${api_port}"
+export API_UPSTREAM
+
+echo "API upstream normalizado para a rede privada: ${API_UPSTREAM}"
