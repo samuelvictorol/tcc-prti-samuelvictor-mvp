@@ -11,6 +11,15 @@ async function list(req, res) {
 async function listDeliveryIssues(req, res) {
   res.json({ success: true, data: await notificationsManager.listDeliveryIssues(req.validated.query) });
 }
+async function listDeliveries(req, res) {
+  res.json({
+    success: true,
+    data: await notificationsManager.listDeliveries(
+      req.validated.params.id,
+      req.validated.query
+    )
+  });
+}
 async function get(req, res) {
   res.json({ success: true, data: await notificationsManager.getById(req.validated.params.id) });
 }
@@ -24,4 +33,4 @@ async function cancel(req, res) {
   res.json({ success: true, data: await notificationsManager.cancel(req.validated.params.id) });
 }
 
-module.exports = { create, list, listDeliveryIssues, get, stats, retry, cancel };
+module.exports = { create, list, listDeliveryIssues, listDeliveries, get, stats, retry, cancel };

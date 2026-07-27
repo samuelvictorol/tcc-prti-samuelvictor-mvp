@@ -162,6 +162,7 @@ import { useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ContactDialog from '../components/ContactDialog.vue'
+import ContextHelp from '../components/ContextHelp.vue'
 import { asList, errorMessage, fetchAll, http, unwrap } from '../services/http.js'
 import { connectSocket, getSocket } from '../services/socket.js'
 import {
@@ -587,18 +588,19 @@ onBeforeUnmount(() => {
       </template>
     </PageHeader>
 
-    <div class="cloud-policy q-mb-lg">
-      <q-icon name="verified" size="26px" />
-      <div>
-        <strong>Somente templates oficiais</strong>
-        <span>Esta tela envia exclusivamente templates já aprovados na Meta. O processamento acontece pela fila e respeita consentimento por contato.</span>
-      </div>
+    <div class="cloud-help-strip q-mb-lg" aria-label="Ajuda das políticas do WhatsApp oficial">
+      <span><q-icon name="verified" /> Regras do canal</span>
+      <ContextHelp
+        title="Somente templates oficiais"
+        tooltip="Entenda templates, fila e consentimento"
+        text="Esta tela envia exclusivamente templates já aprovados na Meta. O processamento acontece pela fila e respeita consentimento por contato."
+      />
+      <ContextHelp
+        title="Autorização compartilhada entre Cloud e Web"
+        tooltip="Entenda como o comando autoriza o WhatsApp"
+        text="Quando o comando de autorização configurado é recebido pelo WhatsApp Cloud ou Web, o mesmo contato autoriza as duas integrações. Se uma identidade ainda não existir, sua autorização fica pendente até a primeira interação real, sem criar um destino artificial. O administrador ainda pode revisar ou revogar Web e Cloud separadamente."
+      />
     </div>
-
-    <q-banner rounded class="webhook-contact-banner q-mb-lg">
-      <template #avatar><q-icon name="how_to_reg" color="primary" /></template>
-      Quando o comando de autorização configurado é recebido pelo WhatsApp Cloud ou Web, o mesmo contato autoriza as duas integrações. Se uma identidade ainda não existir, sua autorização fica pendente até a primeira interação real, sem criar um destino artificial. O administrador ainda pode revisar ou revogar Web e Cloud separadamente.
-    </q-banner>
 
     <section class="page-grid cloud-layout q-mb-lg">
       <q-card flat class="glass-card section-card send-card">
@@ -901,27 +903,30 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.cloud-policy {
+.cloud-help-strip {
   display: flex;
-  align-items: flex-start;
-  gap: 13px;
-  padding: 16px;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 13px;
   border: 1px solid rgba(22, 134, 111, 0.2);
   border-radius: 16px;
   background: rgba(222, 248, 242, 0.68);
   color: #315f56;
 }
 
-.cloud-policy strong,
-.cloud-policy span,
 .stat-card strong,
 .stat-card span {
   display: block;
 }
 
-.cloud-policy span {
-  margin-top: 3px;
-  font-size: 0.84rem;
+.cloud-help-strip > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.78rem;
+  font-weight: 800;
 }
 
 .cloud-layout {

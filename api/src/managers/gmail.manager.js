@@ -69,7 +69,17 @@ async function send(input) {
     html: input.html || undefined
   });
   if (input.useCase !== 'profile_auth') {
-    await logsManager.create({ channel: 'email', action: 'message.sent', message: 'Email enviado', context: { contactId: input.contactId, messageId: info.messageId } });
+    await logsManager.create({
+      channel: 'email',
+      action: 'message.sent',
+      message: 'Email enviado',
+      context: {
+        contactId: input.contactId,
+        notificationId: input.notificationId,
+        deliveryId: input.deliveryId,
+        messageId: info.messageId
+      }
+    }).catch(() => undefined);
   }
   return { providerMessageId: info.messageId, accepted: info.accepted, rejected: info.rejected };
 }

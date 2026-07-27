@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import ContextHelp from '../components/ContextHelp.vue'
 import { errorMessage, http, unwrap } from '../services/http.js'
 
 const $q = useQuasar()
@@ -96,21 +97,26 @@ onMounted(() => load())
         <q-card-section class="status-card__title">
           <q-avatar color="positive" text-color="white" icon="verified_user" />
           <div><span>TEMPLATE FIXO DA META</span><strong>{{ template.label || 'Validar Usuário' }}</strong></div>
-          <q-badge :color="statusMeta(template.status).color" :label="statusMeta(template.status).label" />
+          <div class="status-card__actions">
+            <ContextHelp
+              title="Requisitos do template de autenticação"
+              tooltip="Como configurar o verify_code_1 na Meta"
+            >
+              <p><strong>{{ template.prerequisite || 'Crie e aprove este template na biblioteca do painel da Meta antes de habilitar códigos pelo WhatsApp.' }}</strong></p>
+              <p>Use o nome oficial <code>verify_code_1</code>, idioma <code>pt_BR</code>, entrega <strong>Copiar código</strong> e exatamente 1 parâmetro de código.</p>
+              <p>O envio monta automaticamente BODY e BUTTON (índice 0) com o mesmo código exigido pela Meta.</p>
+              <p class="template-example"><code>{{ templateBodyExample }}</code></p>
+              <p>Este item é somente leitura. A aprovação é consultada na conta Meta configurada e nunca é presumida manualmente.</p>
+              <p v-if="template.checkedAt">Última consulta: {{ formatDate(template.checkedAt) }}.</p>
+            </ContextHelp>
+            <q-badge :color="statusMeta(template.status).color" :label="statusMeta(template.status).label" />
+          </div>
         </q-card-section>
         <q-card-section class="template-details">
           <div><small>Nome oficial</small><code>{{ template.name || 'verify_code_1' }}</code></div>
           <div><small>Idioma</small><strong>{{ template.languageCode || 'pt_BR' }}</strong></div>
           <div><small>Parâmetro BODY</small><code>{{ template.bodyParameter || bodyParameterExample }}</code></div>
         </q-card-section>
-        <q-banner rounded class="template-note">
-          <strong>{{ template.prerequisite || 'Crie e aprove este template na biblioteca do painel da Meta antes de habilitar códigos pelo WhatsApp.' }}</strong>
-          <span>Use o nome oficial <code>verify_code_1</code>, idioma <code>pt_BR</code>, entrega <strong>Copiar código</strong> e exatamente 1 parâmetro de código.</span>
-          <span>O envio monta automaticamente BODY e BUTTON (índice 0) com o mesmo código exigido pela Meta.</span>
-          <span class="template-example"><code>{{ templateBodyExample }}</code></span>
-          <span>Este item é somente leitura. A aprovação é consultada na conta Meta configurada e nunca é presumida manualmente.</span>
-          <span v-if="template.checkedAt">Última consulta: {{ formatDate(template.checkedAt) }}.</span>
-        </q-banner>
       </q-card>
 
       <q-card flat class="status-card">
@@ -185,14 +191,13 @@ onMounted(() => load())
 .status-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) repeat(3, minmax(0, .8fr)); gap: 18px; max-width: 1380px; margin: auto; }
 .status-card, .logs-card { min-width: 0; border: 1px solid rgba(3,21,21,.08); border-radius: 22px; background: white; box-shadow: 0 14px 40px rgba(17,70,62,.055); }
 .status-card__title { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+.status-card__actions { display: flex; align-items: center; gap: 6px; }
 .status-card__title span, .status-card__title strong { display: block; }
 .status-card__title strong { margin-top: 2px; font-size: 1.02rem; }
 .template-details { display: grid; grid-template-columns: 1.5fr .7fr 1fr; gap: 10px; padding-top: 4px; }
 .template-details > div { padding: 12px; border-radius: 13px; background: #f5fbf9; }
 .template-details small, .template-details strong, .template-details code { display: block; }
 .template-details small { margin-bottom: 5px; color: #6c817d; }
-.template-note { margin: 0 16px 16px; background: rgba(53,188,164,.1); color: #315c55; font-size: .76rem; }
-.template-note span { display: block; margin-top: 4px; }
 .template-example { margin-block: 8px !important; padding: 9px 11px; border-radius: 10px; background: rgba(255,255,255,.75); }
 .provider-copy { color: #607572; font-size: .82rem; line-height: 1.55; }
 .logs-card { max-width: 1380px; margin: 20px auto 0; overflow: hidden; }

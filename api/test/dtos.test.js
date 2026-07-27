@@ -15,7 +15,8 @@ const { profileLoginLogsSchema } = require('../src/dtos/profile.dto');
 const {
   createNotificationSchema,
   listNotificationsSchema,
-  listDeliveryIssuesSchema
+  listDeliveryIssuesSchema,
+  listNotificationDeliveriesSchema
 } = require('../src/dtos/notifications.dto');
 
 test('refresh aceita body vazio para cookie HttpOnly', () => {
@@ -84,6 +85,24 @@ test('envio Telegram exige contato/grupo cadastrado e modo coerente', () => {
   assert.equal(telegramSendSchema.safeParse({ body: { mode: 'quick', message: 'Oi' } }).success, false);
   assert.equal(telegramSendSchema.safeParse({ body: { contactId: contact, groupId: contact, mode: 'quick', message: 'Oi' } }).success, false);
   assert.equal(telegramSendSchema.safeParse({ body: { contactId: contact, mode: 'template' } }).success, false);
+});
+
+test('consulta paginada de deliveries aceita filtros de canal e resultado', () => {
+  const parsed = listNotificationDeliveriesSchema.safeParse({
+    params: { id: '507f1f77bcf86cd799439011' },
+    query: { page: '2', limit: '25', channel: 'email', status: 'skipped' }
+  });
+  assert.equal(parsed.success, true);
+  assert.deepEqual(parsed.data.query, {
+    page: 2,
+    limit: 25,
+    channel: 'email',
+    status: 'skipped'
+  });
+  assert.equal(listNotificationDeliveriesSchema.safeParse({
+    params: { id: '507f1f77bcf86cd799439011' },
+    query: { status: 'invalid' }
+  }).success, false);
 });
 
 test('WhatsApp Web aceita somente resposta individual e rejeita groupId', () => {
@@ -316,6 +335,40 @@ test('notificacoes removem WhatsApp Web e exigem template no Cloud', () => {
   } }).success, false);
   assert.equal(createNotificationSchema.safeParse({ body: {
     kind: 'template', channel: 'whatsapp_cloud', templateId, content: { variables: {} }, contactIds, groupIds: []
+  } }).success, true);
+});
+
+test('email e Telegram aceitam lote por grupos nos modos rapido e template', () => {
+  const groupIds = ['507f1f77bcf86cd799439011'];
+  assert.equal(createNotificationSchema.safeParse({ body: {
+    kind: 'quick',
+    channel: 'email',
+    content: { subject: 'Aviso', text: 'Conteudo do email' },
+    contactIds: [],
+    groupIds
+  } }).success, true);
+  assert.equal(createNotificationSchema.safeParse({ body: {
+    kind: 'template',
+    channel: 'email',
+    templateId: '507f1f77bcf86cd799439012',
+    content: { variables: { protocolo: 'ABC-123' } },
+    contactIds: [],
+    groupIds
+  } }).success, true);
+  assert.equal(createNotificationSchema.safeParse({ body: {
+    kind: 'quick',
+    channel: 'telegram',
+    content: { text: 'Aviso Telegram' },
+    contactIds: [],
+    groupIds
+  } }).success, true);
+  assert.equal(createNotificationSchema.safeParse({ body: {
+    kind: 'template',
+    channel: 'telegram',
+    templateId: '507f1f77bcf86cd799439013',
+    content: { variables: { protocolo: 'ABC-123' } },
+    contactIds: [],
+    groupIds
   } }).success, true);
 });
 

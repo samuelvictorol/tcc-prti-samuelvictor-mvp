@@ -4,6 +4,7 @@ import { copyToClipboard, useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import EmptyState from '../components/EmptyState.vue'
+import ContextHelp from '../components/ContextHelp.vue'
 import { useAppStore } from '../stores/app.js'
 import { channelSettingsPayload, normalizeTelegramWebhookUrl } from '../services/channels.js'
 import { asList, errorMessage, http, paginationOf, unwrap } from '../services/http.js'
@@ -481,9 +482,13 @@ onBeforeUnmount(() => {
     <section class="page-grid page-grid--2 q-mb-lg">
       <q-card flat class="glass-card section-card">
         <div class="toolbar-row">
-          <div>
+          <div class="row items-center q-gutter-xs">
             <h2 class="section-title">Credenciais e canais</h2>
-            <p class="section-copy">Salve cada provedor separadamente. Campos vazios mantêm os valores existentes e um canal incompleto não bloqueia os demais.</p>
+            <ContextHelp
+              title="Configurações independentes por canal"
+              tooltip="Entenda como as credenciais são salvas"
+              text="Salve cada provedor separadamente. Campos vazios mantêm os valores existentes e um canal incompleto não bloqueia os demais."
+            />
           </div>
         </div>
 
@@ -588,8 +593,17 @@ onBeforeUnmount(() => {
         <div class="direct-chat-card__heading">
           <div class="direct-chat-card__icon"><q-icon name="forum" /></div>
           <div>
-            <h2 class="section-title">WhatsApp Web: conexão do monitor</h2>
-            <p class="section-copy">Leia o QR Code aqui. O menu de conversas será liberado somente depois da autenticação.</p>
+            <div class="row items-center q-gutter-xs">
+              <h2 class="section-title">WhatsApp Web: conexão do monitor</h2>
+              <ContextHelp
+                title="Conexão e privacidade do monitor"
+                tooltip="Como funciona o QR Code e o monitor"
+                :text="[
+                  'Leia o QR Code aqui. O menu de conversas será liberado somente depois da autenticação.',
+                  'O WhatsApp Web mostra somente mensagens novas recebidas após a conexão. Interações sem permissão ficam em uma inbox temporária e somente para leitura; não há importação de chats ou histórico.',
+                ]"
+              />
+            </div>
           </div>
         </div>
 
@@ -666,15 +680,20 @@ onBeforeUnmount(() => {
             :disable="!whatsappWebReady"
           />
         </div>
-        <p class="whatsapp-web-footnote">O WhatsApp Web mostra somente mensagens novas recebidas após a conexão. Interações sem permissão ficam em uma inbox temporária e somente para leitura; não há importação de chats ou histórico.</p>
       </q-card>
     </section>
 
     <q-card flat class="glass-card section-card whatsapp-permission-card q-mb-lg">
       <div class="whatsapp-permission-card__icon"><q-icon name="send_to_mobile" /></div>
       <div class="whatsapp-permission-card__copy">
-        <h2 class="section-title">Onboarding automático do Telegram</h2>
-        <p class="section-copy">Quando o usuário enviar este comando ao bot, ele será autorizado e receberá um menu com vínculo seguro de telefone, acesso ao Meu perfil e Ajuda. O comando dinâmico do WhatsApp também continua válido no Telegram e abre o mesmo menu.</p>
+        <div class="row items-center q-gutter-xs">
+          <h2 class="section-title">Onboarding automático do Telegram</h2>
+          <ContextHelp
+            title="Comando de onboarding do Telegram"
+            tooltip="Entenda o onboarding automático"
+            text="Quando o usuário enviar este comando ao bot, ele será autorizado e receberá um menu com vínculo seguro de telefone, acesso ao Meu perfil e Ajuda. O comando dinâmico do WhatsApp também continua válido no Telegram e abre o mesmo menu."
+          />
+        </div>
         <code>START_VERIFY_TELEGRAM_PERMISSION</code>
       </div>
       <q-input
@@ -702,8 +721,14 @@ onBeforeUnmount(() => {
     <q-card flat class="glass-card section-card whatsapp-permission-card q-mb-lg">
       <div class="whatsapp-permission-card__icon"><q-icon name="how_to_reg" /></div>
       <div class="whatsapp-permission-card__copy">
-        <h2 class="section-title">Autorização automática de contatos do WhatsApp</h2>
-        <p class="section-copy">No WhatsApp Web, mensagens comuns de um remetente desconhecido aparecem temporariamente no monitor, sem criar contato, consentimento ou aviso de novo usuário. O contato só é cadastrado automaticamente quando envia este texto exato. Quando o comando chega pelo Web ou Cloud, a conversa pendente é associada sem duplicar mensagens e o sistema autoriza as duas integrações para o mesmo contato. A integração já identificada é liberada imediatamente; a outra é liberada quando sua identidade real existir. As permissões continuam separadas para ajustes e revogações individuais.</p>
+        <div class="row items-center q-gutter-xs">
+          <h2 class="section-title">Autorização automática de contatos do WhatsApp</h2>
+          <ContextHelp
+            title="Quando um contato do WhatsApp é cadastrado"
+            tooltip="Entenda a autorização automática"
+            text="No WhatsApp Web, mensagens comuns de um remetente desconhecido aparecem temporariamente no monitor, sem criar contato, consentimento ou aviso de novo usuário. O contato só é cadastrado automaticamente quando envia este texto exato. Quando o comando chega pelo Web ou Cloud, a conversa pendente é associada sem duplicar mensagens e o sistema autoriza as duas integrações para o mesmo contato. A integração já identificada é liberada imediatamente; a outra é liberada quando sua identidade real existir. As permissões continuam separadas para ajustes e revogações individuais."
+          />
+        </div>
         <code>START_NOTIFY_WHATSAPP_PERMISSION</code>
       </div>
       <q-input
@@ -1012,13 +1037,6 @@ onBeforeUnmount(() => {
   color: #9d2d41;
   font-size: 0.78rem;
   overflow-wrap: anywhere;
-}
-
-.whatsapp-web-footnote {
-  margin: 0;
-  color: #667a77;
-  font-size: 0.72rem;
-  line-height: 1.45;
 }
 
 .whatsapp-permission-card {

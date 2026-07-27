@@ -4,9 +4,20 @@ import { useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ContactDialog from '../components/ContactDialog.vue'
-import { errorMessage, fetchAll, http, unwrap } from '../services/http.js'
+import ContextHelp from '../components/ContextHelp.vue'
+import { asList, errorMessage, fetchAll, http, unwrap } from '../services/http.js'
 import { connectSocket, getSocket } from '../services/socket.js'
 import { telegramBotIdentity } from '../services/telegram.js'
+import {
+  channelIdentity,
+  deliveryStatusColor,
+  dispatchDeliveryCount,
+  isContactEligible,
+  newIdempotencyKey,
+  normalizeDeliveryPage,
+  normalizeDeliveryIssuePage,
+  selectedRecipientsEligibility,
+} from '../services/bulk-notifications.js'
 import {
   contactIdentity,
   identityIdentifiers,
@@ -18,6 +29,9 @@ const tab = ref('chats')
 const loading = ref(false)
 const loadingMessages = ref(false)
 const sending = ref(false)
+const bulkSending = ref(false)
+const issuesLoading = ref(false)
+const deliveriesLoading = ref(false)
 const syncing = ref(false)
 const liveConnected = ref(false)
 const groupDialog = ref(false)
@@ -26,7 +40,17 @@ const savingGroup = ref(false)
 const editingGroupId = ref(null)
 const chats = ref([])
 const groups = ref([])
+const contactGroups = ref([])
+const contacts = ref([])
 const templates = ref([])
+const queueLogs = ref([])
+const deliveryIssues = ref([])
+const dispatchDeliveries = ref([])
+const lastDispatch = ref(null)
+const issueNotificationId = ref(null)
+const issuesSection = ref(null)
+const issuePagination = ref({ page: 1, rowsPerPage: 10, rowsNumber: 0 })
+const deliveryPagination = ref({ page: 1, rowsPerPage: 10, rowsNumber: 0 })
 const bot = ref(null)
 const realtimeMessages = ref([])
 const selected = ref(null)
@@ -40,13 +64,48 @@ const message = ref('')
 const templateId = ref(null)
 const messagesPanel = ref(null)
 const groupForm = reactive({ name: '', externalId: '', inviteLink: '', description: '' })
+const bulkForm = reactive({
+  recipientMode: 'contacts',
+  contactIds: [],
+  groupIds: [],
+  mode: 'quick',
+  message: '',
+  templateId: null,
+})
 let chatRefreshTimer
+let queueRefreshTimer
+let issueRequestSequence = 0
+let deliveryRequestSequence = 0
 
 const groupColumns = [
   { name: 'name', label: 'Grupo', field: 'name', align: 'left' },
   { name: 'chatId', label: 'Chat ID', field: 'externalId', align: 'left' },
   { name: 'inviteLink', label: 'Link', field: 'inviteLink', align: 'left' },
   { name: 'actions', label: '', field: 'actions', align: 'right' },
+]
+
+const queueLogColumns = [
+  { name: 'createdAt', label: 'Quando', field: 'createdAt', align: 'left' },
+  { name: 'event', label: 'Evento', field: 'action', align: 'left' },
+  { name: 'contact', label: 'Contato', field: 'contact', align: 'left' },
+  { name: 'status', label: 'Status', field: 'status', align: 'left' },
+  { name: 'message', label: 'Resumo', field: 'message', align: 'left' },
+]
+
+const issueColumns = [
+  { name: 'contact', label: 'Contato', field: 'contactId', align: 'left' },
+  { name: 'status', label: 'Status', field: 'status', align: 'left' },
+  { name: 'reason', label: 'Motivo', field: 'errorMessage', align: 'left' },
+  { name: 'createdAt', label: 'Quando', field: 'createdAt', align: 'left' },
+  { name: 'actions', label: '', field: 'actions', align: 'right' },
+]
+
+const deliveryColumns = [
+  { name: 'contact', label: 'Contato', field: 'contactId', align: 'left' },
+  { name: 'status', label: 'Status', field: 'status', align: 'left' },
+  { name: 'attempts', label: 'Tentativas', field: 'attempts', align: 'center' },
+  { name: 'detail', label: 'Detalhe', field: 'errorMessage', align: 'left' },
+  { name: 'updatedAt', label: 'Atualizado', field: 'updatedAt', align: 'left' },
 ]
 
 const filteredChats = computed(() => {
@@ -59,6 +118,30 @@ const templateOptions = computed(() => templates.value.map((item) => ({
   label: item.name || item.title,
   value: item.id || item._id,
 })))
+
+const eligibleContacts = computed(() => contacts.value.filter((contact) => isContactEligible(contact, 'telegram')))
+const bulkContactOptions = computed(() => eligibleContacts.value.map((contact) => ({
+  label: `${contact.displayName || contact.name || 'Sem nome'} · ${channelIdentity(contact, 'telegram')?.address || contact.telegramUsername || 'sem chat_id'}`,
+  value: recordId(contact),
+})))
+const contactGroupOptions = computed(() => contactGroups.value
+  .filter((group) => group.active !== false && !group.notificationDisabled)
+  .map((group) => ({
+    label: `${group.name || 'Grupo sem nome'} · ${group.contactCount ?? group.contacts?.length ?? 0} contato(s)`,
+    value: recordId(group),
+  })))
+const bulkEligibility = computed(() => selectedRecipientsEligibility({
+  selectedContactIds: bulkForm.recipientMode === 'contacts' ? bulkForm.contactIds : [],
+  selectedGroupIds: bulkForm.recipientMode === 'groups' ? bulkForm.groupIds : [],
+  groups: contactGroups.value,
+  contacts: contacts.value,
+  channel: 'telegram',
+}))
+const lastDispatchId = computed(() => recordId(lastDispatch.value) || lastDispatch.value?.notificationId || null)
+const lastDispatchQueued = computed(() => dispatchDeliveryCount(lastDispatch.value, 'queued'))
+const lastDispatchSkipped = computed(() => dispatchDeliveryCount(lastDispatch.value, 'skipped'))
+const lastDispatchFailed = computed(() => dispatchDeliveryCount(lastDispatch.value, 'failed'))
+const lastDispatchHasIssues = computed(() => lastDispatchSkipped.value + lastDispatchFailed.value > 0)
 
 const selectedRealtimeMessages = computed(() => realtimeMessages.value
   .filter((item) => String(item.conversationId) === String(recordId(selected.value)))
@@ -136,19 +219,74 @@ async function loadBotIdentity() {
   }
 }
 
+async function loadDeliveryIssues({ pagination = issuePagination.value, notificationId = issueNotificationId.value, showError = true } = {}) {
+  const requestId = ++issueRequestSequence
+  const page = Math.max(1, Number(pagination?.page) || 1)
+  const limit = Math.max(1, Number(pagination?.rowsPerPage || pagination?.limit) || 10)
+  issuesLoading.value = true
+  try {
+    const response = await http.get('/notifications/delivery-issues', {
+      params: { channel: 'telegram', page, limit, ...(notificationId ? { notificationId } : {}) },
+    })
+    if (requestId !== issueRequestSequence) return
+    const result = normalizeDeliveryIssuePage(unwrap(response) || {}, contacts.value)
+    deliveryIssues.value = result.items
+    issuePagination.value = { page: result.page, rowsPerPage: result.limit, rowsNumber: result.total }
+  } catch (error) {
+    if (requestId === issueRequestSequence && showError) {
+      $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível carregar as falhas do Telegram.') })
+    }
+  } finally {
+    if (requestId === issueRequestSequence) issuesLoading.value = false
+  }
+}
+
+async function loadDispatchDeliveries({ pagination = deliveryPagination.value, showError = true } = {}) {
+  if (!lastDispatchId.value) {
+    dispatchDeliveries.value = []
+    return
+  }
+  const requestId = ++deliveryRequestSequence
+  const page = Math.max(1, Number(pagination?.page) || 1)
+  const limit = Math.max(1, Number(pagination?.rowsPerPage || pagination?.limit) || 10)
+  deliveriesLoading.value = true
+  try {
+    const response = await http.get(`/notifications/${lastDispatchId.value}/deliveries`, {
+      params: { channel: 'telegram', page, limit },
+    })
+    if (requestId !== deliveryRequestSequence) return
+    const result = normalizeDeliveryPage(unwrap(response) || {}, contacts.value)
+    dispatchDeliveries.value = result.items
+    deliveryPagination.value = { page: result.page, rowsPerPage: result.limit, rowsNumber: result.total }
+  } catch (error) {
+    if (requestId === deliveryRequestSequence && showError) {
+      $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível carregar as entregas deste disparo.') })
+    }
+  } finally {
+    if (requestId === deliveryRequestSequence) deliveriesLoading.value = false
+  }
+}
+
 async function loadData() {
   loading.value = true
   try {
-    const [chatItems, groupItems, templateItems, status] = await Promise.all([
+    const [chatItems, groupItems, contactGroupItems, contactItems, templateItems, status, logResponse] = await Promise.all([
       fetchAll('/conversations', { params: { channel: 'telegram', isGroup: false, limit: 100 }, preferredKey: 'items' }),
       fetchAll('/telegram/groups', { preferredKey: 'groups' }),
+      fetchAll('/contact-groups', { preferredKey: 'groups' }),
+      fetchAll('/contacts', { preferredKey: 'contacts', maxItems: 10000, maxPages: 100 }),
       fetchAll('/templates', { params: { channel: 'telegram' }, preferredKey: 'templates' }),
       http.get('/telegram/status', { params: { probe: true } }).then(unwrap),
+      http.get('/logs', { params: { channel: 'telegram', limit: 50 } }),
     ])
     replaceChats(chatItems)
     groups.value = groupItems
+    contactGroups.value = contactGroupItems
+    contacts.value = contactItems
     templates.value = templateItems
+    queueLogs.value = asList(unwrap(logResponse), 'logs')
     bot.value = telegramBotIdentity(status)
+    await loadDeliveryIssues({ showError: false })
     if (selected.value) {
       loadSelectedContact(selected.value)
       await loadConversationMessages(selected.value)
@@ -304,6 +442,16 @@ async function onConversationRemoved(payload = {}) {
   if (selectedWasRemoved && selected.value) await loadConversationMessages(selected.value)
 }
 
+function onQueueLog(log) {
+  if (log?.channel !== 'telegram' || !String(log.action || '').startsWith('notification.')) return
+  queueLogs.value = [log, ...queueLogs.value.filter((item) => String(recordId(item)) !== String(recordId(log)))].slice(0, 50)
+  clearTimeout(queueRefreshTimer)
+  queueRefreshTimer = setTimeout(async () => {
+    await loadData()
+    if (lastDispatchId.value) await loadDispatchDeliveries({ showError: false })
+  }, 450)
+}
+
 function onSocketConnected() {
   liveConnected.value = true
   scheduleChatRefresh()
@@ -317,6 +465,99 @@ function onSocketDisconnected() {
 function formatMessageTime(value) {
   if (!value) return ''
   return new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(new Date(value))
+}
+
+function formatDate(value) {
+  if (!value) return '—'
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
+}
+
+function queueLogStatus(log = {}) {
+  return log.context?.status || log.status || (log.level === 'error' ? 'failed' : log.action?.split('.').at(-1)) || 'info'
+}
+
+function queueLogContact(log = {}) {
+  const contactId = String(log.context?.contactId || '')
+  const contact = contacts.value.find((item) => String(recordId(item)) === contactId)
+  return contact?.displayName || contact?.name || log.context?.contactName || contactId || 'Lote'
+}
+
+function setBulkRecipientMode(mode) {
+  bulkForm.recipientMode = mode
+  if (mode === 'contacts') bulkForm.groupIds = []
+  else bulkForm.contactIds = []
+}
+
+function validateBulkSend() {
+  if (bulkForm.recipientMode === 'contacts' && !bulkForm.contactIds.length) return 'Selecione ao menos um contato autorizado.'
+  if (bulkForm.recipientMode === 'groups' && !bulkForm.groupIds.length) return 'Selecione ao menos um grupo de contatos.'
+  if (bulkForm.mode === 'quick' && !bulkForm.message.trim()) return 'Escreva a mensagem.'
+  if (bulkForm.mode === 'template' && !bulkForm.templateId) return 'Selecione um template.'
+  return null
+}
+
+async function sendBulk() {
+  const validationError = validateBulkSend()
+  if (validationError) {
+    $q.notify({ type: 'warning', message: validationError })
+    return
+  }
+  bulkSending.value = true
+  try {
+    const response = await http.post('/notifications', {
+      kind: bulkForm.mode,
+      channel: 'telegram',
+      contactIds: bulkForm.recipientMode === 'contacts' ? bulkForm.contactIds : [],
+      groupIds: bulkForm.recipientMode === 'groups' ? bulkForm.groupIds : [],
+      templateId: bulkForm.mode === 'template' ? bulkForm.templateId : undefined,
+      content: bulkForm.mode === 'quick' ? { text: bulkForm.message } : { variables: {} },
+      idempotencyKey: newIdempotencyKey('telegram'),
+    })
+    lastDispatch.value = unwrap(response) || {}
+    await loadDispatchDeliveries()
+    const queued = lastDispatchQueued.value
+    const skipped = lastDispatchSkipped.value
+    const failed = lastDispatchFailed.value
+    $q.notify({
+      type: queued ? 'positive' : 'warning',
+      message: queued ? `${queued} entrega(s) colocada(s) na fila.` : 'Nenhuma entrega elegível foi enfileirada.',
+      caption: skipped || failed ? `${skipped} ignorada(s) e ${failed} falha(s); o restante segue normalmente.` : undefined,
+    })
+    if (bulkForm.mode === 'quick') bulkForm.message = ''
+    await loadData()
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível enfileirar o disparo do Telegram.') })
+  } finally {
+    bulkSending.value = false
+  }
+}
+
+function openBulkContact(contact) {
+  if (!contact) return
+  contactForDialog.value = contact
+  contactDialog.value = true
+}
+
+function onIssuesRequest({ pagination }) {
+  loadDeliveryIssues({ pagination })
+}
+
+function onDeliveriesRequest({ pagination }) {
+  loadDispatchDeliveries({ pagination })
+}
+
+async function showDispatchIssues() {
+  if (!lastDispatchId.value) return
+  issueNotificationId.value = lastDispatchId.value
+  await loadDeliveryIssues({ pagination: { ...issuePagination.value, page: 1 } })
+  await nextTick()
+  const element = issuesSection.value?.$el || issuesSection.value
+  element?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+}
+
+async function showAllDeliveryIssues() {
+  issueNotificationId.value = null
+  await loadDeliveryIssues({ pagination: { ...issuePagination.value, page: 1 }, notificationId: null })
 }
 
 async function send() {
@@ -428,6 +669,7 @@ onMounted(() => {
   socket.on('telegram:webhook', onChatsChanged)
   socket.on('conversation:message', onConversationMessage)
   socket.on('conversation:removed', onConversationRemoved)
+  socket.on('log:created', onQueueLog)
   connectSocket()
   liveConnected.value = socket.connected
   loadData()
@@ -435,6 +677,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearTimeout(chatRefreshTimer)
+  clearTimeout(queueRefreshTimer)
   const socket = getSocket()
   socket.off('connect', onSocketConnected)
   socket.off('disconnect', onSocketDisconnected)
@@ -443,6 +686,7 @@ onBeforeUnmount(() => {
   socket.off('telegram:webhook', onChatsChanged)
   socket.off('conversation:message', onConversationMessage)
   socket.off('conversation:removed', onConversationRemoved)
+  socket.off('log:created', onQueueLog)
 })
 </script>
 
@@ -473,20 +717,168 @@ onBeforeUnmount(() => {
         :color="liveConnected ? 'positive' : 'grey-6'"
         :label="liveConnected ? 'Atualização automática ativa' : 'Reconectando atualização automática'"
       />
-    </div>
-
-    <div class="policy-note q-mb-lg">
-      <q-icon name="info" size="22px" />
-      <span>O bot só envia mensagens privadas depois que a pessoa inicia ou autoriza a conversa. Participar do mesmo grupo não autoriza uma mensagem privada.</span>
+      <ContextHelp
+        title="Permissão para mensagens privadas"
+        tooltip="Entenda quem pode receber mensagens do bot"
+        text="O bot só envia mensagens privadas depois que a pessoa inicia ou autoriza a conversa. Participar do mesmo grupo não autoriza uma mensagem privada."
+      />
     </div>
 
     <q-card flat class="glass-card section-card">
       <q-tabs v-model="tab" no-caps inline-label active-color="primary" indicator-color="transparent" class="q-mb-lg">
+        <q-tab name="broadcast" icon="campaign" label="Disparos em massa" />
         <q-tab name="chats" icon="forum" label="Conversas autorizadas" />
         <q-tab name="groups" icon="groups" label="Grupos vinculados" />
       </q-tabs>
 
       <q-tab-panels v-model="tab" animated class="transparent">
+        <q-tab-panel name="broadcast" class="q-pa-none">
+          <div class="bulk-workspace">
+            <section class="bulk-composer">
+              <div class="section-title-row">
+                <div><h2 class="section-title">Novo disparo do Telegram</h2><p class="section-copy">Selecione contatos ou grupos da base. A fila deduplica destinos e preserva o lote quando uma entrega falha.</p></div>
+                <q-badge outline color="primary" label="ENVIO PELA FILA" />
+              </div>
+
+              <q-btn-toggle
+                v-model="bulkForm.mode"
+                spread
+                no-caps
+                unelevated
+                toggle-color="primary"
+                color="white"
+                text-color="dark"
+                :options="[{ label: 'Mensagem rápida', value: 'quick' }, { label: 'Usar template', value: 'template' }]"
+                class="q-my-lg"
+              />
+
+              <div class="bulk-recipient-switch q-mb-lg">
+                <button type="button" :class="{ active: bulkForm.recipientMode === 'contacts' }" @click="setBulkRecipientMode('contacts')"><q-icon name="people" />Contatos autorizados</button>
+                <button type="button" :class="{ active: bulkForm.recipientMode === 'groups' }" @click="setBulkRecipientMode('groups')"><q-icon name="groups" />Grupo(s) de contatos</button>
+              </div>
+
+              <q-select
+                v-if="bulkForm.recipientMode === 'contacts'"
+                v-model="bulkForm.contactIds"
+                outlined
+                multiple
+                use-chips
+                use-input
+                emit-value
+                map-options
+                :options="bulkContactOptions"
+                label="Contatos autorizados *"
+                hint="Selecione um ou vários contatos"
+              />
+              <q-select
+                v-else
+                v-model="bulkForm.groupIds"
+                outlined
+                multiple
+                use-chips
+                use-input
+                emit-value
+                map-options
+                :options="contactGroupOptions"
+                label="Grupos de contatos *"
+                hint="Contatos repetidos serão enviados apenas uma vez"
+              />
+
+              <q-input v-if="bulkForm.mode === 'quick'" v-model="bulkForm.message" outlined type="textarea" autogrow label="Mensagem *" class="q-mt-lg" />
+              <q-select v-else v-model="bulkForm.templateId" outlined emit-value map-options :options="templateOptions" label="Template do Telegram *" class="q-mt-lg" />
+
+              <section v-if="bulkEligibility.contactIds.length" class="bulk-eligibility q-mt-lg">
+                <header>
+                  <div><strong>Elegibilidade da seleção</strong><span>{{ bulkEligibility.contactIds.length }} contato(s) único(s)</span></div>
+                  <div class="bulk-eligibility__counts"><q-badge color="positive" :label="`${bulkEligibility.eligible.length} elegíveis`" /><q-badge color="warning" text-color="dark" :label="`${bulkEligibility.ineligible.length} inelegíveis`" /></div>
+                </header>
+                <div v-if="bulkEligibility.ineligible.length" class="bulk-ineligible-list">
+                  <div v-for="item in bulkEligibility.ineligible.slice(0, 8)" :key="item.contactId" class="bulk-ineligible-row">
+                    <q-icon name="warning" color="warning" />
+                    <div><strong>{{ item.contact?.displayName || item.contactId }}</strong><span>{{ item.reason }}</span></div>
+                    <q-btn v-if="item.contact" flat color="primary" no-caps icon="manage_accounts" label="Editar permissão" @click="openBulkContact(item.contact)" />
+                  </div>
+                </div>
+              </section>
+
+              <div class="bulk-send-actions q-mt-lg"><q-btn color="dark" unelevated no-caps icon-right="send" label="Enviar pela fila" :loading="bulkSending" @click="sendBulk" /></div>
+            </section>
+
+            <aside class="bulk-summary">
+              <div class="bulk-summary__stats">
+                <div><strong>{{ eligibleContacts.length }}</strong><span>contatos autorizados</span></div>
+                <div><strong>{{ contactGroups.length }}</strong><span>grupos da base</span></div>
+                <div><strong>{{ templates.length }}</strong><span>templates disponíveis</span></div>
+              </div>
+              <div v-if="lastDispatch" class="bulk-result">
+                <div class="row items-start"><div><strong>Último disparo</strong><span>Processamento individual pela fila</span></div><q-space /><q-btn flat round dense icon="close" aria-label="Fechar resultado" @click="lastDispatch = null" /></div>
+                <div class="bulk-result__counts">
+                  <div><strong>{{ lastDispatchQueued }}</strong><span>fila</span></div>
+                  <div><strong>{{ lastDispatchSkipped }}</strong><span>ignorados</span></div>
+                  <div><strong>{{ lastDispatchFailed }}</strong><span>falhas</span></div>
+                </div>
+                <q-btn v-if="lastDispatchHasIssues && lastDispatchId" outline color="primary" no-caps icon="manage_search" label="Ver detalhes" :loading="issuesLoading && issueNotificationId === lastDispatchId" @click="showDispatchIssues" />
+              </div>
+            </aside>
+          </div>
+
+          <section v-if="lastDispatch" class="bulk-log-section q-mt-xl">
+            <div class="section-title-row"><div><h3 class="section-title">Entregas do último disparo</h3><p class="section-copy">Status e tentativas por contato, incluindo sucessos, falhas e itens ignorados.</p></div></div>
+            <q-table
+              flat
+              :rows="dispatchDeliveries"
+              :columns="deliveryColumns"
+              row-key="id"
+              v-model:pagination="deliveryPagination"
+              :loading="deliveriesLoading"
+              :rows-per-page-options="[10, 25, 50, 100]"
+              @request="onDeliveriesRequest"
+            >
+              <template #body-cell-contact="props"><q-td :props="props"><strong>{{ props.row.contact?.displayName || props.row.contact?.name || props.row.contactId }}</strong></q-td></template>
+              <template #body-cell-status="props"><q-td :props="props"><q-badge :color="deliveryStatusColor(props.row.status)" :label="props.row.status" /></q-td></template>
+              <template #body-cell-attempts="props"><q-td :props="props" class="text-center">{{ props.row.attempts || 0 }}</q-td></template>
+              <template #body-cell-detail="props"><q-td :props="props" class="bulk-issue-reason">{{ props.row.errorMessage || (['sent', 'delivered', 'read'].includes(props.row.status) ? 'Entrega concluída' : 'Aguardando processamento') }}</q-td></template>
+              <template #body-cell-updatedAt="props"><q-td :props="props">{{ formatDate(props.row.updatedAt || props.row.sentAt || props.row.createdAt) }}</q-td></template>
+            </q-table>
+          </section>
+
+          <section ref="issuesSection" class="bulk-log-section q-mt-xl">
+            <div class="section-title-row">
+              <div><h3 class="section-title">Ignorados e falhas</h3><p class="section-copy">{{ issueNotificationId ? 'Exibindo o disparo selecionado.' : 'Permissões ausentes e erros ficam registrados sem travar os demais envios.' }}</p></div>
+              <div class="row items-center q-gutter-sm"><q-badge color="warning" text-color="dark" :label="`${issuePagination.rowsNumber} ocorrência(s)`" /><q-btn v-if="issueNotificationId" flat color="primary" no-caps icon="history" label="Todo o histórico" @click="showAllDeliveryIssues" /></div>
+            </div>
+            <q-table
+              flat
+              :rows="deliveryIssues"
+              :columns="issueColumns"
+              row-key="id"
+              v-model:pagination="issuePagination"
+              :loading="issuesLoading"
+              :rows-per-page-options="[10, 25, 50, 100]"
+              @request="onIssuesRequest"
+            >
+              <template #body-cell-contact="props"><q-td :props="props"><strong>{{ props.row.contact?.displayName || props.row.contact?.name || props.row.contactId }}</strong></q-td></template>
+              <template #body-cell-status="props"><q-td :props="props"><q-badge :color="deliveryStatusColor(props.row.status)" :label="props.row.status" /></q-td></template>
+              <template #body-cell-reason="props"><q-td :props="props" class="bulk-issue-reason">{{ props.row.errorMessage }}</q-td></template>
+              <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt) }}</q-td></template>
+              <template #body-cell-actions="props"><q-td :props="props"><q-btn v-if="props.row.contact" flat dense color="primary" no-caps icon="manage_accounts" label="Editar permissão" @click="openBulkContact(props.row.contact)" /></q-td></template>
+              <template #no-data><div class="full-width text-center q-pa-lg text-muted">Nenhuma entrega ignorada ou com falha.</div></template>
+            </q-table>
+          </section>
+
+          <section class="bulk-log-section q-mt-xl">
+            <div class="section-title-row"><div><h3 class="section-title">Logs da fila</h3><p class="section-copy">Sucessos, falhas e tentativas recentes de cada entrega.</p></div></div>
+            <EmptyState v-if="!loading && !queueLogs.length" icon="receipt_long" title="Nenhum disparo processado" description="Os próximos eventos da fila aparecerão aqui." />
+            <q-table v-else flat :rows="queueLogs" :columns="queueLogColumns" row-key="id" :loading="loading" :rows-per-page-options="[10, 25, 50]">
+              <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt) }}</q-td></template>
+              <template #body-cell-event="props"><q-td :props="props"><strong>{{ props.row.action || 'notification.event' }}</strong></q-td></template>
+              <template #body-cell-contact="props"><q-td :props="props">{{ queueLogContact(props.row) }}</q-td></template>
+              <template #body-cell-status="props"><q-td :props="props"><q-badge :color="deliveryStatusColor(queueLogStatus(props.row))" :label="queueLogStatus(props.row)" /></q-td></template>
+              <template #body-cell-message="props"><q-td :props="props" class="truncate" style="max-width: 420px">{{ props.row.message || props.row.summary || 'Evento processado' }}</q-td></template>
+            </q-table>
+          </section>
+        </q-tab-panel>
+
         <q-tab-panel name="chats" class="q-pa-none">
           <div class="telegram-workspace">
             <section class="chat-list-panel">
@@ -630,19 +1022,6 @@ onBeforeUnmount(() => {
   line-height: 1.25;
 }
 
-.policy-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-  padding: 14px 16px;
-  border: 1px solid rgba(36, 123, 160, 0.2);
-  border-radius: 16px;
-  background: rgba(224, 246, 255, 0.64);
-  color: #315e70;
-  font-size: 0.83rem;
-  line-height: 1.5;
-}
-
 .telegram-workspace {
   display: grid;
   min-height: 520px;
@@ -776,6 +1155,168 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.bulk-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(250px, 0.65fr);
+  gap: 22px;
+}
+
+.bulk-composer {
+  min-width: 0;
+}
+
+.bulk-recipient-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 6px;
+  border-radius: 16px;
+  background: rgba(18, 106, 91, 0.07);
+}
+
+.bulk-recipient-switch button {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: #536b66;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.bulk-recipient-switch button.active {
+  background: #fff;
+  color: var(--q-primary);
+  box-shadow: 0 7px 22px rgba(3, 62, 55, 0.09);
+}
+
+.bulk-summary {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.bulk-summary__stats,
+.bulk-result,
+.bulk-eligibility {
+  padding: 15px;
+  border: 1px solid rgba(18, 106, 91, 0.14);
+  border-radius: 16px;
+  background: rgba(244, 253, 250, 0.7);
+}
+
+.bulk-summary__stats {
+  display: grid;
+  gap: 8px;
+}
+
+.bulk-summary__stats > div {
+  display: grid;
+  padding: 11px 13px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.bulk-summary__stats strong {
+  color: #0d6f5c;
+  font-size: 1.35rem;
+}
+
+.bulk-summary__stats span,
+.bulk-result span,
+.bulk-eligibility header span,
+.bulk-ineligible-row span {
+  color: #6b7f7b;
+  font-size: 0.75rem;
+}
+
+.bulk-result > .row > div,
+.bulk-result__counts > div,
+.bulk-eligibility header > div:first-child,
+.bulk-ineligible-row > div {
+  display: grid;
+  min-width: 0;
+}
+
+.bulk-result__counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin: 13px 0;
+}
+
+.bulk-result__counts > div {
+  padding: 9px;
+  border-radius: 11px;
+  background: #fff;
+  text-align: center;
+}
+
+.bulk-result__counts strong {
+  color: #0d6f5c;
+  font-size: 1.15rem;
+}
+
+.bulk-eligibility header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bulk-eligibility__counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.bulk-ineligible-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.bulk-ineligible-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.bulk-send-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.bulk-log-section {
+  padding-top: 20px;
+  border-top: 1px solid rgba(3, 21, 21, 0.08);
+}
+
+.bulk-issue-reason {
+  max-width: 420px;
+  white-space: normal;
+}
+
+@media (max-width: 960px) {
+  .bulk-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .bulk-summary__stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 780px) {
   .telegram-workspace {
     grid-template-columns: 1fr;
@@ -788,6 +1329,26 @@ onBeforeUnmount(() => {
 
   .chat-list {
     max-height: 290px;
+  }
+
+  .bulk-summary__stats,
+  .bulk-recipient-switch,
+  .bulk-result__counts {
+    grid-template-columns: 1fr;
+  }
+
+  .bulk-eligibility header,
+  .bulk-ineligible-row {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
+  }
+
+  .bulk-eligibility__counts {
+    justify-content: flex-start;
+  }
+
+  .bulk-send-actions .q-btn {
+    width: 100%;
   }
 }
 </style>

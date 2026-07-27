@@ -18,6 +18,7 @@ export function contactAuthorizationValidation(value = {}) {
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import ContextHelp from './ContextHelp.vue'
 import { errorMessage, http } from '../services/http.js'
 import { contactIdentitySummaries, pendingWhatsappConsent } from '../services/contact-identities.js'
 
@@ -267,7 +268,15 @@ watch(() => props.modelValue, (open) => open && reset())
               :error="Boolean(authorizationPhoneError)"
               :error-message="authorizationPhoneError || undefined"
             />
-            <q-input v-model.trim="form.telegramUsername" outlined label="Usuário do Telegram" prefix="@" />
+            <q-input v-model.trim="form.telegramUsername" outlined label="Usuário do Telegram" prefix="@">
+              <template #append>
+                <ContextHelp
+                  title="Identificação no Telegram"
+                  tooltip="Entenda username e chat ID"
+                  text="O @username do Telegram é apenas referência. A autorização exige que a pessoa inicie o bot; somente a API pode registrar o chat_id recebido."
+                />
+              </template>
+            </q-input>
             <q-input v-model="form.tagsText" outlined label="Tags" hint="Separe por vírgula" class="full-span" />
             <q-input v-model="form.notes" outlined type="textarea" label="Observações" class="full-span" />
             <section v-if="providerIdentitySummaries.length" class="full-span provider-identities" aria-label="Identificadores dos provedores">
@@ -276,7 +285,15 @@ watch(() => props.modelValue, (open) => open && reset())
                   <strong>Vínculos e IDs dos provedores</strong>
                   <span>Dados recebidos automaticamente são somente leitura e permanecem vinculados ao contato.</span>
                 </div>
-                <q-icon name="verified_user" color="primary" />
+                <div class="row items-center no-wrap q-gutter-xs">
+                  <ContextHelp
+                    v-if="hasWhatsappWebIdentity"
+                    title="Uso da identidade do WhatsApp Web"
+                    tooltip="Entenda a identidade do WhatsApp Web"
+                    text="WhatsApp Web disponível somente para chat direto; a identidade recebida pelo provedor será preservada automaticamente."
+                  />
+                  <q-icon name="verified_user" color="primary" />
+                </div>
               </div>
               <div class="provider-identities__grid">
                 <article v-for="summary in providerIdentitySummaries" :key="summary.identity.id || `${summary.channel}:${summary.identity.address}`" class="provider-identity-card">
@@ -300,17 +317,15 @@ watch(() => props.modelValue, (open) => open && reset())
                 </article>
               </div>
             </section>
-            <div class="full-span telegram-warning">
-              <q-icon name="info" color="info" />
-              <span>O @username do Telegram é apenas referência. A autorização exige que a pessoa inicie o bot; somente a API pode registrar o chat_id recebido.</span>
-            </div>
-            <div v-if="hasWhatsappWebIdentity" class="full-span telegram-warning">
-              <q-icon name="forum" color="info" />
-              <span>WhatsApp Web disponível somente para chat direto; a identidade recebida pelo provedor será preservada automaticamente.</span>
-            </div>
             <section class="full-span consent-box" aria-label="Permissões manuais do contato">
-              <div class="text-weight-bold">Permissões de envio e resposta</div>
-              <div class="text-caption text-muted q-mb-md">O comando configurado, recebido pelo WhatsApp Web ou Cloud, autoriza as duas integrações WhatsApp. A identidade de origem é liberada imediatamente; se a outra ainda não existir, a autorização fica pendente até uma interação real, sem criar um destino artificial. Web, Cloud e Email continuam separados aqui para ajustes individuais; toda remoção exige confirmação.</div>
+              <div class="row items-center q-mb-md">
+                <div class="text-weight-bold">Permissões de envio e resposta</div>
+                <ContextHelp
+                  title="Permissões e autorização compartilhada do WhatsApp"
+                  tooltip="Entenda como as permissões são aplicadas"
+                  text="O comando configurado, recebido pelo WhatsApp Web ou Cloud, autoriza as duas integrações WhatsApp. A identidade de origem é liberada imediatamente; se a outra ainda não existir, a autorização fica pendente até uma interação real, sem criar um destino artificial. Web, Cloud e Email continuam separados aqui para ajustes individuais; toda remoção exige confirmação."
+                />
+              </div>
               <div class="permission-grid">
                 <article
                   v-for="item in permissionCards"
@@ -381,8 +396,7 @@ watch(() => props.modelValue, (open) => open && reset())
   scrollbar-gutter: stable;
 }
 
-.consent-box,
-.telegram-warning {
+.consent-box {
   padding: 15px;
   border-radius: 15px;
 }
@@ -453,17 +467,6 @@ watch(() => props.modelValue, (open) => open && reset())
 
 .permission-card__provenance time {
   grid-column: 2;
-}
-
-.telegram-warning {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  border: 1px solid rgba(36, 123, 160, 0.18);
-  background: rgba(224, 246, 255, 0.52);
-  color: #315e70;
-  font-size: 0.78rem;
-  line-height: 1.45;
 }
 
 .provider-identities {

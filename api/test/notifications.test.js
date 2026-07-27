@@ -96,6 +96,63 @@ test('falhas de delivery sao paginadas no Mongo sem expor receipt do provedor', 
   assert.deepEqual(pipeline.find((stage) => stage.$facet).$facet.items.slice(0, 2), [{ $skip: 10 }, { $limit: 10 }]);
 });
 
+test('resultado individual do lote pagina sucesso, falha e skip sem expor id do provedor', async (context) => {
+  const originals = {
+    exists: Notification.exists,
+    aggregate: Notification.aggregate
+  };
+  context.after(() => {
+    Notification.exists = originals.exists;
+    Notification.aggregate = originals.aggregate;
+  });
+  let pipeline;
+  Notification.exists = async () => ({ _id: '507f1f77bcf86cd799439099' });
+  Notification.aggregate = async (value) => {
+    pipeline = value;
+    return [{
+      items: [{
+        id: '507f1f77bcf86cd799439021',
+        notificationId: '507f1f77bcf86cd799439099',
+        contactId: '507f1f77bcf86cd799439011',
+        channel: 'email',
+        status: 'sent',
+        attempts: 1,
+        errorCode: null,
+        errorMessage: null,
+        sentAt: new Date('2026-07-26T20:00:00Z'),
+        createdAt: new Date('2026-07-26T19:59:00Z')
+      }],
+      metadata: [{ total: 37 }]
+    }];
+  };
+
+  const result = await notificationsManager.listDeliveries(
+    '507f1f77bcf86cd799439099',
+    { channel: 'email', status: 'sent', page: 2, limit: 20 }
+  );
+
+  assert.equal(result.total, 37);
+  assert.equal(result.pages, 2);
+  assert.equal(result.items[0].contactPath, '/contacts/507f1f77bcf86cd799439011');
+  assert.equal(result.items[0].providerMessageId, undefined);
+  assert.deepEqual(pipeline.find((stage) => stage.$facet).$facet.items.slice(0, 2), [{ $skip: 20 }, { $limit: 20 }]);
+  const deliveryFilter = pipeline.find((stage) => stage.$match?.['deliveries.status']);
+  assert.deepEqual(deliveryFilter.$match, {
+    'deliveries.channel': 'email',
+    'deliveries.status': 'sent'
+  });
+});
+
+test('consulta de deliveries retorna 404 para notificacao inexistente', async (context) => {
+  const original = Notification.exists;
+  context.after(() => { Notification.exists = original; });
+  Notification.exists = async () => null;
+  await assert.rejects(
+    () => notificationsManager.listDeliveries('507f1f77bcf86cd799439099'),
+    (error) => error.statusCode === 404
+  );
+});
+
 test('retry recalcula summary antes de devolver resposta compacta', async (context) => {
   const originals = {
     findById: Notification.findById,
@@ -541,7 +598,11 @@ test('worker envia canal disponivel mesmo com skip e falha nos demais', async (c
     throw error;
   };
   telegramManager.send = async () => ({ providerMessageId: 'tg-1' });
-  logsManager.create = async () => ({});
+  const logInputs = [];
+  logsManager.create = async (input) => {
+    logInputs.push(input);
+    return {};
+  };
 
   await notificationsManager.processJob({ notificationId: String(fake._id) });
   assert.equal(emailCalled, false);
@@ -553,6 +614,20 @@ test('worker envia canal disponivel mesmo com skip e falha nos demais', async (c
   assert.equal(fake.deliveries[0].errorCode, 'CHANNEL_NOT_CONFIGURED');
   assert.equal(fake.status, 'partial');
   assert.deepEqual(fake.summary, { queued: 0, sent: 1, failed: 1, skipped: 1 });
+  const skippedLog = logInputs.find((item) => item.action === 'notification.delivery.skipped');
+  const failedLog = logInputs.find((item) => item.action === 'notification.delivery.failed');
+  assert.deepEqual(skippedLog.context, {
+    notificationId: String(fake._id),
+    deliveryId: null,
+    contactId,
+    status: 'skipped',
+    attempts: 1,
+    errorCode: 'CHANNEL_NOT_CONFIGURED'
+  });
+  assert.equal(skippedLog.context.errorMessage, undefined);
+  assert.equal(failedLog.context.contactId, contactId);
+  assert.equal(failedLog.context.errorCode, 'WHATSAPP_CLOUD_ERROR');
+  assert.equal(failedLog.context.errorMessage, undefined);
 });
 
 test('canais opcionais ignorados nao rebaixam um disparo global bem-sucedido', async (context) => {
@@ -700,7 +775,12 @@ test('worker persiste somente a subdelivery durante lotes grandes', async (conte
     status: 'processing',
     channel: 'telegram',
     template: null,
-    content: { text: 'Lote' },
+    content: {
+      text: 'Lote',
+      contactId: 'destino-forjado',
+      notificationId: 'notificacao-forjada',
+      deliveryId: 'delivery-forjada'
+    },
     recipientContacts: contactIds,
     recipientGroups: [],
     deliveries: contactIds.map((contact, index) => ({
@@ -722,7 +802,11 @@ test('worker persiste somente a subdelivery durante lotes grandes', async (conte
   groupsManager.expandContactIds = async () => [];
   contactsManager.getById = async (id) => ({ id, displayName: id, active: true });
   telegramManager.status = async () => ({ configured: true });
-  telegramManager.send = async ({ contactId }) => ({ providerMessageId: `tg-${contactId}` });
+  const sendInputs = [];
+  telegramManager.send = async (input) => {
+    sendInputs.push(input);
+    return { providerMessageId: `tg-${input.contactId}` };
+  };
   logsManager.create = async () => ({});
 
   await notificationsManager.processJob({ notificationId: String(fake._id) });
@@ -730,6 +814,9 @@ test('worker persiste somente a subdelivery durante lotes grandes', async (conte
   assert.equal(positionalUpdates.length, 2);
   assert.ok(positionalUpdates.every((item) => item.filter['deliveries._id']));
   assert.ok(positionalUpdates.every((item) => item.update.$set['deliveries.$.status'] === 'sent'));
+  assert.deepEqual(sendInputs.map((input) => input.contactId), contactIds);
+  assert.ok(sendInputs.every((input) => input.notificationId === String(fake._id)));
+  assert.deepEqual(sendInputs.map((input) => input.deliveryId), fake.deliveries.map((delivery) => String(delivery._id)));
   assert.equal(fullSaves, 1);
 });
 

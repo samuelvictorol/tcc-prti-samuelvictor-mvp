@@ -177,7 +177,9 @@ test('worker global aplica o template correspondente a cada entrega', async (con
 
   assert.equal(sent.telegram.text, 'Oi Ana, protocolo ABC-123');
   assert.equal(sent.telegram.payload.telegram.text, 'Oi Ana, protocolo ABC-123');
+  assert.equal(sent.telegram.notificationId, String(fake._id));
   assert.equal(sent.email.subject, 'Protocolo ABC-123');
+  assert.equal(sent.email.notificationId, String(fake._id));
   assert.equal(sent.email.html, '<p>Olá Ana</p>');
   assert.deepEqual(fake.deliveries.map((delivery) => delivery.status), ['sent', 'sent']);
 });

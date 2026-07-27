@@ -155,6 +155,51 @@ function deliverySummary(delivery) {
   };
 }
 
+function deliveryIssueLog(notification, delivery) {
+  if (![DELIVERY_STATUS.QUEUED, DELIVERY_STATUS.FAILED, DELIVERY_STATUS.SKIPPED].includes(delivery.status)) return null;
+  const statusMeta = {
+    [DELIVERY_STATUS.QUEUED]: {
+      level: 'warn',
+      action: 'notification.delivery.retry_pending',
+      message: 'Entrega individual aguardando nova tentativa'
+    },
+    [DELIVERY_STATUS.FAILED]: {
+      level: 'error',
+      action: 'notification.delivery.failed',
+      message: 'Entrega individual falhou'
+    },
+    [DELIVERY_STATUS.SKIPPED]: {
+      level: 'warn',
+      action: 'notification.delivery.skipped',
+      message: 'Entrega individual ignorada'
+    }
+  }[delivery.status];
+  return {
+    ...statusMeta,
+    channel: delivery.channel,
+    context: {
+      notificationId: String(notification._id),
+      deliveryId: delivery._id ? String(delivery._id) : null,
+      contactId: String(delivery.contact?._id || delivery.contact),
+      status: delivery.status,
+      attempts: Number(delivery.attempts || 0),
+      errorCode: delivery.errorCode || null
+    },
+    actor: notification.requestedBy || undefined,
+    // O detalhe duravel fica na notificacao. O evento operacional nao inclui
+    // endereco nem conteudo e usa retencao menor para controlar volume.
+    retentionUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+  };
+}
+
+async function recordDeliveryIssues(notification, deliveries = []) {
+  const inputs = deliveries.map((delivery) => deliveryIssueLog(notification, delivery)).filter(Boolean);
+  const batchSize = 20;
+  for (let offset = 0; offset < inputs.length; offset += batchSize) {
+    await Promise.allSettled(inputs.slice(offset, offset + batchSize).map((input) => logsManager.create(input)));
+  }
+}
+
 function summarizeDeliveries(deliveries = []) {
   const counts = deliveries.reduce((result, delivery) => {
     result[delivery.status] = (result[delivery.status] || 0) + 1;
@@ -374,6 +419,12 @@ async function create(input, actorId) {
       enqueuePending: Boolean(queuedCount),
       summary: { queued: queuedCount, sent: 0, failed: 0, skipped: skippedCount }
     });
+    if (skippedCount) {
+      await recordDeliveryIssues(
+        notification,
+        notification.deliveries.filter((delivery) => delivery.status === DELIVERY_STATUS.SKIPPED)
+      );
+    }
     if (queuedCount) {
       const scheduling = await scheduleNotification(String(notification._id));
       if (!scheduling.scheduled) {
@@ -457,7 +508,12 @@ async function dispatchDelivery(notification, delivery, templateOrMap) {
   if (content.customTemplate) content.customTemplate.variables = variables;
   const manager = channelManagers[delivery.channel];
   if (!manager) throw new ApiError(500, 'Adaptador de canal ausente: ' + delivery.channel);
-  return manager.send({ contactId: String(delivery.contact), ...content });
+  return manager.send({
+    ...content,
+    contactId: String(delivery.contact),
+    notificationId: String(notification._id),
+    deliveryId: delivery._id ? String(delivery._id) : undefined
+  });
 }
 
 function permanentDeliveryError(error) {
@@ -647,6 +703,7 @@ async function processJob({ notificationId, queueContext = {} }) {
       delivery.errorCode = 'RECIPIENT_SCOPE_CHANGED';
       delivery.errorMessage = 'Contato saiu do grupo ou grupo foi removido antes do envio';
       await persistClaimedDelivery(notification, claim.token, delivery);
+      await recordDeliveryIssues(notification, [delivery]);
       continue;
     }
     if (!availability.has(delivery.channel)) availability.set(delivery.channel, await channelAvailability(delivery.channel));
@@ -658,6 +715,7 @@ async function processJob({ notificationId, queueContext = {} }) {
       delivery.errorCode = currentAvailability.errorCode;
       delivery.errorMessage = String(currentAvailability.errorMessage || '').slice(0, MAX_DELIVERY_ERROR_LENGTH);
       await persistClaimedDelivery(notification, claim.token, delivery);
+      await recordDeliveryIssues(notification, [delivery]);
       continue;
     }
     await assertClaimOwnership(notificationId, claim.token, Boolean(queueContext.lockToken));
@@ -677,6 +735,7 @@ async function processJob({ notificationId, queueContext = {} }) {
       delivery.errorMessage = String(error.message).slice(0, MAX_DELIVERY_ERROR_LENGTH);
     }
     await persistClaimedDelivery(notification, claim.token, delivery);
+    if (delivery.status !== DELIVERY_STATUS.SENT) await recordDeliveryIssues(notification, [delivery]);
   }
   const counts = notification.deliveries.reduce((result, delivery) => {
     result[delivery.status] = (result[delivery.status] || 0) + 1;
@@ -753,11 +812,13 @@ async function processJob({ notificationId, queueContext = {} }) {
     const terminalFailure = isFinalQueueAttempt(queueContext) || permanentDeliveryError(error);
     const errorCode = String(error.code || 'NOTIFICATION_PROCESSING_ERROR');
     const errorMessage = String(error.message || 'Falha no processamento da notificacao').slice(0, MAX_DELIVERY_ERROR_LENGTH);
+    const affectedDeliveries = [];
     for (const delivery of notification.deliveries) {
       if (![DELIVERY_STATUS.PROCESSING, DELIVERY_STATUS.QUEUED].includes(delivery.status)) continue;
       delivery.status = terminalFailure ? DELIVERY_STATUS.FAILED : DELIVERY_STATUS.QUEUED;
       delivery.errorCode = errorCode;
       delivery.errorMessage = errorMessage;
+      affectedDeliveries.push(delivery);
     }
     const counts = notification.deliveries.reduce((result, delivery) => {
       result[delivery.status] = (result[delivery.status] || 0) + 1;
@@ -782,6 +843,7 @@ async function processJob({ notificationId, queueContext = {} }) {
     notification.errorCode = errorCode;
     notification.errorMessage = errorMessage;
     await saveClaimed(notification, claim.token, { heartbeat: false }).catch(() => undefined);
+    await recordDeliveryIssues(notification, affectedDeliveries);
     await logsManager.create({
       level: 'error',
       channel: notification.channel,
@@ -956,6 +1018,65 @@ async function listDeliveryIssues(query = {}) {
     notificationId: String(item.notificationId),
     contactId: String(item.contactId)
   }));
+  const total = Number(result.metadata?.[0]?.total || 0);
+  return pageResult(items, total, page, limit);
+}
+
+async function listDeliveries(notificationId, query = {}) {
+  const exists = await Notification.exists({ _id: notificationId });
+  if (!exists) throw new ApiError(404, 'Notificacao nao encontrada');
+  const { page, limit, skip } = parsePagination(query);
+  const deliveryMatch = {};
+  if (query.channel) deliveryMatch['deliveries.channel'] = query.channel;
+  if (query.status) deliveryMatch['deliveries.status'] = query.status;
+  const [result = {}] = await Notification.aggregate([
+    { $match: { _id: Notification.db.base.Types.ObjectId.createFromHexString(notificationId) } },
+    { $unwind: '$deliveries' },
+    ...(Object.keys(deliveryMatch).length ? [{ $match: deliveryMatch }] : []),
+    {
+      $set: {
+        deliveryCreatedAt: {
+          $ifNull: ['$deliveries.createdAt', '$createdAt']
+        }
+      }
+    },
+    { $sort: { deliveryCreatedAt: -1, 'deliveries._id': -1 } },
+    {
+      $facet: {
+        items: [
+          { $skip: skip },
+          { $limit: limit },
+          {
+            $project: {
+              _id: 0,
+              id: '$deliveries._id',
+              notificationId: '$_id',
+              contactId: '$deliveries.contact',
+              channel: '$deliveries.channel',
+              status: '$deliveries.status',
+              attempts: { $ifNull: ['$deliveries.attempts', 0] },
+              errorCode: { $ifNull: ['$deliveries.errorCode', null] },
+              errorMessage: { $ifNull: ['$deliveries.errorMessage', null] },
+              sentAt: { $ifNull: ['$deliveries.sentAt', null] },
+              createdAt: '$deliveryCreatedAt',
+              updatedAt: { $ifNull: ['$deliveries.updatedAt', '$deliveryCreatedAt'] }
+            }
+          }
+        ],
+        metadata: [{ $count: 'total' }]
+      }
+    }
+  ]);
+  const items = (result.items || []).map((item) => {
+    const contactId = String(item.contactId);
+    return {
+      ...item,
+      id: String(item.id),
+      notificationId: String(item.notificationId),
+      contactId,
+      contactPath: '/contacts/' + contactId
+    };
+  });
   const total = Number(result.metadata?.[0]?.total || 0);
   return pageResult(items, total, page, limit);
 }
@@ -1370,6 +1491,7 @@ module.exports = {
   getById,
   list,
   listDeliveryIssues,
+  listDeliveries,
   stats,
   retry,
   cancel,

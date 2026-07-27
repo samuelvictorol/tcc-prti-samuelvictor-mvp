@@ -65,11 +65,20 @@ const listDeliveryIssuesSchema = z.object({
   })
 });
 
+const listNotificationDeliveriesSchema = z.object({
+  params: idParams,
+  query: paginationQuery.extend({
+    channel: z.enum([CHANNELS.TELEGRAM, CHANNELS.WHATSAPP_CLOUD, CHANNELS.EMAIL]).optional(),
+    status: z.enum(['queued', 'processing', 'sent', 'delivered', 'read', 'failed', 'skipped']).optional()
+  })
+});
+
 module.exports = {
   createNotificationSchema,
   notificationIdSchema,
   listNotificationsSchema,
   listDeliveryIssuesSchema,
+  listNotificationDeliveriesSchema,
   notificationChannel,
   notificationTemplateIds
 };

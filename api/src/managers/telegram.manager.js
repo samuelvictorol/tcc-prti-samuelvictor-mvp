@@ -1092,7 +1092,18 @@ async function send(input) {
     throw error;
   }
   if (input.useCase !== 'profile_auth') {
-    await logsManager.create({ channel: 'telegram', action: 'message.sent', message: 'Mensagem Telegram enviada', context: { contactId, chatHashAvailable: true, messageId: result.message_id } });
+    await logsManager.create({
+      channel: 'telegram',
+      action: 'message.sent',
+      message: 'Mensagem Telegram enviada',
+      context: {
+        contactId,
+        notificationId: input.notificationId,
+        deliveryId: input.deliveryId,
+        chatHashAvailable: true,
+        messageId: result.message_id
+      }
+    }).catch(() => undefined);
     try {
       await conversationsManager.recordOutbound({
         channel: 'telegram',

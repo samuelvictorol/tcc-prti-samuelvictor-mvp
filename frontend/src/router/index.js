@@ -37,6 +37,7 @@ const routes = [
       { path: 'invites', name: 'invites', component: () => import('../pages/InvitesPage.vue') },
       { path: 'terms', name: 'terms', component: () => import('../pages/TermsPage.vue') },
       { path: 'logins', name: 'profile-logins', component: () => import('../pages/LoginSettingsPage.vue') },
+      { path: 'help', name: 'help', component: () => import('../pages/HelpPage.vue') },
     ],
   },
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('../pages/NotFoundPage.vue'), meta: { public: true } },

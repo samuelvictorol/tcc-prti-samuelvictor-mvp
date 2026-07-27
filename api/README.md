@@ -169,6 +169,40 @@ Tipos: texto, foto, vídeo e menu hierárquico. Menus usam inline keyboard e ses
 
 WhatsApp Cloud aceita somente `template`; WhatsApp Web é rejeitado nesse domínio.
 
+Email e Telegram usam o mesmo contrato para um contato, vários contatos ou grupos. `contactIds`
+e `groupIds` podem ser combinados; a API expande os grupos e remove destinos duplicados:
+
+```json
+{
+  "kind": "quick",
+  "channel": "email",
+  "content": {
+    "subject": "Aviso",
+    "text": "Mensagem em texto"
+  },
+  "contactIds": ["507f1f77bcf86cd799439011"],
+  "groupIds": ["507f1f77bcf86cd799439012"]
+}
+```
+
+```json
+{
+  "kind": "template",
+  "channel": "telegram",
+  "templateId": "507f1f77bcf86cd799439013",
+  "content": {
+    "variables": {
+      "protocolo": "ABC-123"
+    }
+  },
+  "contactIds": [],
+  "groupIds": ["507f1f77bcf86cd799439012"]
+}
+```
+
+Troque `channel` entre `email` e `telegram` nos dois modos. Para email rápido, `content`
+aceita `subject` e `text` ou `html`; para Telegram rápido, use `content.text`.
+
 Fluxo de processamento:
 
 1. valida até 10.000 contatos, 1.000 grupos e 10.000 entregas;
@@ -183,6 +217,13 @@ Fluxo de processamento:
 Se Redis estiver indisponível e for opcional, há fallback inline. Em produção `REDIS_REQUIRED=true` é recomendado. Quando a fila falha depois de persistir a notificação, o marcador durável permanece e o recovery sweep, executado a cada 60 segundos, tenta reagendar estados enfileirados ou `processing` obsoletos.
 
 `idempotencyKey` evita criação duplicada. Receipts Cloud atualizam `sent/delivered/read/failed`; falhas assíncronas transitórias também podem solicitar retry.
+
+Cada destinatário possui uma delivery independente. Consulte todos os resultados em
+`GET /notifications/:id/deliveries?page=1&limit=100`, com filtros opcionais `channel`
+e `status`. A resposta não expõe endereço nem identificador do provedor. Falhas e
+contatos sem permissão também aparecem em `GET /notifications/delivery-issues`.
+Eventos operacionais de falha, skip e retry são emitidos em `log:created` sem email,
+telefone, `chat_id` ou conteúdo da mensagem.
 
 ## Webhooks
 

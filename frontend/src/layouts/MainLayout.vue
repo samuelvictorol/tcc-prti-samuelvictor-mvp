@@ -37,6 +37,8 @@ const navigation = computed(() => [
   { label: 'Convites', icon: 'link', to: '/invites', available: true },
   { label: 'Termos e LGPD', icon: 'verified_user', to: '/terms', available: true },
   { label: 'Logins', caption: 'Acesso seguro dos contatos', icon: 'login', to: '/logins', available: true },
+  { separator: true, label: 'Suporte' },
+  { label: 'Ajuda', caption: 'Guias e primeiros passos', icon: 'help_center', to: '/help', available: true },
 ])
 
 function goTo(item) {
