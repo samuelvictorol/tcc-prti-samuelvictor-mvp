@@ -9,8 +9,15 @@ const { parsePagination, pageResult } = require('../utils/pagination');
 const ApiError = require('../utils/api-error');
 const { isAllowedInviteUrl, isSafePublicHttpsUrl } = require('../utils/urls');
 const settingsManager = require('./settings.manager');
+const contactsManager = require('./contacts.manager');
+const groupsManager = require('./groups.manager');
 
 const MAX_SLUG_ATTEMPTS = 200;
+const ATTRIBUTION_PREFIX = 'ni';
+const ATTRIBUTION_NONCE_BYTES = 8;
+const ATTRIBUTION_SIGNATURE_BYTES = 12;
+const ATTRIBUTION_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+const ATTRIBUTION_MARKER_PATTERN = /^ni_([a-f\d]{24})_([A-Za-z0-9_-]{11})_([A-Za-z0-9_-]{16})$/;
 
 function slugBaseFromTitle(value) {
   const normalized = String(value || '')
@@ -62,6 +69,166 @@ function telegramInviteRedirectUrl(value, permissionCommand) {
   }
 }
 
+function attributionSignature(inviteId, nonce) {
+  return crypto.createHmac('sha256', env.inviteTokenSecret)
+    .update(String(inviteId).toLowerCase() + '.' + nonce)
+    .digest()
+    .subarray(0, ATTRIBUTION_SIGNATURE_BYTES)
+    .toString('base64url');
+}
+
+function createAttributionMarker(inviteId, nonce = crypto.randomBytes(ATTRIBUTION_NONCE_BYTES).toString('base64url')) {
+  const normalizedId = String(inviteId || '').toLowerCase();
+  if (!/^[a-f\d]{24}$/.test(normalizedId) || !/^[A-Za-z0-9_-]{11}$/.test(nonce)) {
+    throw new ApiError(422, 'Convite invalido para atribuicao', null, 'INVITE_ATTRIBUTION_INVALID');
+  }
+  return `${ATTRIBUTION_PREFIX}_${normalizedId}_${nonce}_${attributionSignature(normalizedId, nonce)}`;
+}
+
+function parseAttributionMarker(value) {
+  const marker = String(value || '').trim();
+  const match = marker.match(ATTRIBUTION_MARKER_PATTERN);
+  if (!match) return null;
+  const [, inviteId, nonce, signature] = match;
+  const expected = attributionSignature(inviteId, nonce);
+  const providedBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (providedBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(providedBuffer, expectedBuffer)) return null;
+  return { marker, inviteId };
+}
+
+function telegramInviteRedirectUrlWithAttribution(value, permissionCommand, attributionMarker) {
+  if (!attributionMarker) return telegramInviteRedirectUrl(value, permissionCommand);
+  try {
+    const url = new URL(String(value || ''));
+    if (!['t.me', 'www.t.me', 'telegram.me', 'www.telegram.me'].includes(url.hostname.toLowerCase())) return value;
+    // Links com start customizado pertencem ao administrador e permanecem
+    // intactos. Payloads gerados pelo proprio app (o comando atual e o
+    // legado notify-me) podem ser trocados pelo marcador rastreavel.
+    const existingStart = url.searchParams.get('start');
+    const managedStartPayloads = new Set([
+      telegramStartPayload(permissionCommand).toLocaleLowerCase('pt-BR'),
+      telegramStartPayload('/notify-me').toLocaleLowerCase('pt-BR')
+    ]);
+    if (existingStart && !managedStartPayloads.has(existingStart.toLocaleLowerCase('pt-BR'))) {
+      return url.toString();
+    }
+    const legacyText = url.searchParams.get('text');
+    const managedLegacyTexts = new Set([
+      settingsManager.normalizeWhatsappPermissionText(permissionCommand),
+      settingsManager.normalizeWhatsappPermissionText('/notify-me')
+    ]);
+    if (legacyText && !managedLegacyTexts.has(
+      settingsManager.normalizeWhatsappPermissionText(legacyText)
+    )) return value;
+    url.search = '';
+    url.searchParams.set('start', attributionMarker);
+    return url.toString();
+  } catch (_error) {
+    return value;
+  }
+}
+
+function whatsappInviteRedirectUrl(value, permissionCommand, attributionMarker) {
+  if (!attributionMarker) return value;
+  try {
+    const url = new URL(String(value || ''));
+    const hostname = url.hostname.toLowerCase();
+    const supportedHttps = ['wa.me', 'www.wa.me', 'api.whatsapp.com', 'web.whatsapp.com'].includes(hostname);
+    if (!(supportedHttps || url.protocol === 'whatsapp:')) return value;
+    const existingText = url.searchParams.get('text');
+    const managedTexts = new Set([
+      settingsManager.normalizeWhatsappPermissionText(permissionCommand),
+      settingsManager.normalizeWhatsappPermissionText('/notify-me')
+    ]);
+    if (existingText && !managedTexts.has(
+      settingsManager.normalizeWhatsappPermissionText(existingText)
+    )) return value;
+    url.searchParams.set('text', `${String(permissionCommand || '').trim()} ${attributionMarker}`.trim());
+    return url.toString();
+  } catch (_error) {
+    return value;
+  }
+}
+
+async function resolveAttributionMarker(value) {
+  const parsed = parseAttributionMarker(value);
+  if (!parsed) return null;
+  const clickedAfter = new Date(Date.now() - ATTRIBUTION_MAX_AGE_MS);
+  const click = await InviteClick.findOne({
+    invite: parsed.inviteId,
+    attributionMarkerHash: tokenHash(parsed.marker),
+    clickedAt: { $gte: clickedAfter }
+  }).lean();
+  if (!click) return null;
+  const invite = await Invite.findOne({ _id: parsed.inviteId, active: true }).lean();
+  if (!invite) return null;
+  return { invite, click };
+}
+
+async function resolveWhatsappInviteInvocation(text, permissionCommand) {
+  const parts = String(text || '').normalize('NFKC').trim().split(/\s+/);
+  if (parts.length < 2) return null;
+  const marker = parts.pop();
+  if (!parseAttributionMarker(marker)) return null;
+  const commandText = parts.join(' ');
+  if (settingsManager.normalizeWhatsappPermissionText(commandText)
+    !== settingsManager.normalizeWhatsappPermissionText(permissionCommand)) return null;
+  const attribution = await resolveAttributionMarker(marker);
+  return attribution ? {
+    ...attribution,
+    attributionMarker: marker,
+    command: permissionCommand,
+    source: 'public_invite_link'
+  } : null;
+}
+
+async function resolveTelegramInviteInvocation(text) {
+  const match = String(text || '').normalize('NFKC').trim()
+    .match(/^\/start(?:@[a-z0-9_]{3,32})?\s+(ni_[A-Za-z0-9_-]{1,61})$/i);
+  if (!match) return null;
+  const attribution = await resolveAttributionMarker(match[1]);
+  return attribution ? {
+    ...attribution,
+    attributionMarker: match[1],
+    source: 'public_invite_deep_link'
+  } : null;
+}
+
+async function attributeContactFromMarker(contactId, marker, channel) {
+  const attribution = await resolveAttributionMarker(marker);
+  if (!attribution) return null;
+  if (attribution.click.contact && String(attribution.click.contact) !== String(contactId)) return null;
+  const claimed = await InviteClick.updateOne(
+    {
+      _id: attribution.click._id,
+      $or: [
+        { contact: { $exists: false } },
+        { contact: null },
+        { contact: contactId }
+      ]
+    },
+    { $set: { contact: contactId } }
+  );
+  if (!claimed.matchedCount) {
+    // Outro webhook pode ter tentado consumir o mesmo clique entre a leitura e
+    // o update. O replay so e idempotente para o mesmo contato; nunca deixa o
+    // marcador atribuir um convite a duas pessoas diferentes.
+    const currentClick = await InviteClick.findById(attribution.click._id).select('contact').lean();
+    if (!currentClick?.contact || String(currentClick.contact) !== String(contactId)) return null;
+  }
+  const contact = await contactsManager.attachInviteOrigin(contactId, attribution.invite, { channel });
+  await groupsManager.addContactForInvite(attribution.invite._id, contactId);
+  return {
+    contact,
+    invite: {
+      id: String(attribution.invite._id),
+      title: attribution.invite.title,
+      slug: attribution.invite.slug
+    }
+  };
+}
+
 function recipientToken(invite) {
   if (!invite.recipientContact) return null;
   return jwt.sign({ inviteId: String(invite._id), contactId: String(invite.recipientContact), type: 'invite' }, env.inviteTokenSecret, { expiresIn: '90d', issuer: 'notify-app-api' });
@@ -110,6 +277,7 @@ async function update(id, input) {
   if (input.title === undefined || input.title === existing.title) {
     const invite = await Invite.findByIdAndUpdate(id, { $set: input }, { new: true, runValidators: true });
     if (!invite) throw new ApiError(404, 'Convite nao encontrado');
+    await refreshInviteSnapshots(invite);
     return serialize(invite, true);
   }
   const base = slugBaseFromTitle(input.title);
@@ -119,12 +287,30 @@ async function update(id, input) {
         $set: { ...input, slug: slugCandidate(base, attempt) }
       }, { new: true, runValidators: true });
       if (!invite) throw new ApiError(404, 'Convite nao encontrado');
+      await refreshInviteSnapshots(invite);
       return serialize(invite, true);
     } catch (error) {
       if (!isDuplicateSlug(error)) throw error;
     }
   }
   throw new ApiError(409, 'Nao foi possivel gerar um slug unico para este convite', null, 'INVITE_SLUG_EXHAUSTED');
+}
+
+async function refreshInviteSnapshots(invite) {
+  if (Contact.db.readyState === 0) return;
+  await Promise.all([
+    Contact.updateMany(
+      { 'inviteOrigins.invite': invite._id },
+      {
+        $set: {
+          'inviteOrigins.$[origin].title': invite.title,
+          'inviteOrigins.$[origin].slug': invite.slug
+        }
+      },
+      { arrayFilters: [{ 'origin.invite': invite._id }] }
+    ),
+    groupsManager.refreshInviteSnapshot(invite)
+  ]);
 }
 
 async function remove(id) {
@@ -171,9 +357,14 @@ async function track(slug, linkId, token, meta = {}) {
   if (!invite) throw new ApiError(404, 'Convite nao encontrado');
   const link = invite.links.id(linkId);
   if (!link || !link.active) throw new ApiError(404, 'Link de convite nao encontrado');
+  const permissionCommand = await settingsManager.getWhatsappPermissionCommand();
+  const supportsAttribution = ['telegram', 'whatsapp_web', 'whatsapp_cloud'].includes(link.channel);
+  const attributionMarker = supportsAttribution ? createAttributionMarker(invite._id) : null;
   const redirectUrl = link.channel === 'telegram'
-    ? telegramInviteRedirectUrl(link.url, await settingsManager.getWhatsappPermissionCommand())
-    : link.url;
+    ? telegramInviteRedirectUrlWithAttribution(link.url, permissionCommand, attributionMarker)
+    : ['whatsapp_web', 'whatsapp_cloud'].includes(link.channel)
+      ? whatsappInviteRedirectUrl(link.url, permissionCommand, attributionMarker)
+      : link.url;
   if (!isAllowedInviteUrl(redirectUrl)) throw new ApiError(400, 'Protocolo de link de convite nao permitido', null, 'UNSAFE_INVITE_URL');
   const parsedContactId = parseRecipientToken(token, invite._id);
   let contactId = parsedContactId && String(invite.recipientContact || '') === String(parsedContactId)
@@ -184,16 +375,27 @@ async function track(slug, linkId, token, meta = {}) {
   await InviteClick.create({
     invite: invite._id, linkId: link._id, contact: contactId || undefined,
     anonymousTokenHash: tokenHash(anonymousToken),
+    attributionMarkerHash: attributionMarker ? tokenHash(attributionMarker) : undefined,
     ipHash: meta.ip ? searchHash(meta.ip) : undefined,
     userAgentHash: meta.userAgent ? searchHash(meta.userAgent) : undefined
   });
   invite.clickCount += 1;
   await invite.save();
-  if (contactId) await Contact.updateOne({ _id: contactId }, { $set: { inviteClickedAt: new Date() } });
+  if (contactId) {
+    await contactsManager.attachInviteOrigin(contactId, invite, {
+      channel: link.channel,
+      usedAt: new Date()
+    });
+    await groupsManager.addContactForInvite(invite._id, contactId);
+  }
   return { redirectUrl, channel: link.channel, attributed: Boolean(contactId) };
 }
 
 module.exports = {
   create, getById, list, update, remove, getPublic, track,
-  slugBaseFromTitle, slugCandidate, telegramStartPayload, telegramInviteRedirectUrl
+  slugBaseFromTitle, slugCandidate, telegramStartPayload, telegramInviteRedirectUrl,
+  createAttributionMarker, parseAttributionMarker, resolveAttributionMarker,
+  resolveWhatsappInviteInvocation, resolveTelegramInviteInvocation,
+  telegramInviteRedirectUrlWithAttribution, whatsappInviteRedirectUrl,
+  attributeContactFromMarker
 };

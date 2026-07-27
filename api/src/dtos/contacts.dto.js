@@ -1,4 +1,4 @@
-const { z, idParams, booleanQuery, paginationQuery } = require('./common.dto');
+const { z, objectId, idParams, booleanQuery, paginationQuery } = require('./common.dto');
 const { DELIVERY_CHANNELS } = require('../enums/channels');
 
 function publicIdentityMetadata(metadata) {
@@ -55,7 +55,8 @@ const listContactsSchema = z.object({
     search: z.string().max(254).optional(),
     channel: z.enum(DELIVERY_CHANNELS).optional(),
     authorized: booleanQuery.optional(),
-    active: booleanQuery.optional()
+    active: booleanQuery.optional(),
+    inviteId: objectId.optional()
   })
 });
 

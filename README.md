@@ -152,12 +152,17 @@ Credenciais de canal podem ser cadastradas na tela **Início**. Valores runtime 
 O arquivo suportado pelo Render é **[`render.yaml`](render.yaml)** — não existe formato `render.xml` para Blueprints. Consulte a [especificação oficial de Blueprints](https://render.com/docs/blueprint-spec). O Blueprint deste projeto provisiona:
 
 - frontend Docker público, que também encaminha `/api` e `/socket.io`;
-- API Docker privada chamada `api` (nome exigido pelo upstream atual do Nginx);
+- API Docker privada referenciada pelo Blueprint;
 - Render Key Value compatível com Redis;
 - disco persistente pago para `/app/.wwebjs_auth`;
 - `MONGODB_URI` solicitado durante o sync para uma instância MongoDB Atlas.
 
 Antes do primeiro deploy, informe a URL pública do frontend em `PUBLIC_APP_URL` e `CORS_ORIGINS`, as credenciais administrativas e a URI do Atlas. No Atlas, autorize a saída do Render e exija TLS. Integrações externas podem ser configuradas depois pela UI.
+
+O frontend usa um template de configuração do Nginx em runtime. No Compose,
+`API_UPSTREAM=api:3000`; no Render, o Blueprint injeta automaticamente o
+`hostport` privado real da API. Assim, o proxy não depende de um hostname local
+que não existe na rede privada do Render.
 
 O WhatsApp Web impõe restrições importantes no Render: Chromium consome memória/CPU, o [disco persistente](https://render.com/docs/disks) é pago e limita a API a uma instância, deploys interrompem a sessão e o filesystem não garante que o WhatsApp manterá a autenticação. Por isso ele continua opcional. [WebSockets são suportados](https://render.com/docs/websocket), mas o cliente deve reconectar após deploys ou manutenção. Para MongoDB, siga as recomendações de [deploy e backup do Render](https://render.com/docs/deploy-mongodb) ou use Atlas gerenciado.
 

@@ -65,7 +65,7 @@ import { asList, errorMessage, fetchAll, http, unwrap } from '../services/http.j
 
 const $q = useQuasar()
 const app = useAppStore()
-const tab = ref('quick')
+const tab = ref('global')
 const loading = ref(false)
 const sending = ref(false)
 const contacts = ref([])
@@ -347,14 +347,14 @@ onMounted(loadData)
     <section class="page-grid notification-layout">
       <q-card flat class="glass-card section-card composer-card">
         <q-tabs v-model="tab" no-caps inline-label active-color="primary" indicator-color="transparent" class="composer-tabs">
-          <q-tab name="quick" icon="bolt" label="Rápida" />
-          <q-tab name="template" icon="description" label="Template" />
           <q-tab name="global" icon="hub" label="Template global" />
+          <q-tab name="template" icon="description" label="Template" />
+          <q-tab name="quick" icon="bolt" label="Rápida" />
         </q-tabs>
         <q-separator class="q-my-lg" />
 
         <q-tab-panels v-model="tab" animated class="transparent">
-          <q-tab-panel v-for="panel in ['quick', 'template', 'global']" :key="panel" :name="panel" class="q-pa-none">
+          <q-tab-panel v-for="panel in ['global', 'template', 'quick']" :key="panel" :name="panel" class="q-pa-none">
             <div v-if="panel === 'global'" class="global-note q-mb-md">
               <q-icon name="hub" size="24px" />
               <div>

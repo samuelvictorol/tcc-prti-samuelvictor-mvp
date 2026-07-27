@@ -23,6 +23,15 @@ const channelAvatarSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 }, { _id: false });
 
+const inviteOriginSchema = new mongoose.Schema({
+  invite: { type: mongoose.Schema.Types.ObjectId, ref: 'Invite', required: true },
+  title: { type: String, required: true, maxlength: 200 },
+  slug: { type: String, required: true, maxlength: 100 },
+  channels: { type: [String], enum: DELIVERY_CHANNELS, default: [] },
+  firstUsedAt: { type: Date, default: Date.now },
+  lastUsedAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 // Guarda somente a decisao de consentimento enquanto a identidade real do
 // outro provedor WhatsApp ainda nao existe. Nenhum endereco e inferido aqui:
 // o grant so se torna enviavel quando o webhook/provider trouxer um destino
@@ -57,6 +66,7 @@ const contactSchema = new mongoose.Schema({
   active: { type: Boolean, default: true, index: true },
   notificationDisabled: { type: Boolean, default: false, index: true },
   inviteClickedAt: { type: Date },
+  inviteOrigins: { type: [inviteOriginSchema], default: [] },
   metadataEncrypted: { type: String, select: false },
   deletedAt: { type: Date }
 }, { timestamps: true, versionKey: false });
@@ -71,5 +81,6 @@ contactSchema.index(
   { unique: true, partialFilterExpression: { phoneHash: { $type: 'string' } }, name: 'uniq_contact_phone_hash' }
 );
 contactSchema.index({ updatedAt: -1 });
+contactSchema.index({ 'inviteOrigins.invite': 1, updatedAt: -1 });
 
 module.exports = mongoose.models.Contact || mongoose.model('Contact', contactSchema);

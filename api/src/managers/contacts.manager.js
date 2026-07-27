@@ -9,6 +9,7 @@ const InviteClick = require('../models/invite-click.model');
 const Notification = require('../models/notification.model');
 const ProfileAuthChallenge = require('../models/profile-auth-challenge.model');
 const ApiError = require('../utils/api-error');
+const { DELIVERY_CHANNELS } = require('../enums/channels');
 const { encrypt, decrypt, searchHash } = require('../services/crypto.service');
 const {
   normalizeEmail,
@@ -256,6 +257,14 @@ function serialize(contact, options = {}) {
     active: value.active,
     notificationDisabled: value.notificationDisabled,
     inviteClickedAt: value.inviteClickedAt,
+    inviteOrigins: (value.inviteOrigins || []).map((origin) => ({
+      inviteId: String(origin.invite?._id || origin.invite),
+      title: origin.title,
+      slug: origin.slug,
+      channels: [...new Set((origin.channels || []).filter(Boolean))],
+      firstUsedAt: origin.firstUsedAt,
+      lastUsedAt: origin.lastUsedAt
+    })),
     metadata: safeDecrypt(value.metadataEncrypted, true),
     createdAt: value.createdAt,
     updatedAt: value.updatedAt
@@ -408,6 +417,64 @@ async function getById(id) {
   return serialize(await getRawById(id));
 }
 
+async function attachInviteOrigin(contactId, invite, context = {}) {
+  const inviteId = invite?._id || invite?.id;
+  const title = String(invite?.title || '').trim();
+  const slug = String(invite?.slug || '').trim().toLowerCase();
+  if (!inviteId || !title || !slug) {
+    throw new ApiError(422, 'Convite invalido para atribuicao ao contato', null, 'INVITE_ORIGIN_INVALID');
+  }
+  const channel = context.channel && DELIVERY_CHANNELS.includes(context.channel)
+    ? context.channel
+    : null;
+  const usedAt = context.usedAt ? new Date(context.usedAt) : new Date();
+  const origin = {
+    invite: inviteId,
+    title,
+    slug,
+    channels: channel ? [channel] : [],
+    firstUsedAt: usedAt,
+    lastUsedAt: usedAt
+  };
+  const inserted = await Contact.updateOne(
+    {
+      _id: contactId,
+      active: true,
+      deletedAt: null,
+      'inviteOrigins.invite': { $ne: inviteId }
+    },
+    {
+      $push: { inviteOrigins: origin },
+      $set: { inviteClickedAt: usedAt }
+    }
+  );
+  const set = {
+    'inviteOrigins.$.title': title,
+    'inviteOrigins.$.slug': slug
+  };
+  const update = {
+    $set: set,
+    $max: {
+      'inviteOrigins.$.lastUsedAt': usedAt,
+      inviteClickedAt: usedAt
+    }
+  };
+  if (channel) update.$addToSet = { 'inviteOrigins.$.channels': channel };
+  const refreshed = await Contact.updateOne(
+    {
+      _id: contactId,
+      active: true,
+      deletedAt: null,
+      'inviteOrigins.invite': inviteId
+    },
+    update
+  );
+  if (!inserted.matchedCount && !refreshed.matchedCount) {
+    throw new ApiError(404, 'Contato nao encontrado');
+  }
+  return getById(contactId);
+}
+
 async function getManyByIds(ids) {
   const uniqueIds = [...new Set((ids || []).map(String))];
   if (!uniqueIds.length) return [];
@@ -419,6 +486,7 @@ async function list(query = {}) {
   const { page, limit, skip } = parsePagination(query);
   const filter = { deletedAt: null };
   if (query.active !== undefined) filter.active = query.active;
+  if (query.inviteId) filter['inviteOrigins.invite'] = query.inviteId;
   if (query.channel || query.authorized !== undefined) {
     filter.channels = { $elemMatch: {} };
     if (query.channel) filter.channels.$elemMatch.channel = query.channel;
@@ -745,6 +813,31 @@ function plainIdentity(identity) {
   return { ...identity };
 }
 
+function mergedInviteOrigins(targetOrigins = [], sourceOrigins = []) {
+  const byInvite = new Map();
+  for (const origin of [...targetOrigins, ...sourceOrigins]) {
+    const value = origin?.toObject ? origin.toObject({ depopulate: true }) : { ...origin };
+    const key = String(value.invite?._id || value.invite);
+    if (!key || key === 'undefined') continue;
+    const current = byInvite.get(key);
+    if (!current) {
+      byInvite.set(key, {
+        ...value,
+        channels: [...new Set(value.channels || [])]
+      });
+      continue;
+    }
+    current.title = value.title || current.title;
+    current.slug = value.slug || current.slug;
+    current.channels = [...new Set([...(current.channels || []), ...(value.channels || [])])];
+    const firstDates = [current.firstUsedAt, value.firstUsedAt].filter(Boolean).map((date) => new Date(date));
+    const lastDates = [current.lastUsedAt, value.lastUsedAt].filter(Boolean).map((date) => new Date(date));
+    current.firstUsedAt = firstDates.length ? new Date(Math.min(...firstDates)) : undefined;
+    current.lastUsedAt = lastDates.length ? new Date(Math.max(...lastDates)) : undefined;
+  }
+  return [...byInvite.values()];
+}
+
 function restoreArchivedTelegramSource(source, snapshot) {
   source.channels = snapshot.channels;
   source.emailEncrypted = snapshot.emailEncrypted;
@@ -858,6 +951,9 @@ async function mergeTelegramSourceIntoPhoneTarget(source, target, addressHash, v
     target.displayNameSource = 'telegram';
   }
   target.tags = [...new Set([...(target.tags || []), ...(source.tags || [])])];
+  target.inviteOrigins = mergedInviteOrigins(target.inviteOrigins || [], source.inviteOrigins || []);
+  const inviteClickedAtValues = [target.inviteClickedAt, source.inviteClickedAt].filter(Boolean).map((date) => new Date(date));
+  if (inviteClickedAtValues.length) target.inviteClickedAt = new Date(Math.max(...inviteClickedAtValues));
 
   try {
     await target.save();
@@ -1294,6 +1390,7 @@ module.exports = {
   findByChannelOrPhone,
   setConsentByAddress,
   getDestination,
+  attachInviteOrigin,
   setChannelConsent,
   grantWhatsappConsentFromCommand,
   ensureEmailIdentity,
@@ -1301,6 +1398,7 @@ module.exports = {
   updateChannelAvatar,
   serialize,
   mergePhoneIdentity,
+  mergedInviteOrigins,
   contactPhoneResolution,
   SECRET_SELECT
 };

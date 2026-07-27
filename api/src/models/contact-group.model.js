@@ -10,6 +10,9 @@ const contactGroupSchema = new mongoose.Schema({
   externalIdHash: { type: String },
   inviteLinkEncrypted: { type: String, select: false },
   imageUrlEncrypted: { type: String, select: false },
+  sourceInvite: { type: mongoose.Schema.Types.ObjectId, ref: 'Invite' },
+  sourceInviteTitle: { type: String, maxlength: 200 },
+  sourceInviteSlug: { type: String, maxlength: 100 },
   contacts: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Contact' }],
   active: { type: Boolean, default: true, index: true },
   notificationDisabled: { type: Boolean, default: false }
@@ -20,5 +23,13 @@ contactGroupSchema.index(
   { unique: true, partialFilterExpression: { externalIdHash: { $type: 'string' } } }
 );
 contactGroupSchema.index({ updatedAt: -1 });
+contactGroupSchema.index(
+  { sourceInvite: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { sourceInvite: { $type: 'objectId' } },
+    name: 'uniq_contact_group_source_invite'
+  }
+);
 
 module.exports = mongoose.models.ContactGroup || mongoose.model('ContactGroup', contactGroupSchema);

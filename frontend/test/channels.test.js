@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   channelSettingsPayload,
   compactChannelSettings,
+  generateSecureWebhookSecret,
   isMaskedSecret,
   normalizeTelegramWebhookUrl,
   notificationChannel,
@@ -25,6 +26,19 @@ describe('configuração independente dos canais', () => {
       user: 'admin@example.com',
       appPassword: '••••••',
     })).toEqual({ user: 'admin@example.com' })
+  })
+
+  it('gera webhook secret criptograficamente aleatório sem fallback fraco', () => {
+    const cryptoApi = {
+      getRandomValues(bytes) {
+        bytes.forEach((_value, index) => { bytes[index] = index })
+        return bytes
+      },
+    }
+    expect(generateSecureWebhookSecret(cryptoApi, 16))
+      .toBe('000102030405060708090a0b0c0d0e0f')
+    expect(() => generateSecureWebhookSecret({}, 32)).toThrow('segura indisponível')
+    expect(() => generateSecureWebhookSecret(cryptoApi, 8)).toThrow('Tamanho inválido')
   })
 
   it('mantém número público separado do Phone Number ID no payload do Cloud', () => {

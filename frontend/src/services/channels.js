@@ -11,6 +11,16 @@ export function isMaskedSecret(value) {
   return normalized.includes('••••') || /^\*{4,}$/.test(normalized)
 }
 
+export function generateSecureWebhookSecret(cryptoApi = globalThis.crypto, byteLength = 32) {
+  if (!cryptoApi?.getRandomValues) throw new Error('Geração segura indisponível neste navegador.')
+  if (!Number.isInteger(byteLength) || byteLength < 16 || byteLength > 128) {
+    throw new Error('Tamanho inválido para o segredo seguro.')
+  }
+  const bytes = new Uint8Array(byteLength)
+  cryptoApi.getRandomValues(bytes)
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
 export function compactChannelSettings(channel, values = {}) {
   const allowed = editableSettings[channel] || []
   return Object.fromEntries(allowed.flatMap((key) => {

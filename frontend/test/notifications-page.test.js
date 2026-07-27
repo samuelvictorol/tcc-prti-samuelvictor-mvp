@@ -52,4 +52,17 @@ describe('compositor amigável de notificações', () => {
     expect(source).not.toContain('quickChannelOptions')
     expect(source).toContain(':options="panel === \'quick\' ? quickEnabledChannelOptions : templateEnabledChannelOptions"')
   })
+
+  it('abre no template global e ordena os modos do mais amplo para o rápido', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
+    const globalTab = source.indexOf('<q-tab name="global"')
+    const templateTab = source.indexOf('<q-tab name="template"')
+    const quickTab = source.indexOf('<q-tab name="quick"')
+
+    expect(source).toContain("const tab = ref('global')")
+    expect(globalTab).toBeGreaterThan(-1)
+    expect(globalTab).toBeLessThan(templateTab)
+    expect(templateTab).toBeLessThan(quickTab)
+    expect(source).toContain("v-for=\"panel in ['global', 'template', 'quick']\"")
+  })
 })

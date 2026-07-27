@@ -6,7 +6,12 @@ import StatusBadge from '../components/StatusBadge.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ContextHelp from '../components/ContextHelp.vue'
 import { useAppStore } from '../stores/app.js'
-import { channelSettingsPayload, normalizeTelegramWebhookUrl } from '../services/channels.js'
+import {
+  channelSettingsPayload,
+  generateSecureWebhookSecret,
+  isMaskedSecret,
+  normalizeTelegramWebhookUrl,
+} from '../services/channels.js'
 import { asList, errorMessage, http, paginationOf, unwrap } from '../services/http.js'
 import { connectSocket, getSocket } from '../services/socket.js'
 import {
@@ -31,6 +36,7 @@ const savingTelegramPermission = ref(false)
 const connectingWhatsappWeb = ref(false)
 const regeneratingWhatsappWeb = ref(false)
 const disconnectingWhatsappWeb = ref(false)
+const telegramWebhookSecretVisible = ref(false)
 const whatsappWebStatus = ref(normalizeWhatsappWebStatus())
 const logItems = ref([])
 const logLoading = ref(false)
@@ -44,6 +50,8 @@ const settings = reactive({
   telegramPermission: { command: DEFAULT_TELEGRAM_PERMISSION_COMMAND },
   email: { user: '', appPassword: '', from: '', fromName: '' },
 })
+
+const TELEGRAM_WEBHOOK_SECRET_MASK = '••••••••••••••••••••••••'
 
 let whatsappWebPollTimer
 let whatsappWebPollDeadline = 0
@@ -67,6 +75,13 @@ const telegramTokenConfigured = computed(() => Boolean(
   || settings.telegram.botTokenConfigured
   || app.isChannelEnabled('telegram'),
 ))
+
+const telegramWebhookSecretConfigured = computed(() => Boolean(
+  settings.telegram.webhookSecretConfigured
+  || isMaskedSecret(settings.telegram.webhookSecret),
+))
+
+const telegramWebhookSecretIsMasked = computed(() => isMaskedSecret(settings.telegram.webhookSecret))
 
 const telegramBot = computed(() => telegramBotIdentity({
   bot: settings.telegram.bot || app.channelStatus('telegram')?.bot,
@@ -102,16 +117,81 @@ async function copyWhatsappCloudCallbackUrl() {
   }
 }
 
+function generateTelegramWebhookSecret({ notify = true } = {}) {
+  try {
+    settings.telegram.webhookSecret = generateSecureWebhookSecret()
+    telegramWebhookSecretVisible.value = false
+    if (notify) {
+      $q.notify({
+        type: 'positive',
+        message: 'Novo webhook secret gerado com segurança.',
+        caption: 'Salve o Telegram ou registre o webhook para ativar este novo valor.',
+      })
+    }
+    return settings.telegram.webhookSecret
+  } catch (error) {
+    $q.notify({ type: 'negative', message: error.message || 'Não foi possível gerar um segredo seguro neste navegador.' })
+    return ''
+  }
+}
+
+async function copyTelegramWebhookSecretValue(value, { generated = false } = {}) {
+  try {
+    await copyToClipboard(value)
+    $q.notify({
+      type: 'positive',
+      message: generated ? 'Novo webhook secret gerado e copiado.' : 'Webhook secret copiado.',
+      caption: generated ? 'O segredo anterior não foi recuperado. Salve ou registre o webhook para ativar o novo valor.' : undefined,
+    })
+  } catch {
+    $q.notify({ type: 'warning', message: 'Não foi possível copiar o webhook secret.' })
+  }
+}
+
+function generateAndCopyTelegramWebhookSecret() {
+  const value = generateTelegramWebhookSecret({ notify: false })
+  if (value) copyTelegramWebhookSecretValue(value, { generated: true })
+}
+
+function copyTelegramWebhookSecret() {
+  const value = String(settings.telegram.webhookSecret || '').trim()
+  if (value && !isMaskedSecret(value)) {
+    copyTelegramWebhookSecretValue(value)
+    return
+  }
+
+  if (!telegramWebhookSecretConfigured.value) {
+    generateAndCopyTelegramWebhookSecret()
+    return
+  }
+
+  $q.dialog({
+    title: 'Gerar um novo webhook secret?',
+    message: 'Por segurança, a API não devolve o segredo já salvo. Para copiar um valor, será gerado um novo segredo no seu navegador. Ele só substituirá o atual depois que você salvar o Telegram ou registrar o webhook.',
+    cancel: { flat: true, label: 'Cancelar' },
+    ok: { color: 'primary', label: 'Gerar e copiar' },
+    persistent: true,
+  }).onOk(generateAndCopyTelegramWebhookSecret)
+}
+
 function applySettings(value = {}) {
   const source = value.configuration || value.settings || value
   settings.telegram.botToken = ''
   settings.telegram.webhookSecret = ''
+  settings.telegram.webhookSecretConfigured = false
   settings.telegram.bot = null
   settings.whatsappCloud.accessToken = ''
   settings.whatsappCloud.verifyToken = ''
   settings.whatsappCloud.appSecret = ''
   settings.email.appPassword = ''
-  Object.assign(settings.telegram, source.telegram || {})
+  const telegramSource = { ...(source.telegram || {}) }
+  delete telegramSource.botToken
+  delete telegramSource.webhookSecret
+  Object.assign(settings.telegram, telegramSource)
+  settings.telegram.webhookSecret = telegramSource.webhookSecretConfigured
+    ? TELEGRAM_WEBHOOK_SECRET_MASK
+    : ''
+  telegramWebhookSecretVisible.value = false
   Object.assign(settings.whatsappCloud, source.whatsappCloud || source.whatsapp_cloud || source.meta || {})
   Object.assign(settings.email, source.email || source.gmail || {})
   settings.whatsappPermission.command = whatsappPermissionCommandFromSettings(value)
@@ -509,8 +589,57 @@ onBeforeUnmount(() => {
               <q-icon name="verified" color="positive" size="22px" />
             </div>
             <q-input v-model="settings.telegram.botToken" outlined type="password" label="Token do Bot API" autocomplete="off" hint="O token sozinho já permite testar envios manuais" />
-            <q-input v-model="settings.telegram.webhookSecret" outlined type="password" label="Novo webhook secret (opcional)" autocomplete="new-password" hint="Se ficar vazio ao registrar, a API gera um segredo seguro" />
-            <q-input v-model="settings.telegram.webhookUrl" class="full-span" outlined type="url" label="URL pública do webhook (opcional para enviar)" placeholder="https://seu-id.ngrok-free.app" hint="Se você colar apenas a URL base do ngrok, a rota /api/webhooks/telegram será acrescentada" />
+            <q-input
+              v-model="settings.telegram.webhookSecret"
+              outlined
+              :type="telegramWebhookSecretVisible ? 'text' : 'password'"
+              :label="telegramWebhookSecretIsMasked ? 'Webhook secret configurado' : 'Novo webhook secret (opcional)'"
+              autocomplete="new-password"
+            >
+              <template #append>
+                <q-btn
+                  v-if="settings.telegram.webhookSecret && !telegramWebhookSecretIsMasked"
+                  flat
+                  round
+                  dense
+                  :icon="telegramWebhookSecretVisible ? 'visibility_off' : 'visibility'"
+                  :aria-label="telegramWebhookSecretVisible ? 'Ocultar novo webhook secret' : 'Exibir novo webhook secret'"
+                  @click="telegramWebhookSecretVisible = !telegramWebhookSecretVisible"
+                >
+                  <q-tooltip>{{ telegramWebhookSecretVisible ? 'Ocultar segredo' : 'Exibir novo segredo' }}</q-tooltip>
+                </q-btn>
+                <q-btn flat round dense color="primary" icon="key" aria-label="Gerar novo webhook secret" @click="generateTelegramWebhookSecret()">
+                  <q-tooltip>Gerar novo segredo seguro</q-tooltip>
+                </q-btn>
+                <q-btn flat round dense color="primary" icon="content_copy" aria-label="Copiar webhook secret" @click="copyTelegramWebhookSecret">
+                  <q-tooltip>Copiar webhook secret</q-tooltip>
+                </q-btn>
+                <ContextHelp
+                  title="Webhook secret do Telegram"
+                  tooltip="Entenda como o segredo é protegido"
+                  :text="[
+                    'Se ficar vazio ao registrar, a API gera um segredo seguro.',
+                    'Um segredo já salvo aparece somente como máscara e nunca é devolvido pela API. Para copiá-lo, o navegador gera um novo valor seguro; salve ou registre o webhook para ativá-lo.',
+                  ]"
+                />
+              </template>
+            </q-input>
+            <q-input
+              v-model="settings.telegram.webhookUrl"
+              class="full-span"
+              outlined
+              type="url"
+              label="URL pública do webhook (opcional para enviar)"
+              placeholder="https://seu-id.ngrok-free.app"
+            >
+              <template #append>
+                <ContextHelp
+                  title="URL do webhook do Telegram"
+                  tooltip="Entenda como a URL é completada"
+                  text="Se você colar apenas a URL base do ngrok, a rota /api/webhooks/telegram será acrescentada."
+                />
+              </template>
+            </q-input>
             <div class="full-span channel-actions">
               <q-btn outline color="primary" no-caps icon="save" label="Salvar Telegram" :loading="savingChannel.telegram" @click="saveChannel('telegram')" />
               <q-btn color="primary" unelevated no-caps icon="webhook" label="Salvar e registrar webhook" :loading="registeringWebhook" @click="registerTelegramWebhook" />
@@ -533,9 +662,13 @@ onBeforeUnmount(() => {
               outlined
               readonly
               label="URL de callback do webhook"
-              hint="Cadastre esta URL em Meta Developers. Em acesso local, substitua seudominio.com pelo seu domínio HTTPS ou ngrok."
             >
               <template #append>
+                <ContextHelp
+                  title="Callback do WhatsApp Cloud"
+                  tooltip="Saiba onde cadastrar esta URL"
+                  text="Cadastre esta URL em Meta Developers. Em acesso local, substitua seudominio.com pelo seu domínio HTTPS ou ngrok."
+                />
                 <q-btn flat round dense color="primary" icon="content_copy" aria-label="Copiar URL de callback" @click="copyWhatsappCloudCallbackUrl" />
               </template>
             </q-input>
@@ -547,8 +680,15 @@ onBeforeUnmount(() => {
               v-model="settings.whatsappCloud.phoneNumberId"
               outlined
               label="Phone Number ID"
-              hint="Identificador técnico fornecido pela Meta; não é o número de telefone"
-            />
+            >
+              <template #append>
+                <ContextHelp
+                  title="Phone Number ID"
+                  tooltip="Diferencie o ID do número público"
+                  text="Identificador técnico fornecido pela Meta; não é o número de telefone."
+                />
+              </template>
+            </q-input>
             <q-input
               v-model="settings.whatsappCloud.displayPhoneNumber"
               outlined
@@ -556,10 +696,25 @@ onBeforeUnmount(() => {
               mask="+## (##) #####-####"
               unmasked-value
               placeholder="+55 (61) 98174-8795"
-              hint="Usado nos links wa.me dos convites. Salvo separado do Phone Number ID."
-            />
+            >
+              <template #append>
+                <ContextHelp
+                  title="Número público do WhatsApp"
+                  tooltip="Entenda onde este número é usado"
+                  text="Usado nos links wa.me dos convites. Salvo separado do Phone Number ID."
+                />
+              </template>
+            </q-input>
             <q-input v-model="settings.whatsappCloud.businessAccountId" outlined label="Business Account ID" />
-            <q-input v-model.trim="settings.whatsappCloud.apiVersion" outlined label="Versão da Graph API" hint="Use v25.0 para reproduzir os exemplos deste ambiente de testes" />
+            <q-input v-model.trim="settings.whatsappCloud.apiVersion" outlined label="Versão da Graph API">
+              <template #append>
+                <ContextHelp
+                  title="Versão da Graph API"
+                  tooltip="Entenda a versão usada nos exemplos"
+                  text="Use v25.0 para reproduzir os exemplos deste ambiente de testes."
+                />
+              </template>
+            </q-input>
             <q-input v-model="settings.whatsappCloud.accessToken" outlined type="password" label="Access token" autocomplete="off" />
             <q-input v-model="settings.whatsappCloud.verifyToken" outlined type="password" label="Webhook verify token" autocomplete="off" />
             <q-input v-model="settings.whatsappCloud.appSecret" class="full-span" outlined type="password" label="App secret (validação X-Hub-Signature-256)" autocomplete="off" />
@@ -691,7 +846,10 @@ onBeforeUnmount(() => {
           <ContextHelp
             title="Comando de onboarding do Telegram"
             tooltip="Entenda o onboarding automático"
-            text="Quando o usuário enviar este comando ao bot, ele será autorizado e receberá um menu com vínculo seguro de telefone, acesso ao Meu perfil e Ajuda. O comando dinâmico do WhatsApp também continua válido no Telegram e abre o mesmo menu."
+            :text="[
+              'Quando o usuário enviar este comando ao bot, ele será autorizado e receberá um menu com vínculo seguro de telefone, acesso ao Meu perfil e Ajuda. O comando dinâmico do WhatsApp também continua válido no Telegram e abre o mesmo menu.',
+              'Pode ser alterado; /notify-me permanece dinâmico conforme a configuração do WhatsApp.',
+            ]"
           />
         </div>
         <code>START_VERIFY_TELEGRAM_PERMISSION</code>
@@ -701,7 +859,6 @@ onBeforeUnmount(() => {
         outlined
         label="Comando do onboarding Telegram"
         placeholder="/verify-me"
-        hint="Pode ser alterado; /notify-me permanece dinâmico conforme a configuração do WhatsApp"
         maxlength="100"
         counter
         class="whatsapp-permission-card__input"
@@ -726,7 +883,10 @@ onBeforeUnmount(() => {
           <ContextHelp
             title="Quando um contato do WhatsApp é cadastrado"
             tooltip="Entenda a autorização automática"
-            text="No WhatsApp Web, mensagens comuns de um remetente desconhecido aparecem temporariamente no monitor, sem criar contato, consentimento ou aviso de novo usuário. O contato só é cadastrado automaticamente quando envia este texto exato. Quando o comando chega pelo Web ou Cloud, a conversa pendente é associada sem duplicar mensagens e o sistema autoriza as duas integrações para o mesmo contato. A integração já identificada é liberada imediatamente; a outra é liberada quando sua identidade real existir. As permissões continuam separadas para ajustes e revogações individuais."
+            :text="[
+              'No WhatsApp Web, mensagens comuns de um remetente desconhecido aparecem temporariamente no monitor, sem criar contato, consentimento ou aviso de novo usuário. O contato só é cadastrado automaticamente quando envia este texto exato. Quando o comando chega pelo Web ou Cloud, a conversa pendente é associada sem duplicar mensagens e o sistema autoriza as duas integrações para o mesmo contato. A integração já identificada é liberada imediatamente; a outra é liberada quando sua identidade real existir. As permissões continuam separadas para ajustes e revogações individuais.',
+              'O comando recebido no WhatsApp Web ou Cloud autoriza as duas integrações, sem criar um destino que ainda não foi identificado.',
+            ]"
           />
         </div>
         <code>START_NOTIFY_WHATSAPP_PERMISSION</code>
@@ -736,7 +896,6 @@ onBeforeUnmount(() => {
         outlined
         label="Texto de autorização"
         placeholder="/notify-me"
-        hint="O comando recebido no WhatsApp Web ou Cloud autoriza as duas integrações, sem criar um destino que ainda não foi identificado"
         maxlength="100"
         counter
         class="whatsapp-permission-card__input"

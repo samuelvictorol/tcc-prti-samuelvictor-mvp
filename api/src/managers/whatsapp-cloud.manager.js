@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const settingsManager = require('./settings.manager');
 const contactsManager = require('./contacts.manager');
+const invitesManager = require('./invites.manager');
 const logsManager = require('./logs.manager');
 const adminNotificationsManager = require('./admin-notifications.manager');
 const { timingSafeEqual } = require('../services/crypto.service');
@@ -239,8 +240,21 @@ async function webhook(payload, rawBody, signature) {
         const matchedProviderContact = matchingCloudContact(value.contacts || [], message) || {};
         const address = messageAddress;
         if (!address) continue;
-        const permissionGranted = await settingsManager.isWhatsappPermissionCommand(message.text?.body);
-        const permissionCommand = permissionGranted ? String(message.text?.body || '').trim() : null;
+        const inboundText = String(message.text?.body || '');
+        const strictPermissionGranted = await settingsManager.isWhatsappPermissionCommand(inboundText);
+        const markerCandidate = inboundText.normalize('NFKC').trim().split(/\s+/).at(-1);
+        const hasValidAttributionMarker = !strictPermissionGranted
+          && Boolean(invitesManager.parseAttributionMarker(markerCandidate));
+        const configuredPermissionCommand = hasValidAttributionMarker
+          ? await settingsManager.getWhatsappPermissionCommand()
+          : null;
+        const invitationInvocation = hasValidAttributionMarker
+          ? await invitesManager.resolveWhatsappInviteInvocation(inboundText, configuredPermissionCommand)
+          : null;
+        const permissionGranted = Boolean(invitationInvocation) || strictPermissionGranted;
+        const permissionCommand = permissionGranted
+          ? invitationInvocation?.command || String(message.text?.body || '').trim()
+          : null;
         const result = await upsertCloudContact(
           { ...matchedProviderContact, ...message },
           { ...value, businessAccountId: entry.id || null },
@@ -248,6 +262,13 @@ async function webhook(payload, rawBody, signature) {
           { permissionGranted, permissionCommand }
         );
         if (!result) continue;
+        const invitationAttribution = invitationInvocation
+          ? await invitesManager.attributeContactFromMarker(
+            result.contact.id,
+            invitationInvocation.attributionMarker,
+            'whatsapp_cloud'
+          )
+          : null;
         if (result.permissionRequired) {
           emit('whatsapp_cloud:permission_required', {
             contactId: result.contact.id,
@@ -282,6 +303,10 @@ async function webhook(payload, rawBody, signature) {
           from: address,
           type: message.type || 'unknown',
           text: message.text?.body ? String(message.text.body).slice(0, 2000) : null,
+          ...(invitationInvocation ? {
+            text: permissionCommand,
+            inviteAttributed: Boolean(invitationAttribution)
+          } : {}),
           sentAt: Number.isFinite(timestampMs) && timestampMs > 0 ? new Date(timestampMs).toISOString() : new Date().toISOString()
         });
       }

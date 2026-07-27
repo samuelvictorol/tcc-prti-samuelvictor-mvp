@@ -155,7 +155,10 @@ O CSP restringe scripts à própria origem, proíbe frames e permite imagens HTT
 
 ## Deploy no Render
 
-O `render.yaml` da raiz publica este container como web service. O Nginx atual usa `http://api:3000` como upstream privado; portanto, o serviço backend do Blueprint precisa se chamar `api` e ficar na mesma região/rede privada.
+O `render.yaml` da raiz publica este container como web service. A imagem processa
+o template do Nginx ao iniciar: o Compose usa `API_UPSTREAM=api:3000`, enquanto o
+Blueprint injeta o `hostport` privado real da API com `fromService`. Os dois
+serviços precisam permanecer na mesma região/rede privada.
 
 O health check recomendado no Blueprint é `/api/health`, pois atravessa o proxy e comprova frontend, API, MongoDB e Redis. `PUBLIC_APP_URL` e `CORS_ORIGINS` são variáveis da API e devem conter a URL HTTPS pública deste frontend.
 

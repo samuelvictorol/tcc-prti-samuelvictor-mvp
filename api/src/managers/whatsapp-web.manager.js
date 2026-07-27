@@ -1,6 +1,7 @@
 const webService = require('../services/whatsapp-web.service');
 const settingsManager = require('./settings.manager');
 const contactsManager = require('./contacts.manager');
+const invitesManager = require('./invites.manager');
 const logsManager = require('./logs.manager');
 const conversationsManager = require('./conversations.manager');
 const adminNotificationsManager = require('./admin-notifications.manager');
@@ -175,8 +176,21 @@ async function processIncoming(message) {
   const contactData = await contactFromMessage(message, chatId);
   const contactAddress = serializedId(contactData?.id) || chatId;
   const phone = verifiedContactPhone(message, contactData, chatId, contactAddress);
-  const permissionGranted = await settingsManager.isWhatsappPermissionCommand(message.body);
-  const receivedPermissionCommand = permissionGranted ? String(message.body || '').trim() : null;
+  const inboundText = String(message.body || '');
+  const strictPermissionGranted = await settingsManager.isWhatsappPermissionCommand(inboundText);
+  const markerCandidate = inboundText.normalize('NFKC').trim().split(/\s+/).at(-1);
+  const hasValidAttributionMarker = !strictPermissionGranted
+    && Boolean(invitesManager.parseAttributionMarker(markerCandidate));
+  const configuredPermissionCommand = hasValidAttributionMarker
+    ? await settingsManager.getWhatsappPermissionCommand()
+    : null;
+  const invitationInvocation = hasValidAttributionMarker
+    ? await invitesManager.resolveWhatsappInviteInvocation(inboundText, configuredPermissionCommand)
+    : null;
+  const permissionGranted = Boolean(invitationInvocation) || strictPermissionGranted;
+  const receivedPermissionCommand = permissionGranted
+    ? invitationInvocation?.command || String(message.body || '').trim()
+    : null;
   const existingChannelContact = await contactsManager.findByChannelAddress('whatsapp_web', chatId);
   const existingContact = existingChannelContact
     || await contactsManager.findByChannelOrPhone('whatsapp_web', chatId, phone);
@@ -240,6 +254,13 @@ async function processIncoming(message) {
     && identity.authorized
     && identity.consentStatus === 'granted'
   ));
+  const invitationAttribution = invitationInvocation && contact
+    ? await invitesManager.attributeContactFromMarker(
+      contact.id,
+      invitationInvocation.attributionMarker,
+      'whatsapp_web'
+    )
+    : null;
   if (permissionGranted) {
     await conversationsManager.attachContact('whatsapp_web', chatId, contact.id, {
       displayName,
@@ -260,7 +281,7 @@ async function processIncoming(message) {
     avatarUrl: contactAvatarUrl,
     isGroup: false,
     providerMessageId: providerMessageId(message),
-    body: message.body || '',
+    body: invitationInvocation ? receivedPermissionCommand : message.body || '',
     type: message.type,
     hasMedia: message.hasMedia,
     sentAt: Number.isFinite(Number(message.timestamp)) && Number(message.timestamp) > 0
@@ -282,7 +303,10 @@ async function processIncoming(message) {
       entityId: contact?.id || null,
       isGroup: false,
       fromMe: false,
-      body: String(message.body || '').slice(0, 2000),
+      body: invitationInvocation
+        ? receivedPermissionCommand
+        : String(message.body || '').slice(0, 2000),
+      inviteAttributed: Boolean(invitationAttribution),
       type: message.type,
       timestamp: message.timestamp,
       conversationId: stored.conversation.id

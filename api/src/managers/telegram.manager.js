@@ -1,6 +1,7 @@
 const settingsManager = require('./settings.manager');
 const contactsManager = require('./contacts.manager');
 const groupsManager = require('./groups.manager');
+const invitesManager = require('./invites.manager');
 const logsManager = require('./logs.manager');
 const conversationsManager = require('./conversations.manager');
 const adminNotificationsManager = require('./admin-notifications.manager');
@@ -270,6 +271,16 @@ async function telegramPermissionInvocation(text) {
   }
   if (await settingsManager.isTelegramPermissionCommand(text)) {
     return { matched: true, command: verifyCommand, source: 'configured_verify_command' };
+  }
+
+  const inviteInvocation = await invitesManager.resolveTelegramInviteInvocation(text);
+  if (inviteInvocation) {
+    return {
+      matched: true,
+      command: notifyCommand,
+      source: inviteInvocation.source,
+      inviteAttributionMarker: inviteInvocation.attributionMarker
+    };
   }
 
   const startMatch = normalized.match(/^\/start(?:@[a-z0-9_]{3,32})?\s+([a-z0-9_-]{1,64})$/i);
@@ -859,6 +870,13 @@ async function webhook(update, providedSecret) {
           autoRegisteredVia: 'telegram'
         }
       });
+      const invitationAttribution = permissionInvocation.inviteAttributionMarker
+        ? await invitesManager.attributeContactFromMarker(
+          contact.id,
+          permissionInvocation.inviteAttributionMarker,
+          'telegram'
+        )
+        : null;
       if (!existing && contact.upsertState?.created !== false) {
         await notifyNewContact(contact, 'telegram', { source: 'private_message' });
       }
@@ -894,7 +912,9 @@ async function webhook(update, providedSecret) {
         avatarUrl,
         isGroup: false,
         providerMessageId: message.message_id,
-        body: message.text || message.caption || (message.contact ? '[Contato compartilhado]' : ''),
+        body: permissionInvocation.inviteAttributionMarker
+          ? permissionInvocation.command
+          : message.text || message.caption || (message.contact ? '[Contato compartilhado]' : ''),
         type: messageType(message),
         hasMedia: Boolean(message.photo || message.video || message.audio || message.voice || message.document || message.sticker || message.animation),
         sentAt: Number(message.date) * 1000,
@@ -912,7 +932,13 @@ async function webhook(update, providedSecret) {
         isGroup: false
       });
       await logsManager.create({ channel: 'telegram', action: 'message.received', message: 'Mensagem recebida em chat privado', context: { contactId: contact.id, updateId: update.update_id } });
-      publishMessage(update, message, { contactId: contact.id });
+      publishMessage(
+        update,
+        permissionInvocation.inviteAttributionMarker
+          ? { ...message, text: permissionInvocation.command }
+          : message,
+        { contactId: contact.id, inviteAttributed: Boolean(invitationAttribution) }
+      );
       if (sharedContact.provided && !sharedContact.verified) {
         await rejectPhoneShare(chat.id).catch(async (error) => {
           await logsManager.create({

@@ -7,6 +7,13 @@ import EmptyState from '../components/EmptyState.vue'
 import ContactDialog from '../components/ContactDialog.vue'
 import { errorMessage, fetchAll, http, unwrap } from '../services/http.js'
 import {
+  buildInviteGroupSyncPayload,
+  contactInviteOrigins,
+  groupInviteIds,
+  groupInviteOrigins,
+  inviteGroupSyncCaption,
+} from '../services/contact-invites.js'
+import {
   automaticRegistrationSources,
   contactIdentitySummaries,
   identityConsentProvenance,
@@ -19,16 +26,32 @@ const tab = ref('contacts')
 const loading = ref(false)
 const saving = ref(false)
 const search = ref('')
+const inviteFilter = ref(String(route.query.inviteId || '').trim() || null)
 const contacts = ref([])
 const groups = ref([])
+const invites = ref([])
 const dialog = ref(false)
 const contactDialog = ref(false)
 const editingContact = ref(null)
 const editingId = ref(null)
+const editingInviteLinked = ref(false)
+const syncingGroupId = ref(null)
 let openingQueryContact = false
 
-const emptyGroup = () => ({ name: '', description: '', contactIds: [], source: 'manual' })
+const emptyGroup = () => ({
+  name: '',
+  description: '',
+  contactIds: [],
+  source: 'manual',
+  membershipMode: 'manual',
+  inviteIds: [],
+})
 const groupForm = reactive(emptyGroup())
+
+const primaryGroupInviteId = computed({
+  get: () => groupForm.inviteIds[0] || null,
+  set: (value) => { groupForm.inviteIds = value ? [value] : [] },
+})
 
 const contactColumns = [
   { name: 'name', label: 'Contato', field: 'name', align: 'left', sortable: true },
@@ -49,6 +72,12 @@ const contactOptions = computed(() => contacts.value.map((contact) => ({
   value: contact.id || contact._id,
 })))
 
+const inviteOptions = computed(() => invites.value.map((invite) => ({
+  label: invite.title || invite.name || invite.slug || 'Convite',
+  value: recordId(invite),
+  slug: invite.slug || '',
+})))
+
 const filteredContacts = computed(() => {
   const needle = search.value.trim().toLowerCase()
   if (!needle) return contacts.value
@@ -59,6 +88,7 @@ const filteredContacts = computed(() => {
       contact.email,
       contact.phone,
       contact.telegramUsername,
+      ...contactInviteOrigins(contact, invites.value).flatMap((origin) => [origin.title, origin.slug]),
       ...(Array.isArray(contact.channels) ? contact.channels.flatMap((identity) => [
         identity?.address,
         ...Object.values(identity?.metadata || {}),
@@ -137,6 +167,12 @@ function memberCount(group) {
   return group.contactCount ?? group.memberCount ?? group.contacts?.length ?? group.contactIds?.length ?? group.members?.length ?? 0
 }
 
+function compactInviteOrigins(record, kind = 'contact') {
+  return kind === 'group'
+    ? groupInviteOrigins(record, invites.value)
+    : contactInviteOrigins(record, invites.value)
+}
+
 function formatDate(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
@@ -145,15 +181,38 @@ function formatDate(value) {
 async function loadData() {
   loading.value = true
   try {
-    const [contactItems, groupItems] = await Promise.all([
-      fetchAll('/contacts', { preferredKey: 'contacts' }),
+    const [contactItems, groupItems, inviteItems] = await Promise.all([
+      fetchAll('/contacts', {
+        params: { inviteId: inviteFilter.value || undefined },
+        preferredKey: 'contacts',
+      }),
       fetchAll('/contact-groups', { preferredKey: 'groups' }),
+      fetchAll('/invites', { preferredKey: 'invites' }),
     ])
     contacts.value = contactItems
     groups.value = groupItems
+    invites.value = inviteItems
     await openContactFromQuery()
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível carregar contatos e grupos.') })
+  } finally {
+    loading.value = false
+  }
+}
+
+async function applyInviteFilter() {
+  const query = { ...route.query }
+  if (inviteFilter.value) query.inviteId = inviteFilter.value
+  else delete query.inviteId
+  await router.replace({ query })
+  loading.value = true
+  try {
+    contacts.value = await fetchAll('/contacts', {
+      params: { inviteId: inviteFilter.value || undefined },
+      preferredKey: 'contacts',
+    })
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível filtrar os contatos por convite.') })
   } finally {
     loading.value = false
   }
@@ -188,6 +247,7 @@ function openCreate(kind) {
     return
   }
   editingId.value = null
+  editingInviteLinked.value = false
   Object.assign(groupForm, emptyGroup())
   dialog.value = true
 }
@@ -199,11 +259,14 @@ function openEdit(kind, record) {
     return
   }
   editingId.value = recordId(record)
+  editingInviteLinked.value = groupInviteIds(record).length > 0
   Object.assign(groupForm, emptyGroup(), {
     name: record.name || '',
     description: record.description || '',
     source: record.source || 'manual',
     contactIds: (record.contactIds || record.contacts || record.members || []).map((item) => typeof item === 'object' ? recordId(item) : item),
+    membershipMode: groupInviteIds(record).length ? 'invite' : 'manual',
+    inviteIds: groupInviteIds(record),
   })
   dialog.value = true
 }
@@ -211,16 +274,78 @@ function openEdit(kind, record) {
 async function save() {
   saving.value = true
   try {
-    const payload = { ...groupForm, source: 'manual' }
-    if (editingId.value) await http.put(`/contact-groups/${editingId.value}`, payload)
-    else await http.post('/contact-groups', payload)
-    $q.notify({ type: 'positive', message: 'Grupo salvo com sucesso.' })
+    let result
+    if (groupForm.membershipMode === 'invite') {
+      if (!groupForm.inviteIds.length) {
+        $q.notify({ type: 'warning', message: 'Selecione pelo menos um convite para sincronizar.' })
+        return
+      }
+      if (editingId.value) {
+        result = unwrap(await http.post(
+          `/contact-groups/${editingId.value}/sync-invite`,
+          { inviteId: primaryGroupInviteId.value },
+        )) || {}
+      } else {
+        result = unwrap(await http.post(
+          '/contact-groups/sync-invites',
+          buildInviteGroupSyncPayload(groupForm),
+        )) || {}
+      }
+      $q.notify({
+        type: 'positive',
+        message: editingId.value ? 'Grupo sincronizado pelo convite.' : 'Grupos sincronizados pelos convites.',
+        caption: inviteGroupSyncCaption(result),
+      })
+    } else {
+      const payload = {
+        name: groupForm.name,
+        description: groupForm.description,
+        contactIds: groupForm.contactIds,
+        source: 'manual',
+      }
+      if (editingId.value) await http.put(`/contact-groups/${editingId.value}`, payload)
+      else await http.post('/contact-groups', payload)
+      $q.notify({ type: 'positive', message: 'Grupo salvo com sucesso.' })
+    }
     dialog.value = false
     await loadData()
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error) })
   } finally {
     saving.value = false
+  }
+}
+
+function confirmSyncGroup(group) {
+  const sourceInvites = compactInviteOrigins(group, 'group')
+  if (!sourceInvites.length) return
+  $q.dialog({
+    title: 'Sincronizar grupo pelos convites?',
+    message: 'Novos contatos associados ao convite serão adicionados. Nenhum membro atual será removido.',
+    cancel: { flat: true, label: 'Cancelar' },
+    ok: { color: 'primary', label: 'Sincronizar' },
+    persistent: true,
+  }).onOk(() => syncGroupInvites(group))
+}
+
+async function syncGroupInvites(group) {
+  const id = recordId(group)
+  syncingGroupId.value = id
+  try {
+    const result = unwrap(await http.post(
+      `/contact-groups/${id}/sync-invite`,
+      { inviteId: groupInviteIds(group)[0] },
+    )) || {}
+    $q.notify({
+      type: 'positive',
+      message: 'Grupo atualizado pelos convites.',
+      caption: inviteGroupSyncCaption(result),
+    })
+    await loadData()
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível sincronizar o grupo.') })
+  } finally {
+    syncingGroupId.value = null
   }
 }
 
@@ -269,9 +394,34 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
           <q-tab name="contacts" icon="person" label="Contatos" />
           <q-tab name="groups" icon="groups" label="Grupos" />
         </q-tabs>
-        <q-input v-model="search" dense outlined clearable debounce="250" placeholder="Buscar por nome, email ou telefone" class="search-field">
-          <template #prepend><q-icon name="search" /></template>
-        </q-input>
+        <div class="contact-search-controls">
+          <q-input v-model="search" dense outlined clearable debounce="250" placeholder="Buscar nome, email, telefone ou convite" class="search-field">
+            <template #prepend><q-icon name="search" /></template>
+          </q-input>
+          <q-select
+            v-if="tab === 'contacts'"
+            v-model="inviteFilter"
+            dense
+            outlined
+            clearable
+            emit-value
+            map-options
+            :options="inviteOptions"
+            label="Origem por convite"
+            class="invite-filter"
+            @update:model-value="applyInviteFilter"
+          >
+            <template #option="scope">
+              <q-item v-bind="scope.itemProps">
+                <q-item-section avatar><q-icon name="link" color="primary" /></q-item-section>
+                <q-item-section>
+                  <q-item-label>{{ scope.opt.label }}</q-item-label>
+                  <q-item-label v-if="scope.opt.slug" caption>/invite/{{ scope.opt.slug }}</q-item-label>
+                </q-item-section>
+              </q-item>
+            </template>
+          </q-select>
+        </div>
       </div>
 
       <q-tab-panels v-model="tab" animated class="transparent">
@@ -312,6 +462,29 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
                         icon="auto_awesome"
                         :label="`Cadastro automático: ${source}`"
                       />
+                    </div>
+                    <div v-if="compactInviteOrigins(props.row).length" class="invite-origin-badges">
+                      <q-badge
+                        v-for="origin in compactInviteOrigins(props.row).slice(0, 2)"
+                        :key="origin.id"
+                        outline
+                        color="secondary"
+                        icon="link"
+                        :label="origin.title"
+                      >
+                        <q-tooltip>
+                          /invite/{{ origin.slug || 'sem-slug' }}
+                          <template v-if="origin.lastUsedAt"> · última origem {{ formatDate(origin.lastUsedAt) }}</template>
+                        </q-tooltip>
+                      </q-badge>
+                      <q-badge
+                        v-if="compactInviteOrigins(props.row).length > 2"
+                        color="grey-3"
+                        text-color="grey-8"
+                        :label="`+${compactInviteOrigins(props.row).length - 2}`"
+                      >
+                        <q-tooltip>{{ compactInviteOrigins(props.row).slice(2).map((origin) => origin.title).join(', ') }}</q-tooltip>
+                      </q-badge>
                     </div>
                   </div>
                 </div>
@@ -372,13 +545,48 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
           </EmptyState>
           <q-table v-else flat :rows="filteredGroups" :columns="groupColumns" row-key="id" :loading="loading" :rows-per-page-options="[10, 25, 50]">
             <template #body-cell-name="props">
-              <q-td :props="props"><strong>{{ props.row.name }}</strong><div class="text-muted text-caption">{{ props.row.description || 'Sem descrição' }}</div></q-td>
+              <q-td :props="props">
+                <strong>{{ props.row.name }}</strong>
+                <div class="text-muted text-caption">{{ props.row.description || 'Sem descrição' }}</div>
+                <div v-if="compactInviteOrigins(props.row, 'group').length" class="invite-origin-badges">
+                  <q-badge
+                    v-for="origin in compactInviteOrigins(props.row, 'group')"
+                    :key="origin.id"
+                    outline
+                    color="secondary"
+                    icon="link"
+                    :label="origin.title"
+                  />
+                </div>
+              </q-td>
             </template>
             <template #body-cell-members="props"><q-td :props="props">{{ memberCount(props.row) }} contato(s)</q-td></template>
-            <template #body-cell-source="props"><q-td :props="props"><q-badge outline color="primary" :label="props.row.source || 'manual'" /></q-td></template>
+            <template #body-cell-source="props">
+              <q-td :props="props">
+                <q-badge
+                  outline
+                  color="primary"
+                  :icon="compactInviteOrigins(props.row, 'group').length ? 'sync' : undefined"
+                  :label="compactInviteOrigins(props.row, 'group').length ? 'Convite sincronizado' : (props.row.source || 'manual')"
+                />
+              </q-td>
+            </template>
             <template #body-cell-actions="props">
               <q-td :props="props">
                 <template v-if="(props.row.source || 'manual') === 'manual'">
+                  <q-btn
+                    v-if="compactInviteOrigins(props.row, 'group').length"
+                    flat
+                    round
+                    dense
+                    color="primary"
+                    icon="sync"
+                    aria-label="Sincronizar grupo pelo convite"
+                    :loading="syncingGroupId === recordId(props.row)"
+                    @click="confirmSyncGroup(props.row)"
+                  >
+                    <q-tooltip>Adicionar novos contatos deste convite</q-tooltip>
+                  </q-btn>
                   <q-btn flat round dense icon="edit" aria-label="Editar grupo" @click="openEdit('group', props.row)" />
                   <q-btn flat round dense color="negative" icon="delete" aria-label="Remover grupo" @click="remove('group', props.row)" />
                 </template>
@@ -393,7 +601,12 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
     <q-dialog v-model="dialog" persistent :maximized="$q.screen.lt.sm">
       <q-card class="dialog-card dialog-card--medium">
         <q-card-section class="row items-center">
-          <div class="text-h6 text-weight-bold">{{ editingId ? 'Editar grupo' : 'Novo grupo' }}</div>
+          <div>
+            <div class="text-h6 text-weight-bold">{{ editingId ? 'Editar grupo' : 'Novo grupo' }}</div>
+            <div class="text-caption text-muted">
+              {{ groupForm.membershipMode === 'invite' ? 'Membros adicionados automaticamente pela origem do convite.' : 'Escolha manualmente quem faz parte do grupo.' }}
+            </div>
+          </div>
           <q-space />
           <q-btn v-close-popup flat round dense icon="close" aria-label="Fechar" />
         </q-card-section>
@@ -401,16 +614,102 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
         <q-form @submit.prevent="save">
           <q-card-section class="q-pa-lg">
             <div class="form-grid">
-              <q-input v-model.trim="groupForm.name" outlined label="Nome do grupo *" :rules="[(value) => Boolean(value) || 'Informe o nome']" />
-              <q-input model-value="Manual" outlined label="Origem" disable />
-              <q-input v-model="groupForm.description" outlined type="textarea" label="Descrição" class="full-span" />
-              <q-select v-model="groupForm.contactIds" outlined multiple use-chips emit-value map-options option-label="label" option-value="value" :options="contactOptions" label="Membros" class="full-span" />
+              <q-btn-toggle
+                v-model="groupForm.membershipMode"
+                spread
+                no-caps
+                unelevated
+                toggle-color="primary"
+                color="grey-2"
+                text-color="grey-8"
+                :disable="editingInviteLinked"
+                :options="[
+                  { label: 'Selecionar contatos', value: 'manual', icon: 'group_add' },
+                  { label: 'Sincronizar convite', value: 'invite', icon: 'link' },
+                ]"
+                class="full-span group-mode-toggle"
+              />
+
+              <template v-if="groupForm.membershipMode === 'manual'">
+                <q-input
+                  v-model.trim="groupForm.name"
+                  outlined
+                  label="Nome do grupo *"
+                  :rules="[(value) => Boolean(value) || 'Informe o nome']"
+                />
+                <q-input model-value="Manual" outlined label="Origem" disable />
+                <q-input v-model="groupForm.description" outlined type="textarea" label="Descrição" class="full-span" />
+              </template>
+
+              <q-select
+                v-if="groupForm.membershipMode === 'manual'"
+                v-model="groupForm.contactIds"
+                outlined
+                multiple
+                use-chips
+                emit-value
+                map-options
+                option-label="label"
+                option-value="value"
+                :options="contactOptions"
+                label="Membros"
+                class="full-span"
+              />
+
+              <template v-else>
+                <q-input
+                  v-if="editingId"
+                  :model-value="groupForm.name"
+                  outlined
+                  readonly
+                  label="Grupo que será sincronizado"
+                  class="full-span"
+                />
+                <q-select
+                  v-if="editingId"
+                  v-model="primaryGroupInviteId"
+                  outlined
+                  emit-value
+                  map-options
+                  :options="inviteOptions"
+                  label="Convite de origem *"
+                  :rules="[(value) => Boolean(value) || 'Selecione um convite']"
+                  class="full-span"
+                />
+                <q-select
+                  v-else
+                  v-model="groupForm.inviteIds"
+                  outlined
+                  multiple
+                  use-chips
+                  emit-value
+                  map-options
+                  :options="inviteOptions"
+                  label="Convites de origem *"
+                  hint="Será criado ou atualizado um grupo separado para cada convite"
+                  :rules="[(value) => Boolean(value?.length) || 'Selecione pelo menos um convite']"
+                  class="full-span"
+                />
+                <q-banner rounded class="invite-sync-banner full-span">
+                  <template #avatar><q-icon name="sync" color="primary" /></template>
+                  A sincronização adiciona contatos associados ao convite e nunca remove membros atuais.
+                  Depois, use o botão <q-icon name="sync" /> na lista para buscar novos contatos.
+                </q-banner>
+              </template>
             </div>
           </q-card-section>
           <q-separator />
           <q-card-actions align="right" class="q-pa-md">
             <q-btn v-close-popup flat no-caps label="Cancelar" />
-            <q-btn type="submit" color="primary" unelevated no-caps label="Salvar" :loading="saving" />
+            <q-btn
+              type="submit"
+              color="primary"
+              unelevated
+              no-caps
+              :icon="groupForm.membershipMode === 'invite' ? 'sync' : 'save'"
+              :label="groupForm.membershipMode === 'invite' ? (editingId ? 'Salvar e sincronizar' : 'Criar grupos') : 'Salvar'"
+              :loading="saving"
+            />
           </q-card-actions>
         </q-form>
       </q-card>
@@ -427,6 +726,23 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
 <style scoped>
 .search-field {
   width: min(360px, 100%);
+}
+
+.contact-search-controls {
+  display: flex;
+  width: min(700px, 100%);
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.contact-search-controls .search-field {
+  flex: 1 1 330px;
+}
+
+.invite-filter {
+  width: min(270px, 100%);
+  flex: 0 1 270px;
 }
 
 .contact-cell {
@@ -451,6 +767,34 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 5px;
+}
+
+.invite-origin-badges {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.invite-origin-badges :deep(.q-badge) {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-mode-toggle {
+  overflow: hidden;
+  border: 1px solid rgba(3, 21, 21, 0.09);
+  border-radius: 13px;
+}
+
+.invite-sync-banner {
+  border: 1px solid rgba(53, 188, 164, 0.2);
+  background: rgba(130, 248, 230, 0.1);
+  color: #476660;
+  line-height: 1.5;
 }
 
 .channel-badges {
@@ -509,6 +853,21 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
 }
 
 @media (max-width: 640px) {
+  .contact-search-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .contact-search-controls .search-field,
+  .invite-filter {
+    width: 100%;
+    flex-basis: auto;
+  }
+
+  .group-mode-toggle :deep(.q-btn__content) {
+    font-size: 0.72rem;
+  }
+
   .provider-id-row code {
     max-width: 72vw;
   }

@@ -754,7 +754,14 @@ onBeforeUnmount(() => {
 
     <q-card flat class="glass-card section-card q-mb-lg webhook-contacts-card">
       <div class="section-title-row">
-        <div><h2 class="section-title">Contatos recebidos pelo webhook</h2><p class="section-copy">Mensagens recebidas cadastram ou atualizam o contato. O comando configurado concede Web e Cloud em conjunto; ajustes administrativos permanecem individuais.</p></div>
+        <div class="row items-center q-gutter-xs">
+          <h2 class="section-title">Contatos recebidos pelo webhook</h2>
+          <ContextHelp
+            title="Cadastro pelo webhook"
+            tooltip="Entenda como os contatos são atualizados"
+            text="Mensagens recebidas cadastram ou atualizam o contato. O comando configurado concede Web e Cloud em conjunto; ajustes administrativos permanecem individuais."
+          />
+        </div>
         <q-badge color="primary" :label="`${webhookContacts.length} AUTO-CADASTRADO(S)`" />
       </div>
       <q-banner rounded class="webhook-contact-banner q-mb-md"><template #avatar><q-icon name="auto_awesome" color="primary" /></template><strong>Cadastro automático ativo.</strong> Você pode atualizar, editar consentimento ou remover cada contato abaixo.</q-banner>
@@ -811,7 +818,16 @@ onBeforeUnmount(() => {
     </q-card>
 
     <q-card flat class="glass-card section-card">
-      <div class="toolbar-row"><div><h2 class="section-title">Eventos do webhook</h2><p class="section-copy">Status de entrega e respostas recentes, sem expor o payload secreto.</p></div></div>
+      <div class="toolbar-row">
+        <div class="row items-center q-gutter-xs">
+          <h2 class="section-title">Eventos do webhook</h2>
+          <ContextHelp
+            title="Eventos seguros do webhook"
+            tooltip="Entenda o que aparece nesta tabela"
+            text="Status de entrega e respostas recentes, sem expor o payload secreto."
+          />
+        </div>
+      </div>
       <EmptyState v-if="!loading && !events.length" icon="webhook" title="Nenhum evento recente" description="Validações e retornos da Meta aparecerão aqui." />
       <q-table v-else flat :rows="events" :columns="eventColumns" row-key="id" :loading="loading" :rows-per-page-options="[10, 25, 50]">
         <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt || props.row.timestamp) }}</q-td></template>

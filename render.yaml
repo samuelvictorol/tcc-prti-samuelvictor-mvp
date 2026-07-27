@@ -15,9 +15,14 @@ services:
         value: /api
       - key: VITE_SOCKET_URL
         value: ""
+      # O Nginx recebe o hostname e a porta reais da rede privada do Render.
+      # Não dependa do alias "api", que existe apenas no Docker Compose local.
+      - key: API_UPSTREAM
+        fromService:
+          name: api
+          type: pserv
+          property: hostport
 
-  # Keep this exact service name unless frontend/nginx.conf is also changed:
-  # the Nginx upstream currently resolves http://api:3000.
   - type: pserv
     name: api
     runtime: docker

@@ -15,5 +15,17 @@ async function update(req, res) {
 async function remove(req, res) {
   res.json({ success: true, data: await groupsManager.remove(req.validated.params.id) });
 }
+async function syncInvites(req, res) {
+  res.json({ success: true, data: await groupsManager.syncInviteGroups(req.validated.body) });
+}
+async function syncInvite(req, res) {
+  res.json({
+    success: true,
+    data: await groupsManager.syncExistingGroupInvite(
+      req.validated.params.id,
+      req.validated.body.inviteId
+    )
+  });
+}
 
-module.exports = { create, list, get, update, remove };
+module.exports = { create, list, get, update, remove, syncInvites, syncInvite };

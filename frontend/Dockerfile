@@ -16,12 +16,17 @@ RUN npm run build
 
 FROM nginx:1.27-alpine AS runtime
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+ENV PORT=80 \
+    API_UPSTREAM=api:3000
+
+# A imagem oficial processa templates em runtime. Isso mantém o mesmo artefato
+# compatível com o DNS do Docker Compose e com o host privado injetado pelo Render.
+COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 80
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget -qO- http://127.0.0.1/healthz || exit 1
+  CMD wget -qO- "http://127.0.0.1:${PORT}/healthz" || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

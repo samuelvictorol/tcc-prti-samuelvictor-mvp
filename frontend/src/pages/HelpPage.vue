@@ -16,11 +16,11 @@ const gettingStarted = [
   },
   {
     step: '02',
-    icon: 'how_to_reg',
+    icon: 'link',
     title: 'Obtenha consentimento',
-    text: 'O contato autoriza o canal pelo comando configurado ou por uma decisão administrativa confirmada.',
-    to: '/contacts',
-    action: 'Ver contatos',
+    text: 'Compartilhe uma página pública de convite. Nela, a pessoa entende os canais, aceita os termos e inicia a autorização.',
+    to: '/invites',
+    action: 'Ver convites',
   },
   {
     step: '03',
@@ -37,6 +37,29 @@ const gettingStarted = [
     text: 'Os disparos entram em fila. Cada destinatário recebe seu próprio status de sucesso, falha ou ignorado.',
     to: '/notifications',
     action: 'Abrir notificações',
+  },
+]
+
+const helpJourney = [
+  {
+    icon: 'person',
+    label: 'Contato',
+    tooltip: 'A pessoa chega pela página pública do convite, entende os canais e escolhe como deseja começar.',
+  },
+  {
+    icon: 'verified_user',
+    label: 'Permissão',
+    tooltip: 'O comando configurado registra o consentimento somente para uma identidade real do provedor.',
+  },
+  {
+    icon: 'queue',
+    label: 'Fila',
+    tooltip: 'Depois de autorizar, a pessoa pode revisar dados e permissões em /meu-perfil; os envios válidos entram na fila.',
+  },
+  {
+    icon: 'mark_email_read',
+    label: 'Entrega',
+    tooltip: 'A fila valida o canal e registra o resultado individual de cada entrega.',
   },
 ]
 
@@ -99,24 +122,28 @@ const operationalSignals = [
     <q-card flat class="glass-card help-hero">
       <div class="help-hero__copy">
         <q-badge outline color="primary" label="Visão rápida" />
-        <h2>Da autorização ao log de entrega</h2>
-        <p>
-          O Notify Flow centraliza canais diferentes, respeita a permissão de cada contato
-          e processa campanhas sem interromper toda a fila quando uma entrega falha.
-        </p>
+        <div class="help-hero__title-row">
+          <h2>Do convite ao log de entrega</h2>
+          <ContextHelp
+            title="Como o Notify Flow organiza os envios"
+            tooltip="Entenda o fluxo completo"
+            text="O Notify Flow centraliza canais diferentes, respeita a permissão de cada contato e processa campanhas sem interromper toda a fila quando uma entrega falha."
+          />
+        </div>
         <div class="help-hero__actions">
           <q-btn unelevated color="primary" no-caps icon="rocket_launch" label="Começar pela configuração" to="/" />
           <q-btn outline color="primary" no-caps icon="manage_search" label="Ver histórico" to="/notifications" />
         </div>
       </div>
-      <div class="help-hero__visual" aria-label="Fluxo resumido: contato, consentimento, fila e entrega">
-        <span><q-icon name="person" /><small>Contato</small></span>
-        <q-icon name="arrow_forward" class="help-hero__arrow" />
-        <span><q-icon name="verified_user" /><small>Permissão</small></span>
-        <q-icon name="arrow_forward" class="help-hero__arrow" />
-        <span><q-icon name="queue" /><small>Fila</small></span>
-        <q-icon name="arrow_forward" class="help-hero__arrow" />
-        <span><q-icon name="mark_email_read" /><small>Entrega</small></span>
+      <div class="help-hero__visual" aria-label="Fluxo resumido: contato, permissão, fila e entrega">
+        <template v-for="(item, index) in helpJourney" :key="item.label">
+          <span tabindex="0">
+            <q-icon :name="item.icon" />
+            <small>{{ item.label }}</small>
+            <q-tooltip>{{ item.tooltip }}</q-tooltip>
+          </span>
+          <q-icon v-if="index < helpJourney.length - 1" name="arrow_forward" class="help-hero__arrow" />
+        </template>
       </div>
     </q-card>
 
@@ -267,11 +294,11 @@ const operationalSignals = [
   line-height: 1.02;
 }
 
-.help-hero p {
+.help-hero__title-row {
+  display: flex;
   max-width: 680px;
-  margin: 0;
-  color: var(--muted);
-  line-height: 1.65;
+  align-items: center;
+  gap: 7px;
 }
 
 .help-hero__actions {
