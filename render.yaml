@@ -30,7 +30,6 @@ services:
     dockerContext: ./api
     dockerfilePath: ./api/Dockerfile
     autoDeployTrigger: commit
-    maxShutdownDelaySeconds: 120
     disk:
       name: whatsapp-web-session
       mountPath: /app/.wwebjs_auth

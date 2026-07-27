@@ -159,6 +159,12 @@ O arquivo suportado pelo Render é **[`render.yaml`](render.yaml)** — não exi
 
 Antes do primeiro deploy, informe a URL pública do frontend em `PUBLIC_APP_URL` e `CORS_ORIGINS`, as credenciais administrativas e a URI do Atlas. No Atlas, autorize a saída do Render e exija TLS. Integrações externas podem ser configuradas depois pela UI.
 
+Os três recursos do Blueprint usam `plan: starter`: é o menor tipo de instância
+pago para o frontend, a API privada e o Render Key Value. Assim, nenhum deles
+usa a modalidade gratuita que hiberna. A API mantém um disco persistente de
+1 GB para a sessão opcional do WhatsApp Web e, por restrição do Render, não
+define `maxShutdownDelaySeconds` enquanto esse disco estiver anexado.
+
 O frontend usa um template de configuração do Nginx em runtime. No Compose,
 `API_UPSTREAM=api:3000`; no Render, o Blueprint injeta automaticamente o
 `hostport` privado real da API. Assim, o proxy não depende de um hostname local

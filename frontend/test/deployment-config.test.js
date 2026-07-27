@@ -23,4 +23,17 @@ describe('configuração de deploy do frontend', () => {
     expect(render).toContain('key: API_UPSTREAM')
     expect(render).toContain('property: hostport')
   })
+
+  it('usa somente os menores planos pagos e nao combina shutdown customizado com disco', () => {
+    const render = rootFile('render.yaml')
+    const plans = [...render.matchAll(/^\s+plan:\s+(\S+)\s*$/gm)].map((match) => match[1])
+    const apiService = render.match(
+      /  - type: pserv\n    name: api\n([\s\S]*?)(?=\n  - type:|\s*$)/,
+    )?.[1] || ''
+
+    expect(plans).toEqual(['starter', 'starter', 'starter'])
+    expect(render).not.toMatch(/^\s+plan:\s+free\s*$/m)
+    expect(apiService).toContain('disk:')
+    expect(apiService).not.toContain('maxShutdownDelaySeconds')
+  })
 })
