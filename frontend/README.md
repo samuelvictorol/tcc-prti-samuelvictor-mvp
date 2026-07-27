@@ -160,6 +160,11 @@ o template do Nginx ao iniciar: o Compose usa `API_UPSTREAM=api:3000`, enquanto 
 Blueprint injeta o `hostport` privado real da API com `fromService`. Os dois
 serviços precisam permanecer na mesma região/rede privada.
 
+O proxy usa os nameservers fornecidos em `/etc/resolv.conf` e resolve
+`API_UPSTREAM` dinamicamente. Dessa forma, uma propagação tardia do DNS privado
+gera respostas temporárias `502`, mas não derruba o processo Nginx; a conexão é
+retomada sem reiniciar o frontend assim que a API passa a resolver.
+
 O health check recomendado no Blueprint é `/api/health`, pois atravessa o proxy e comprova frontend, API, MongoDB e Redis. `PUBLIC_APP_URL` e `CORS_ORIGINS` são variáveis da API e devem conter a URL HTTPS pública deste frontend.
 
 WebSockets funcionam pelo mesmo domínio. Conexões podem cair em deploy/manutenção; o client reconecta e refaz o fetch de estado.

@@ -17,8 +17,12 @@ describe('configuração de deploy do frontend', () => {
     const render = rootFile('render.yaml')
 
     expect(dockerfile).toContain('/etc/nginx/templates/default.conf.template')
+    expect(dockerfile).toContain('NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1')
     expect(nginx).toContain('listen ${PORT};')
-    expect(nginx).toContain('proxy_pass http://${API_UPSTREAM};')
+    expect(nginx).toContain('resolver ${NGINX_LOCAL_RESOLVERS} valid=30s ipv6=off;')
+    expect(nginx).toContain('set $api_upstream "${API_UPSTREAM}";')
+    expect(nginx.match(/proxy_pass http:\/\/\$api_upstream;/g)).toHaveLength(2)
+    expect(nginx).not.toContain('proxy_pass http://${API_UPSTREAM};')
     expect(compose).toContain('API_UPSTREAM: api:3000')
     expect(render).toContain('key: API_UPSTREAM')
     expect(render).toContain('property: hostport')

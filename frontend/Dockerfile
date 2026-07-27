@@ -17,7 +17,8 @@ RUN npm run build
 FROM nginx:1.27-alpine AS runtime
 
 ENV PORT=80 \
-    API_UPSTREAM=api:3000
+    API_UPSTREAM=api:3000 \
+    NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
 
 # A imagem oficial processa templates em runtime. Isso mantém o mesmo artefato
 # compatível com o DNS do Docker Compose e com o host privado injetado pelo Render.
