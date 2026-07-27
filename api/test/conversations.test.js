@@ -154,7 +154,7 @@ test('opt-in associa inbox Web existente ao contato sem recriar conversa ou dupl
     return selected({
       _id: '507f1f77bcf86cd799439071',
       channel: 'whatsapp_web',
-      externalIdEncrypted: encrypt('556181748795@c.us'),
+      externalIdEncrypted: encrypt('551131234567@c.us'),
       displayNameEncrypted: update.$set.displayNameEncrypted,
       avatarUrlEncrypted: update.$set.avatarUrlEncrypted,
       contact: update.$set.contact,
@@ -172,13 +172,13 @@ test('opt-in associa inbox Web existente ao contato sem recriar conversa ou dupl
 
   const result = await conversationsManager.attachContact(
     'whatsapp_web',
-    '556181748795@c.us',
+    '551131234567@c.us',
     '507f1f77bcf86cd799439072',
     { displayName: 'Samuel', avatarUrl: 'https://cdn.example/samuel.jpg' }
   );
 
   assert.equal(conversationFilter.channel, 'whatsapp_web');
-  assert.equal(conversationFilter.externalIdHash, searchHash('556181748795@c.us'));
+  assert.equal(conversationFilter.externalIdHash, searchHash('551131234567@c.us'));
   assert.equal(conversationUpdate.$set.contact, '507f1f77bcf86cd799439072');
   assert.equal(conversationOptions.upsert, undefined);
   assert.equal(messageMigration.filter.conversation, '507f1f77bcf86cd799439071');
@@ -455,7 +455,7 @@ test('limpar historico de inbox pendente preserva conversa sem criar contato', a
     return selected({
       _id: id,
       channel: 'whatsapp_web',
-      externalIdEncrypted: encrypt('556181748795@c.us'),
+      externalIdEncrypted: encrypt('551131234567@c.us'),
       activityVersion: 6,
       lastHiddenVersion: 6
     });
@@ -605,14 +605,14 @@ test('Cloud agrega identidade ao contato Web unico pelo telefone sem sobrescreve
   });
 
   const contactId = '507f1f77bcf86cd799439011';
-  const webAddress = '5561981748795@c.us';
+  const webAddress = '5511931234567@c.us';
   const existing = {
     _id: contactId,
     displayNameEncrypted: encrypt('Nome definido manualmente'),
     displayNameHash: searchHash('nome definido manualmente'),
     displayNameSource: 'manual',
-    phoneEncrypted: encrypt('5561981748795'),
-    phoneHash: searchHash('5561981748795'),
+    phoneEncrypted: encrypt('5511931234567'),
+    phoneHash: searchHash('5511931234567'),
     channelAvatars: [{ channel: 'whatsapp_web', urlEncrypted: encrypt('https://web.example/avatar.jpg'), updatedAt: new Date() }],
     channels: [{
       _id: '507f1f77bcf86cd799439012',
@@ -647,8 +647,8 @@ test('Cloud agrega identidade ao contato Web unico pelo telefone sem sobrescreve
 
   const result = await contactsManager.upsertFromChannel({
     channel: 'whatsapp_cloud',
-    address: '556181748795',
-    phone: '+55 (61) 8174-8795',
+    address: '551131234567',
+    phone: '+55 (11) 3123-4567',
     displayName: 'Nome retornado pela Meta',
     avatarUrl: 'https://cloud.example/avatar.jpg',
     source: 'whatsapp_cloud_webhook',
@@ -662,18 +662,18 @@ test('Cloud agrega identidade ao contato Web unico pelo telefone sem sobrescreve
   assert.equal(existing.channels.length, 2);
   assert.equal(decrypt(existing.channels[0].addressEncrypted), webAddress);
   assert.deepEqual(result.channels.map((identity) => identity.channel), ['whatsapp_web', 'whatsapp_cloud']);
-  assert.equal(result.channels[1].address, '556181748795');
+  assert.equal(result.channels[1].address, '551131234567');
   assert.equal(result.channels[1].consentStatus, 'granted');
   assert.equal(result.avatarUrl, 'https://web.example/avatar.jpg');
   assert.equal(result.avatarSource, 'whatsapp_web');
   assert.deepEqual(existing.channelAvatars.map((avatar) => avatar.channel), ['whatsapp_web', 'whatsapp_cloud']);
-  for (const alias of ['556181748795', '+556181748795', '5561981748795', '+5561981748795']) {
+  for (const alias of ['551131234567', '+551131234567', '5511931234567', '+5511931234567']) {
     assert.ok(phoneFilter.phoneHash.$in.includes(searchHash(alias)), 'hash ausente para alias BR ' + alias);
   }
   assert.equal(audits.length, 1);
   assert.equal(audits[0].channel, 'whatsapp_cloud');
   assert.equal(audits[0].status, 'granted');
-  assert.equal(contactsManager.mergePhoneIdentity('telegram', '+55 61 98174-8795'), null);
+  assert.equal(contactsManager.mergePhoneIdentity('telegram', '+55 11 93123-4567'), null);
   assert.equal(contactsManager.mergePhoneIdentity('whatsapp_cloud', '123'), null);
 });
 

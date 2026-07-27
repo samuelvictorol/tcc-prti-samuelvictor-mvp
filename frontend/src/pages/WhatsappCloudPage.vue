@@ -154,6 +154,199 @@ export function dispatchDeliveryCount(dispatch = {}, status) {
   const value = dispatch?.[`${status}Count`] ?? dispatch?.summary?.[status]
   return Math.max(0, Number(value) || 0)
 }
+
+const WEBHOOK_FIELD_PRESENTATION = Object.freeze({
+  account_alerts: Object.freeze({ label: 'Alertas da conta', icon: 'notification_important', color: 'warning' }),
+  account_review_update: Object.freeze({ label: 'Revisão da conta', icon: 'fact_check', color: 'info' }),
+  account_settings_update: Object.freeze({ label: 'Configurações da conta', icon: 'manage_accounts', color: 'info' }),
+  account_update: Object.freeze({ label: 'Atualização da conta', icon: 'business', color: 'info' }),
+  automatic_events: Object.freeze({ label: 'Eventos automáticos', icon: 'bolt', color: 'deep-purple' }),
+  business_capability_update: Object.freeze({ label: 'Capacidades da empresa', icon: 'domain_verification', color: 'primary' }),
+  business_status_update: Object.freeze({ label: 'Status da empresa', icon: 'storefront', color: 'primary' }),
+  business_username_updates: Object.freeze({ label: 'Nome de usuário comercial', icon: 'alternate_email', color: 'primary' }),
+  calls: Object.freeze({ label: 'Chamadas', icon: 'call', color: 'teal' }),
+  flows: Object.freeze({ label: 'Flows', icon: 'account_tree', color: 'deep-purple' }),
+  group_lifecycle_update: Object.freeze({ label: 'Ciclo de vida do grupo', icon: 'groups', color: 'indigo' }),
+  group_participants_update: Object.freeze({ label: 'Participantes do grupo', icon: 'group_add', color: 'indigo' }),
+  group_settings_update: Object.freeze({ label: 'Configurações do grupo', icon: 'group_work', color: 'indigo' }),
+  group_status_update: Object.freeze({ label: 'Status do grupo', icon: 'groups_2', color: 'indigo' }),
+  history: Object.freeze({ label: 'Histórico', icon: 'history', color: 'blue-grey' }),
+  messages: Object.freeze({ label: 'Mensagens e entregas', icon: 'forum', color: 'positive' }),
+  message_template_quality_update: Object.freeze({ label: 'Qualidade do template', icon: 'verified', color: 'orange' }),
+  message_template_status_update: Object.freeze({ label: 'Status do template', icon: 'approval', color: 'orange' }),
+  phone_number_name_update: Object.freeze({ label: 'Nome do número', icon: 'badge', color: 'teal' }),
+  phone_number_quality_update: Object.freeze({ label: 'Qualidade do número', icon: 'network_check', color: 'teal' }),
+  security: Object.freeze({ label: 'Segurança', icon: 'security', color: 'negative' }),
+  template_category_update: Object.freeze({ label: 'Categoria do template', icon: 'category', color: 'orange' }),
+})
+
+const WEBHOOK_STATUS_PRESENTATION = Object.freeze({
+  received: Object.freeze({ label: 'Recebido', color: 'info', icon: 'move_to_inbox' }),
+  processing: Object.freeze({ label: 'Processando', color: 'warning', icon: 'sync' }),
+  processed: Object.freeze({ label: 'Processado', color: 'positive', icon: 'task_alt' }),
+  failed: Object.freeze({ label: 'Falhou', color: 'negative', icon: 'error' }),
+})
+
+const WEBHOOK_EVENT_TYPE_LABELS = Object.freeze({
+  message: 'Mensagem',
+  status: 'Status de entrega',
+  message_and_status: 'Mensagens e status',
+  error: 'Erro informado pela Meta',
+  unknown: 'Tipo não identificado',
+})
+
+export function humanizeWebhookKey(value) {
+  const text = String(value || '').trim()
+  if (!text) return 'Evento do webhook'
+  return text
+    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+    .replaceAll(/[._:-]+/g, ' ')
+    .replaceAll(/\s+/g, ' ')
+    .replace(/^./, (letter) => letter.toLocaleUpperCase('pt-BR'))
+}
+
+export function webhookEventPresentation(event = {}) {
+  const field = String(event.field || 'unknown').toLowerCase()
+  const configured = WEBHOOK_FIELD_PRESENTATION[field] || {
+    label: humanizeWebhookKey(field),
+    icon: 'webhook',
+    color: 'blue-grey',
+  }
+  const processingStatus = String(event.processingStatus || 'received').toLowerCase()
+  const status = WEBHOOK_STATUS_PRESENTATION[processingStatus] || {
+    label: humanizeWebhookKey(processingStatus),
+    color: 'grey-7',
+    icon: 'help',
+  }
+  return {
+    field,
+    fieldLabel: configured.label,
+    fieldIcon: configured.icon,
+    fieldColor: configured.color,
+    eventTypeLabel: WEBHOOK_EVENT_TYPE_LABELS[event.eventType]
+      || humanizeWebhookKey(event.eventType || event.eventTypes?.[0] || field),
+    processingStatus,
+    statusLabel: status.label,
+    statusColor: status.color,
+    statusIcon: status.icon,
+  }
+}
+
+export function webhookEventFieldOptionsFrom(events = []) {
+  return [...new Set([
+    ...Object.keys(WEBHOOK_FIELD_PRESENTATION),
+    ...events.map((event) => event?.field),
+  ].filter(Boolean).map(String))]
+    .map((value) => ({
+      value,
+      label: webhookEventPresentation({ field: value }).fieldLabel,
+      icon: webhookEventPresentation({ field: value }).fieldIcon,
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label, 'pt-BR'))
+}
+
+export function webhookEventSummary(event = {}) {
+  const summary = event.summary || {}
+  const description = summary.description || summary.title
+  if (description) return String(description)
+  const counts = [
+    Number(summary.messageCount) > 0 ? `${summary.messageCount} mensagem(ns)` : null,
+    Number(summary.statusCount) > 0 ? `${summary.statusCount} status` : null,
+    Number(summary.contactCount) > 0 ? `${summary.contactCount} contato(s)` : null,
+  ].filter(Boolean)
+  if (counts.length) return counts.join(' · ')
+  return `Evento ${webhookEventPresentation(event).fieldLabel.toLocaleLowerCase('pt-BR')} recebido da Meta`
+}
+
+export function normalizeWebhookEventPage(payload = {}) {
+  const value = payload?.data ?? payload ?? {}
+  const items = Array.isArray(value.items)
+    ? value.items
+    : Array.isArray(value.events) ? value.events : []
+  const page = Math.max(1, Number(value.page) || 1)
+  const limit = Math.max(1, Number(value.limit) || 20)
+  const total = Math.max(0, Number(value.total ?? items.length) || 0)
+  return {
+    items: items.filter(Boolean),
+    total,
+    page,
+    limit,
+    pages: Math.max(0, Number(value.pages) || Math.ceil(total / limit)),
+  }
+}
+
+export function webhookEventIdentity(event = {}) {
+  const persistedId = recordId(event)
+  if (persistedId) return `id:${persistedId}`
+  return [
+    event.businessAccountId,
+    event.field,
+    event.eventType,
+    event.receivedAt || event.occurredAt || event.createdAt || event.at,
+  ].map((value) => String(value || '')).join('|')
+}
+
+export function webhookEventVersionTime(event = {}) {
+  return Math.max(0, ...[
+    event.updatedAt,
+    event.processedAt,
+    event.lastReceivedAt,
+    event.receivedAt,
+    event.createdAt,
+  ].map((value) => Date.parse(value) || 0))
+}
+
+export function mergeWebhookEventVersions(current = {}, incoming = {}) {
+  const statusRank = { received: 1, processing: 2, processed: 3, failed: 3 }
+  const currentRank = statusRank[String(current.processingStatus || '').toLowerCase()] || 0
+  const incomingRank = statusRank[String(incoming.processingStatus || '').toLowerCase()] || 0
+  const incomingWins = incomingRank > currentRank
+    || (incomingRank === currentRank && webhookEventVersionTime(incoming) >= webhookEventVersionTime(current))
+  const older = incomingWins ? current : incoming
+  const newer = incomingWins ? incoming : current
+  return {
+    ...older,
+    ...newer,
+    ...(older.summary || newer.summary ? { summary: { ...(older.summary || {}), ...(newer.summary || {}) } } : {}),
+  }
+}
+
+export function mergeWebhookEvents(current = [], incoming = [], limit = 50) {
+  const merged = new Map()
+  for (const event of [...current, ...incoming]) {
+    if (!event) continue
+    const identity = webhookEventIdentity(event)
+    const existing = merged.get(identity)
+    merged.set(identity, existing ? mergeWebhookEventVersions(existing, event) : event)
+  }
+  return [...merged.values()]
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.receivedAt || left.occurredAt || left.createdAt || left.at || 0) || 0
+      const rightTime = Date.parse(right.receivedAt || right.occurredAt || right.createdAt || right.at || 0) || 0
+      return rightTime - leftTime
+    })
+    .slice(0, Math.max(1, Number(limit) || 50))
+}
+
+export function mergeWebhookEventPage(current = [], incoming = []) {
+  const currentByIdentity = new Map(current.map((event) => [webhookEventIdentity(event), event]))
+  return incoming.map((event) => {
+    const visible = currentByIdentity.get(webhookEventIdentity(event))
+    return visible ? mergeWebhookEventVersions(visible, event) : event
+  })
+}
+
+export function sanitizeWebhookPayload(value, key = '') {
+  if (/authorization|access.?token|app.?secret|verify.?token|signature|password/i.test(key)) return '[PROTEGIDO]'
+  if (Array.isArray(value)) return value.map((item) => sanitizeWebhookPayload(item))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [
+      childKey,
+      sanitizeWebhookPayload(childValue, childKey),
+    ]))
+  }
+  return value
+}
 </script>
 
 <script setup>
@@ -163,7 +356,7 @@ import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ContactDialog from '../components/ContactDialog.vue'
 import ContextHelp from '../components/ContextHelp.vue'
-import { asList, errorMessage, fetchAll, http, unwrap } from '../services/http.js'
+import { errorMessage, fetchAll, http, unwrap } from '../services/http.js'
 import { connectSocket, getSocket } from '../services/socket.js'
 import {
   identityIdentifiers,
@@ -177,10 +370,16 @@ const sending = ref(false)
 const contactDialog = ref(false)
 const issueDialog = ref(false)
 const eligibilityDialog = ref(false)
+const webhookEventDialog = ref(false)
 const eligibilitySearch = ref('')
 const issuesLoading = ref(false)
+const webhookEventsLoading = ref(false)
+const webhookEventDetailsLoading = ref(false)
+const webhookEventsError = ref('')
+const webhookEventDetailsError = ref('')
 const editingContact = ref(null)
 const selectedIssue = ref(null)
+const selectedWebhookEvent = ref(null)
 const contacts = ref([])
 const cloudContactRecords = ref([])
 const groups = ref([])
@@ -189,11 +388,16 @@ const events = ref([])
 const deliveryIssues = ref([])
 const issueNotificationId = ref(null)
 const issuePagination = ref({ page: 1, rowsPerPage: 10, rowsNumber: 0 })
+const webhookEventPagination = ref({ page: 1, rowsPerPage: 20, rowsNumber: 0 })
 const issuesSection = ref(null)
 const cloudStatus = ref({})
 const lastDispatch = ref(null)
 let webhookRefreshTimer = null
+let webhookContactRefreshTimer = null
 let issueRequestSequence = 0
+let webhookContactRequestSequence = 0
+let webhookEventRequestSequence = 0
+let webhookEventDetailsRequestSequence = 0
 
 const form = reactive({
   recipientMode: 'contact',
@@ -203,12 +407,42 @@ const form = reactive({
   variableValues: {},
 })
 
+const webhookEventFilters = reactive({
+  field: null,
+  eventType: null,
+  processingStatus: null,
+})
+
 const cloudContacts = computed(() => cloudContactRecords.value)
 const eligibleContacts = computed(() => cloudContacts.value.filter(isCloudContactEligible))
 const webhookContacts = computed(() => cloudContacts.value.filter((contact) => {
   const identity = cloudIdentityOf(contact)
   return isAutomaticIdentity(identity)
 }))
+const webhookEventFieldOptions = computed(() => webhookEventFieldOptionsFrom(events.value))
+const webhookEventStatusOptions = Object.entries(WEBHOOK_STATUS_PRESENTATION).map(([value, config]) => ({
+  value,
+  label: config.label,
+  icon: config.icon,
+}))
+const webhookEventTypeOptions = computed(() => [...new Set([
+  'message',
+  'status',
+  'message_and_status',
+  'error',
+  ...events.value.map((event) => event.eventType),
+]
+  .filter(Boolean)
+  .map(String))]
+  .sort((left, right) => left.localeCompare(right, 'pt-BR'))
+  .map((value) => ({ value, label: humanizeWebhookKey(value) })))
+const webhookEventFiltersActive = computed(() => Object.values(webhookEventFilters).some(Boolean))
+const selectedWebhookPresentation = computed(() => webhookEventPresentation(selectedWebhookEvent.value || {}))
+const selectedWebhookPayload = computed(() => {
+  const payload = selectedWebhookEvent.value?.payload
+  if (payload === undefined || payload === null) return ''
+  return JSON.stringify(sanitizeWebhookPayload(payload), null, 2)
+})
 
 const contactOptions = computed(() => eligibleContacts.value.map((contact) => ({
   label: `${contact.displayName || contact.name || 'Sem nome'} · ${cloudIdentityOf(contact)?.address || contact.phone || 'sem telefone'}`,
@@ -264,11 +498,12 @@ const webhookStatusDescription = computed(() => {
 })
 
 const eventColumns = [
-  { name: 'createdAt', label: 'Quando', field: 'createdAt', align: 'left' },
-  { name: 'event', label: 'Ação', field: 'action', align: 'left' },
-  { name: 'contact', label: 'Contato', field: 'contact', align: 'left' },
-  { name: 'status', label: 'Status', field: 'status', align: 'left' },
-  { name: 'message', label: 'Resumo', field: 'message', align: 'left' },
+  { name: 'receivedAt', label: 'Recebido em', field: 'receivedAt', align: 'left' },
+  { name: 'field', label: 'Campo da Meta', field: 'field', align: 'left' },
+  { name: 'eventType', label: 'Tipo', field: 'eventType', align: 'left' },
+  { name: 'summary', label: 'Resumo', field: 'summary', align: 'left' },
+  { name: 'processingStatus', label: 'Processamento', field: 'processingStatus', align: 'left' },
+  { name: 'actions', label: '', field: 'actions', align: 'right' },
 ]
 
 const webhookContactColumns = [
@@ -295,7 +530,9 @@ const ineligibleColumns = [
 
 function formatDate(value) {
   if (!value) return '—'
-  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'medium' }).format(date)
 }
 
 function cloudIdentifiers(contact) {
@@ -308,23 +545,6 @@ function cloudRegistration(contact) {
 
 function statusColor(value = '') {
   return { delivered: 'positive', read: 'positive', sent: 'info', received: 'info', failed: 'negative', error: 'negative', skipped: 'warning' }[String(value).toLowerCase()] || 'grey-7'
-}
-
-function contextSummary(event) {
-  const context = event.context
-  if (!context) return event.message || event.summary || 'Evento processado'
-  if (typeof context === 'string') return context
-  const error = Array.isArray(context.errors) ? context.errors[0] : null
-  if (error) {
-    return [event.message, error.code, error.details || error.message || error.title, context.retryScheduled ? 'retry agendado' : null]
-      .filter(Boolean).join(' · ')
-  }
-  if (event.message || event.summary) return event.message || event.summary
-  return Object.entries(context).slice(0, 4).map(([key, value]) => `${key}: ${String(value)}`).join(' · ')
-}
-
-function eventStatus(event = {}) {
-  return event.context?.status || event.status || event.level || 'received'
 }
 
 function parameterIcon(type) {
@@ -430,24 +650,122 @@ function resetTemplateValues() {
 
 watch(() => form.templateId, resetTemplateValues)
 
+async function loadWebhookEvents({
+  pagination = webhookEventPagination.value,
+  preserveRealtime = true,
+  showError = true,
+} = {}) {
+  const requestId = ++webhookEventRequestSequence
+  const page = Math.max(1, Number(pagination?.page) || 1)
+  const limit = Math.max(1, Number(pagination?.rowsPerPage || pagination?.limit) || 20)
+  webhookEventsLoading.value = true
+  webhookEventsError.value = ''
+  try {
+    const response = await http.get('/whatsapp-cloud/webhook-events', {
+      params: {
+        page,
+        limit,
+        ...(webhookEventFilters.field ? { field: webhookEventFilters.field } : {}),
+        ...(webhookEventFilters.eventType ? { eventType: webhookEventFilters.eventType } : {}),
+        ...(webhookEventFilters.processingStatus ? { processingStatus: webhookEventFilters.processingStatus } : {}),
+      },
+    })
+    if (requestId !== webhookEventRequestSequence) return false
+    const result = normalizeWebhookEventPage(unwrap(response))
+    const canMergeRealtime = preserveRealtime && result.page === 1 && !webhookEventFiltersActive.value
+    events.value = canMergeRealtime
+      ? mergeWebhookEvents(events.value, result.items, result.limit)
+      : mergeWebhookEventPage(events.value, result.items)
+    webhookEventPagination.value = {
+      page: result.page,
+      rowsPerPage: result.limit,
+      rowsNumber: result.total,
+    }
+    return true
+  } catch (error) {
+    if (requestId !== webhookEventRequestSequence) return false
+    webhookEventsError.value = errorMessage(error, 'Não foi possível carregar o histórico do webhook.')
+    if (showError) $q.notify({ type: 'warning', message: webhookEventsError.value })
+    return false
+  } finally {
+    if (requestId === webhookEventRequestSequence) webhookEventsLoading.value = false
+  }
+}
+
+function onWebhookEventsRequest({ pagination }) {
+  loadWebhookEvents({ pagination, preserveRealtime: pagination?.page === 1 })
+}
+
+function applyWebhookEventFilters() {
+  loadWebhookEvents({
+    pagination: { ...webhookEventPagination.value, page: 1 },
+    preserveRealtime: !webhookEventFiltersActive.value,
+  })
+}
+
+function clearWebhookEventFilters() {
+  webhookEventFilters.field = null
+  webhookEventFilters.eventType = null
+  webhookEventFilters.processingStatus = null
+  applyWebhookEventFilters()
+}
+
+async function openWebhookEvent(event) {
+  if (!recordId(event)) return
+  const requestId = ++webhookEventDetailsRequestSequence
+  selectedWebhookEvent.value = event
+  webhookEventDetailsError.value = ''
+  webhookEventDetailsLoading.value = true
+  webhookEventDialog.value = true
+  try {
+    const response = await http.get(`/whatsapp-cloud/webhook-events/${encodeURIComponent(recordId(event))}`)
+    if (requestId !== webhookEventDetailsRequestSequence) return
+    selectedWebhookEvent.value = { ...event, ...(unwrap(response) || {}) }
+  } catch (error) {
+    if (requestId !== webhookEventDetailsRequestSequence) return
+    webhookEventDetailsError.value = errorMessage(error, 'Não foi possível carregar os detalhes deste evento.')
+  } finally {
+    if (requestId === webhookEventDetailsRequestSequence) webhookEventDetailsLoading.value = false
+  }
+}
+
+async function loadWebhookContacts({ showError = true, throwOnError = false } = {}) {
+  const requestId = ++webhookContactRequestSequence
+  try {
+    const [contactItems, cloudContactItems] = await Promise.all([
+      fetchAll('/contacts', { preferredKey: 'contacts', maxItems: 10000, maxPages: 100 }),
+      fetchAll('/contacts', { params: { channel: 'whatsapp_cloud' }, preferredKey: 'contacts', maxItems: 10000, maxPages: 100 }),
+    ])
+    if (requestId !== webhookContactRequestSequence) return false
+    contacts.value = contactItems
+    cloudContactRecords.value = cloudContactItems
+    return true
+  } catch (error) {
+    if (requestId !== webhookContactRequestSequence) return false
+    if (showError) {
+      $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível atualizar os contatos do WhatsApp Cloud.') })
+    }
+    if (throwOnError) throw error
+    return false
+  }
+}
+
 async function loadData() {
   loading.value = true
   try {
-    const [contactItems, cloudContactItems, groupItems, templateItems, logResponse, statusResponse] = await Promise.all([
-      fetchAll('/contacts', { preferredKey: 'contacts', maxItems: 10000, maxPages: 100 }),
-      fetchAll('/contacts', { params: { channel: 'whatsapp_cloud' }, preferredKey: 'contacts', maxItems: 10000, maxPages: 100 }),
+    const [, groupItems, templateItems, statusResponse] = await Promise.all([
+      loadWebhookContacts({ showError: false, throwOnError: true }),
       fetchAll('/contact-groups', { preferredKey: 'groups' }),
       fetchAll('/templates', { params: { channel: 'whatsapp_cloud' }, preferredKey: 'templates' }),
-      http.get('/logs', { params: { channel: 'whatsapp_cloud', limit: 50 } }),
       http.get('/whatsapp-cloud/status'),
     ])
-    contacts.value = contactItems
-    cloudContactRecords.value = cloudContactItems
     groups.value = groupItems
     templates.value = templateItems
-    events.value = asList(unwrap(logResponse), 'logs')
     cloudStatus.value = unwrap(statusResponse) || {}
-    await loadDeliveryIssues({ showError: false })
+    await Promise.all([
+      loadDeliveryIssues({ showError: false }),
+      loadWebhookEvents({ showError: false }),
+    ])
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível carregar o canal oficial.') })
   } finally {
@@ -544,33 +862,50 @@ function removeContact(contact) {
   })
 }
 
-function onWebhookEvent(event) {
-  events.value = [{ id: `live-${Date.now()}`, createdAt: event.at, ...event }, ...events.value].slice(0, 50)
+function onPersistedWebhookEvent(event) {
+  if (recordId(event) && event?.field) {
+    const alreadyVisible = events.value.some((item) => webhookEventIdentity(item) === webhookEventIdentity(event))
+    if (alreadyVisible || (webhookEventPagination.value.page === 1 && !webhookEventFiltersActive.value)) {
+      events.value = mergeWebhookEvents(events.value, [event], webhookEventPagination.value.rowsPerPage)
+    }
+    if (!alreadyVisible && webhookEventPagination.value.page === 1 && !webhookEventFiltersActive.value) {
+      webhookEventPagination.value = {
+        ...webhookEventPagination.value,
+        rowsNumber: webhookEventPagination.value.rowsNumber + 1,
+      }
+    }
+  }
   clearTimeout(webhookRefreshTimer)
-  webhookRefreshTimer = setTimeout(loadData, 400)
+  webhookRefreshTimer = setTimeout(() => {
+    loadWebhookEvents({ showError: false })
+  }, 650)
 }
 
-function onQueueLog(log) {
-  if (log?.channel !== 'whatsapp_cloud' || !String(log.action || '').startsWith('notification.')) return
-  events.value = [log, ...events.value.filter((item) => String(recordId(item)) !== String(recordId(log)))].slice(0, 50)
-  clearTimeout(webhookRefreshTimer)
-  webhookRefreshTimer = setTimeout(loadData, 400)
+function onWebhookSummary(summary = {}) {
+  const changedContacts = Math.max(0, Number(summary.createdContacts) || 0)
+    + Math.max(0, Number(summary.updatedContacts) || 0)
+  if (!changedContacts) return
+  clearTimeout(webhookContactRefreshTimer)
+  webhookContactRefreshTimer = setTimeout(() => {
+    loadWebhookContacts({ showError: false })
+  }, 650)
 }
 
 onMounted(() => {
   loadData()
   const socket = connectSocket()
-  socket.on('whatsapp_cloud:webhook', onWebhookEvent)
-  socket.on('whatsapp-cloud:webhook', onWebhookEvent)
-  socket.on('log:created', onQueueLog)
+  socket.on('whatsapp_cloud:webhook_event', onPersistedWebhookEvent)
+  socket.on('whatsapp_cloud:webhook', onWebhookSummary)
+  socket.on('whatsapp-cloud:webhook', onWebhookSummary)
 })
 
 onBeforeUnmount(() => {
   clearTimeout(webhookRefreshTimer)
+  clearTimeout(webhookContactRefreshTimer)
   const socket = getSocket()
-  socket.off('whatsapp_cloud:webhook', onWebhookEvent)
-  socket.off('whatsapp-cloud:webhook', onWebhookEvent)
-  socket.off('log:created', onQueueLog)
+  socket.off('whatsapp_cloud:webhook_event', onPersistedWebhookEvent)
+  socket.off('whatsapp_cloud:webhook', onWebhookSummary)
+  socket.off('whatsapp-cloud:webhook', onWebhookSummary)
 })
 </script>
 
@@ -818,23 +1153,142 @@ onBeforeUnmount(() => {
     </q-card>
 
     <q-card flat class="glass-card section-card">
-      <div class="toolbar-row">
+      <div class="toolbar-row webhook-events-heading">
         <div class="row items-center q-gutter-xs">
           <h2 class="section-title">Eventos do webhook</h2>
           <ContextHelp
             title="Eventos seguros do webhook"
             tooltip="Entenda o que aparece nesta tabela"
-            text="Status de entrega e respostas recentes, sem expor o payload secreto."
+            text="Histórico persistente dos campos enviados pela Meta. Abra um item para consultar o payload sanitizado, sem expor segredos da integração."
           />
         </div>
+        <q-badge outline color="primary" :label="`${webhookEventPagination.rowsNumber} evento(s)`" />
       </div>
-      <EmptyState v-if="!loading && !events.length" icon="webhook" title="Nenhum evento recente" description="Validações e retornos da Meta aparecerão aqui." />
-      <q-table v-else flat :rows="events" :columns="eventColumns" row-key="id" :loading="loading" :rows-per-page-options="[10, 25, 50]">
-        <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt || props.row.timestamp) }}</q-td></template>
-        <template #body-cell-event="props"><q-td :props="props"><strong>{{ props.row.action || props.row.event || props.row.type || 'webhook' }}</strong></q-td></template>
-        <template #body-cell-contact="props"><q-td :props="props">{{ props.row.contact?.displayName || props.row.contact?.name || props.row.contactName || contactById(props.row.context?.contactId)?.displayName || props.row.context?.phone || props.row.phone || '—' }}</q-td></template>
-        <template #body-cell-status="props"><q-td :props="props"><q-badge :color="statusColor(eventStatus(props.row))" :label="eventStatus(props.row)" /></q-td></template>
-        <template #body-cell-message="props"><q-td :props="props" class="truncate" style="max-width: 360px">{{ contextSummary(props.row) }}</q-td></template>
+
+      <div class="webhook-event-filters q-mt-md">
+        <q-select
+          v-model="webhookEventFilters.field"
+          outlined
+          dense
+          clearable
+          emit-value
+          map-options
+          :options="webhookEventFieldOptions"
+          label="Campo da Meta"
+          @update:model-value="applyWebhookEventFilters"
+        >
+          <template #prepend><q-icon name="webhook" /></template>
+        </q-select>
+        <q-select
+          v-model="webhookEventFilters.eventType"
+          outlined
+          dense
+          clearable
+          emit-value
+          map-options
+          :options="webhookEventTypeOptions"
+          label="Tipo do evento"
+          @update:model-value="applyWebhookEventFilters"
+        >
+          <template #prepend><q-icon name="category" /></template>
+        </q-select>
+        <q-select
+          v-model="webhookEventFilters.processingStatus"
+          outlined
+          dense
+          clearable
+          emit-value
+          map-options
+          :options="webhookEventStatusOptions"
+          label="Processamento"
+          @update:model-value="applyWebhookEventFilters"
+        >
+          <template #prepend><q-icon name="rule" /></template>
+        </q-select>
+        <q-btn
+          v-if="webhookEventFiltersActive"
+          flat
+          color="primary"
+          no-caps
+          icon="filter_alt_off"
+          label="Limpar"
+          @click="clearWebhookEventFilters"
+        />
+      </div>
+
+      <q-banner v-if="webhookEventsError" rounded class="webhook-events-error q-mt-md">
+        <template #avatar><q-icon name="cloud_off" color="negative" /></template>
+        <strong>O histórico não pôde ser atualizado.</strong>
+        <div>{{ webhookEventsError }}</div>
+        <template #action><q-btn flat color="negative" no-caps icon="refresh" label="Tentar novamente" @click="loadWebhookEvents()" /></template>
+      </q-banner>
+
+      <EmptyState
+        v-if="!webhookEventsLoading && !webhookEventsError && !events.length"
+        icon="webhook"
+        :title="webhookEventFiltersActive ? 'Nenhum evento neste filtro' : 'Nenhum evento recebido ainda'"
+        description="Os testes e eventos enviados pela Meta ficarão salvos aqui."
+      />
+      <q-table
+        v-if="webhookEventsLoading || events.length"
+        flat
+        class="webhook-events-table q-mt-md"
+        :rows="events"
+        :columns="eventColumns"
+        row-key="id"
+        v-model:pagination="webhookEventPagination"
+        :loading="webhookEventsLoading"
+        :rows-per-page-options="[10, 20, 50, 100]"
+        @request="onWebhookEventsRequest"
+        @row-click="(_, row) => openWebhookEvent(row)"
+      >
+        <template #body-cell-receivedAt="props">
+          <q-td :props="props" class="no-wrap">{{ formatDate(props.row.receivedAt || props.row.occurredAt || props.row.createdAt) }}</q-td>
+        </template>
+        <template #body-cell-field="props">
+          <q-td :props="props">
+            <div class="webhook-event-kind">
+              <q-avatar color="teal-1" :text-color="webhookEventPresentation(props.row).fieldColor" :icon="webhookEventPresentation(props.row).fieldIcon" />
+              <div>
+                <strong>{{ webhookEventPresentation(props.row).fieldLabel }}</strong>
+                <code>{{ props.row.field || 'desconhecido' }}</code>
+              </div>
+            </div>
+          </q-td>
+        </template>
+        <template #body-cell-eventType="props">
+          <q-td :props="props">
+            <strong>{{ webhookEventPresentation(props.row).eventTypeLabel }}</strong>
+            <div v-if="props.row.eventTypes?.length > 1" class="event-type-count">+{{ props.row.eventTypes.length - 1 }} tipo(s)</div>
+          </q-td>
+        </template>
+        <template #body-cell-summary="props">
+          <q-td :props="props" class="webhook-event-summary">
+            <strong>{{ props.row.summary?.title || webhookEventSummary(props.row) }}</strong>
+            <span v-if="props.row.summary?.title && props.row.summary?.description">{{ props.row.summary.description }}</span>
+            <div class="webhook-event-counts">
+              <q-badge v-if="props.row.summary?.messageCount" outline color="primary" :label="`${props.row.summary.messageCount} mensagem(ns)`" />
+              <q-badge v-if="props.row.summary?.statusCount" outline color="info" :label="`${props.row.summary.statusCount} status`" />
+              <q-badge v-if="props.row.summary?.contactCount" outline color="teal" :label="`${props.row.summary.contactCount} contato(s)`" />
+              <q-badge v-if="props.row.duplicateCount" outline color="grey-7" :label="`${props.row.duplicateCount} duplicado(s)`" />
+            </div>
+          </q-td>
+        </template>
+        <template #body-cell-processingStatus="props">
+          <q-td :props="props">
+            <q-badge
+              :color="webhookEventPresentation(props.row).statusColor"
+              :icon="webhookEventPresentation(props.row).statusIcon"
+              :label="webhookEventPresentation(props.row).statusLabel"
+            />
+          </q-td>
+        </template>
+        <template #body-cell-actions="props">
+          <q-td :props="props">
+            <q-btn flat dense color="primary" no-caps icon="visibility" label="Detalhes" @click.stop="openWebhookEvent(props.row)" />
+          </q-td>
+        </template>
+        <template #loading><q-inner-loading showing color="primary"><q-spinner-dots size="42px" /></q-inner-loading></template>
       </q-table>
     </q-card>
 
@@ -897,6 +1351,88 @@ onBeforeUnmount(() => {
           </q-table>
         </q-card-section>
         <q-card-actions align="right" class="eligibility-dialog__footer"><q-btn v-close-popup flat no-caps label="Fechar" /></q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="webhookEventDialog" :maximized="$q.screen.lt.sm">
+      <q-card class="webhook-event-dialog">
+        <q-card-section class="webhook-event-dialog__header">
+          <div class="webhook-event-dialog__title">
+            <q-avatar color="teal-1" :text-color="selectedWebhookPresentation.fieldColor" :icon="selectedWebhookPresentation.fieldIcon" />
+            <div>
+              <div class="text-h6 text-weight-bold">{{ selectedWebhookPresentation.fieldLabel }}</div>
+              <div class="text-caption text-muted">Evento persistido recebido da Meta</div>
+            </div>
+          </div>
+          <q-space />
+          <q-badge
+            :color="selectedWebhookPresentation.statusColor"
+            :icon="selectedWebhookPresentation.statusIcon"
+            :label="selectedWebhookPresentation.statusLabel"
+          />
+          <q-btn v-close-popup flat round icon="close" aria-label="Fechar detalhes do evento" />
+        </q-card-section>
+        <q-separator />
+
+        <q-card-section class="webhook-event-dialog__body">
+          <q-inner-loading :showing="webhookEventDetailsLoading" color="primary">
+            <q-spinner-dots size="48px" />
+          </q-inner-loading>
+
+          <q-banner v-if="webhookEventDetailsError" rounded class="webhook-events-error">
+            <template #avatar><q-icon name="cloud_off" color="negative" /></template>
+            <strong>Não foi possível abrir o payload.</strong>
+            <div>{{ webhookEventDetailsError }}</div>
+            <template #action><q-btn v-if="selectedWebhookEvent" flat color="negative" no-caps icon="refresh" label="Tentar novamente" @click="openWebhookEvent(selectedWebhookEvent)" /></template>
+          </q-banner>
+
+          <template v-if="selectedWebhookEvent">
+            <div class="webhook-event-metadata">
+              <div><span>Campo</span><strong>{{ selectedWebhookEvent.field || '—' }}</strong></div>
+              <div><span>Tipo principal</span><strong>{{ selectedWebhookPresentation.eventTypeLabel }}</strong></div>
+              <div><span>Recebido em</span><strong>{{ formatDate(selectedWebhookEvent.receivedAt || selectedWebhookEvent.createdAt) }}</strong></div>
+              <div><span>Ocorrido em</span><strong>{{ formatDate(selectedWebhookEvent.occurredAt) }}</strong></div>
+              <div><span>Conta WhatsApp Business</span><code>{{ selectedWebhookEvent.businessAccountId || '—' }}</code></div>
+              <div><span>ID do evento</span><code>{{ recordId(selectedWebhookEvent) || '—' }}</code></div>
+            </div>
+
+            <section class="webhook-event-dialog__summary">
+              <span>Resumo</span>
+              <strong>{{ selectedWebhookEvent.summary?.title || webhookEventSummary(selectedWebhookEvent) }}</strong>
+              <p v-if="selectedWebhookEvent.summary?.description">{{ selectedWebhookEvent.summary.description }}</p>
+              <div class="webhook-event-type-list">
+                <q-chip
+                  v-for="type in selectedWebhookEvent.eventTypes || []"
+                  :key="type"
+                  dense
+                  color="teal-1"
+                  text-color="primary"
+                  icon="label"
+                  :label="humanizeWebhookKey(type)"
+                />
+              </div>
+            </section>
+
+            <section class="webhook-event-payload">
+              <div class="webhook-event-payload__heading">
+                <div>
+                  <strong>Payload recebido</strong>
+                  <span>JSON formatado e protegido para inspeção.</span>
+                </div>
+                <q-badge outline color="primary" label="SOMENTE LEITURA" />
+              </div>
+              <pre v-if="selectedWebhookPayload">{{ selectedWebhookPayload }}</pre>
+              <div v-else-if="!webhookEventDetailsLoading && !webhookEventDetailsError" class="webhook-event-payload__empty">
+                <q-icon name="data_object" />
+                <span>Este evento não possui payload disponível.</span>
+              </div>
+            </section>
+          </template>
+        </q-card-section>
+        <q-separator />
+        <q-card-actions align="right" class="webhook-event-dialog__footer">
+          <q-btn v-close-popup flat no-caps label="Fechar" />
+        </q-card-actions>
       </q-card>
     </q-dialog>
 
@@ -1148,13 +1684,14 @@ onBeforeUnmount(() => {
 }
 
 .result-counters {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   margin-top: 16px;
 }
 
 .result-counters > div {
-  min-width: 120px;
+  min-width: 0;
   padding: 13px;
   border-radius: 13px;
   background: rgba(39, 183, 159, 0.08);
@@ -1224,6 +1761,195 @@ onBeforeUnmount(() => {
 .cloud-contact-identifiers code span {
   color: #71837f;
   font-family: inherit;
+}
+
+.webhook-events-heading {
+  align-items: center;
+}
+
+.webhook-event-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr)) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.webhook-events-error {
+  border: 1px solid rgba(194, 45, 64, 0.18);
+  background: rgba(255, 238, 240, 0.76);
+  color: #7c2834;
+}
+
+.webhook-events-table :deep(tbody tr) {
+  cursor: pointer;
+}
+
+.webhook-events-table :deep(tbody tr:hover) {
+  background: rgba(39, 183, 159, 0.055);
+}
+
+.webhook-event-kind,
+.webhook-event-dialog__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.webhook-event-kind > div {
+  display: grid;
+  min-width: 170px;
+  gap: 2px;
+}
+
+.webhook-event-kind code,
+.webhook-event-metadata code {
+  overflow-wrap: anywhere;
+  color: #607773;
+  font-size: 0.72rem;
+}
+
+.event-type-count {
+  margin-top: 3px;
+  color: #71837f;
+  font-size: 0.72rem;
+}
+
+.webhook-event-summary {
+  min-width: 260px;
+  max-width: 440px;
+  white-space: normal;
+}
+
+.webhook-event-summary > strong,
+.webhook-event-summary > span {
+  display: block;
+}
+
+.webhook-event-summary > span {
+  margin-top: 3px;
+  color: #657a76;
+  font-size: 0.78rem;
+}
+
+.webhook-event-counts,
+.webhook-event-type-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.webhook-event-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(940px, calc(100vw - 32px));
+  max-width: 940px !important;
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
+  border-radius: 20px;
+}
+
+.webhook-event-dialog__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.webhook-event-dialog__body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.webhook-event-dialog__footer {
+  flex: 0 0 auto;
+}
+
+.webhook-event-metadata {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.webhook-event-metadata > div {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-height: 72px;
+  padding: 12px;
+  border: 1px solid rgba(3, 21, 21, 0.08);
+  border-radius: 13px;
+  background: rgba(247, 253, 251, 0.82);
+}
+
+.webhook-event-metadata span,
+.webhook-event-dialog__summary > span,
+.webhook-event-payload__heading span {
+  color: #6c807c;
+  font-size: 0.76rem;
+}
+
+.webhook-event-dialog__summary {
+  margin-top: 14px;
+  padding: 15px;
+  border: 1px solid rgba(22, 134, 111, 0.16);
+  border-radius: 14px;
+  background: rgba(222, 248, 242, 0.48);
+}
+
+.webhook-event-dialog__summary > span,
+.webhook-event-dialog__summary > strong {
+  display: block;
+}
+
+.webhook-event-dialog__summary p {
+  margin: 5px 0 0;
+  color: #526964;
+}
+
+.webhook-event-payload {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(3, 21, 21, 0.1);
+  border-radius: 15px;
+  background: #071b19;
+}
+
+.webhook-event-payload__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 15px;
+  background: #fff;
+}
+
+.webhook-event-payload__heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.webhook-event-payload pre {
+  max-height: 52dvh;
+  margin: 0;
+  overflow: auto;
+  padding: 18px;
+  color: #cff7ee;
+  font: 0.78rem/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.webhook-event-payload__empty {
+  display: flex;
+  min-height: 150px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  color: #a7cbc4;
 }
 
 .issue-dialog {
@@ -1314,10 +2040,16 @@ onBeforeUnmount(() => {
   .stats-column {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .webhook-event-filters,
+  .webhook-event-metadata {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 650px) {
-  .eligibility-dialog {
+  .eligibility-dialog,
+  .webhook-event-dialog {
     width: 100%;
     max-width: 100% !important;
     max-height: 100dvh;
@@ -1325,16 +2057,20 @@ onBeforeUnmount(() => {
   }
 
   .eligibility-dialog__header,
-  .eligibility-dialog__body {
+  .eligibility-dialog__body,
+  .webhook-event-dialog__header,
+  .webhook-event-dialog__body {
     padding-right: 16px;
     padding-left: 16px;
   }
 
-  .eligibility-dialog__header {
+  .eligibility-dialog__header,
+  .webhook-event-dialog__header {
     flex-wrap: wrap;
   }
 
-  .eligibility-dialog__footer {
+  .eligibility-dialog__footer,
+  .webhook-event-dialog__footer {
     padding-bottom: max(12px, env(safe-area-inset-bottom));
   }
 
@@ -1344,7 +2080,9 @@ onBeforeUnmount(() => {
 
   .recipient-switch,
   .parameter-form-grid,
-  .stats-column {
+  .stats-column,
+  .webhook-event-filters,
+  .webhook-event-metadata {
     grid-template-columns: 1fr;
   }
 
@@ -1373,6 +2111,17 @@ onBeforeUnmount(() => {
 
   .issue-details > div {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 420px) {
+  .result-counters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .result-counters > div:last-child {
+    grid-column: 1 / -1;
   }
 }
 </style>

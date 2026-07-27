@@ -8,9 +8,12 @@ const { channelSendSchema } = require('../dtos/channels.dto');
 const { env } = require('../config/env');
 
 const router = express.Router();
+router.use('/webhook-events', controller.preventWebhookEventCaching);
 router.use(requireAuth);
 router.get('/status', asyncHandler(controller.status));
 router.get('/template-presets', asyncHandler(controller.templatePresets));
+router.get('/webhook-events', asyncHandler(controller.webhookEvents));
+router.get('/webhook-events/:id', asyncHandler(controller.webhookEvent));
 router.post('/send', requireConfiguredChannel('whatsapp_cloud'), validate(channelSendSchema), asyncHandler(controller.send));
 
 const webhookRouter = express.Router();

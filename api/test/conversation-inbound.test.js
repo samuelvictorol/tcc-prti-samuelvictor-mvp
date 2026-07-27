@@ -365,7 +365,7 @@ test('WhatsApp Web persiste e emite mensagem somente para identidade ja autoriza
     socketService.emit = originals.emit;
   });
 
-  const chatId = '274985348251713@lid';
+  const chatId = '123456789012345@lid';
   settingsManager.isWhatsappPermissionCommand = async () => false;
   whatsappWebService.getProfilePicUrl = async () => 'https://cdn.example/samuel.jpg';
   const currentContact = {
@@ -403,7 +403,7 @@ test('WhatsApp Web persiste e emite mensagem somente para identidade ja autoriza
     type: 'chat',
     timestamp: 102,
     id: { _serialized: 'provider-live-1' },
-    getContact: async () => ({ id: { _serialized: chatId }, number: '556181748795', pushname: 'Samuel' })
+    getContact: async () => ({ id: { _serialized: chatId }, number: '551131234567', pushname: 'Samuel' })
   });
 
   assert.equal(result.ignored, false);
@@ -442,7 +442,7 @@ test('primeiro evento Web consome opt-in compartilhado pendente vindo do WhatsAp
   contactsManager.findByChannelAddress = async () => null;
   contactsManager.findByChannelOrPhone = async () => ({
     id: '507f1f77bcf86cd799439044',
-    channels: [{ channel: 'whatsapp_cloud', address: '556181748795', authorized: true, consentStatus: 'granted' }],
+    channels: [{ channel: 'whatsapp_cloud', address: '551131234567', authorized: true, consentStatus: 'granted' }],
     pendingWhatsappConsents: [{ channel: 'whatsapp_web', status: 'granted', sourceChannel: 'whatsapp_cloud' }]
   });
   let upsertInput;
@@ -464,12 +464,12 @@ test('primeiro evento Web consome opt-in compartilhado pendente vindo do WhatsAp
   adminNotificationsManager.create = async () => { notices += 1; return {}; };
 
   const result = await whatsappWebManager.processIncoming({
-    from: '274985348251713@lid',
+    from: '123456789012345@lid',
     body: 'Mensagem depois do opt-in Cloud',
     id: { _serialized: 'provider-pending-cloud-1' },
     getContact: async () => ({
-      id: { _serialized: '274985348251713@lid' },
-      number: '556181748795',
+      id: { _serialized: '123456789012345@lid' },
+      number: '551131234567',
       pushname: 'Samuel'
     })
   });

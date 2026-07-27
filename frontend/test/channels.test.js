@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  channelCredentialPreviews,
   channelSettingsPayload,
   compactChannelSettings,
   generateSecureWebhookSecret,
   isMaskedSecret,
+  mergeRevealedChannelValues,
   normalizeTelegramWebhookUrl,
   notificationChannel,
   notificationDeliveryCounts,
@@ -28,6 +30,34 @@ describe('configuração independente dos canais', () => {
     })).toEqual({ user: 'admin@example.com' })
   })
 
+  it('usa previews mascarados e não reenvia credenciais apenas reveladas', () => {
+    expect(channelCredentialPreviews('telegram', {
+      previews: {
+        botToken: '123••••••••reto',
+        webhookSecret: 'web••••••••reto',
+      },
+    })).toEqual({
+      botToken: '123••••••••reto',
+      webhookSecret: 'web••••••••reto',
+    })
+
+    const revealed = {
+      botToken: '123:token-real',
+      webhookSecret: 'secret-real',
+    }
+    expect(mergeRevealedChannelValues('telegram', revealed, {
+      botToken: '123••••••••real',
+      webhookSecret: '',
+    })).toEqual(revealed)
+    expect(channelSettingsPayload('telegram', revealed, revealed)).toBeNull()
+    expect(channelSettingsPayload('telegram', {
+      ...revealed,
+      webhookSecret: 'secret-alterado',
+    }, revealed)).toEqual({
+      telegram: { webhookSecret: 'secret-alterado' },
+    })
+  })
+
   it('gera webhook secret criptograficamente aleatório sem fallback fraco', () => {
     const cryptoApi = {
       getRandomValues(bytes) {
@@ -43,13 +73,13 @@ describe('configuração independente dos canais', () => {
 
   it('mantém número público separado do Phone Number ID no payload do Cloud', () => {
     expect(channelSettingsPayload('whatsappCloud', {
-      phoneNumberId: '1273327629189888',
-      displayPhoneNumber: '5561981748795',
+      phoneNumberId: '1000000000000001',
+      displayPhoneNumber: '5511931234567',
       configured: true,
     })).toEqual({
       whatsappCloud: {
-        phoneNumberId: '1273327629189888',
-        displayPhoneNumber: '5561981748795',
+        phoneNumberId: '1000000000000001',
+        displayPhoneNumber: '5511931234567',
       },
     })
   })

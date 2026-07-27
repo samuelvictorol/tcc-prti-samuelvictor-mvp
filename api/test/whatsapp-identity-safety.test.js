@@ -16,24 +16,24 @@ function legacyLidContact() {
     _id: '507f1f77bcf86cd799439011',
     displayNameEncrypted: encrypt('Samuel'),
     displayNameSource: 'whatsapp_web',
-    phoneEncrypted: encrypt('274985348251713'),
-    phoneHash: searchHash('274985348251713'),
+    phoneEncrypted: encrypt('123456789012345'),
+    phoneHash: searchHash('123456789012345'),
     active: true,
     notificationDisabled: false,
     deletedAt: null,
     channels: [{
       _id: '507f1f77bcf86cd799439012',
       channel: 'whatsapp_web',
-      addressEncrypted: encrypt('274985348251713@lid'),
-      addressHash: searchHash('274985348251713@lid'),
+      addressEncrypted: encrypt('123456789012345@lid'),
+      addressHash: searchHash('123456789012345@lid'),
       authorized: true,
       consentStatus: 'granted',
       metadataEncrypted: encrypt({
-        chatId: '274985348251713@lid',
-        contactId: '556181748795@c.us',
-        serializedId: '556181748795@c.us',
-        contactUser: '556181748795',
-        contactNumber: '274985348251713'
+        chatId: '123456789012345@lid',
+        contactId: '551131234567@c.us',
+        serializedId: '551131234567@c.us',
+        contactUser: '551131234567',
+        contactNumber: '123456789012345'
       })
     }],
     pendingWhatsappConsents: [],
@@ -47,17 +47,17 @@ test('serializacao e migracao recuperam telefone real sem transformar LID em num
   const contact = legacyLidContact();
 
   const serialized = contactsManager.serialize(contact);
-  assert.equal(serialized.phone, '556181748795');
+  assert.equal(serialized.phone, '551131234567');
   assert.equal(serialized.phoneSource, 'verified_provider_identity');
-  assert.equal(serialized.channels[0].address, '274985348251713@lid');
+  assert.equal(serialized.channels[0].address, '123456789012345@lid');
 
   Contact.find = () => ({ select: async () => [contact] });
   Contact.exists = async () => null;
   const result = await contactsManager.repairLegacyWhatsappPhones();
 
   assert.deepEqual(result, { scanned: 1, repaired: 1, cleared: 0, conflicts: 0 });
-  assert.equal(decrypt(contact.phoneEncrypted), '556181748795');
-  assert.equal(contact.phoneHash, searchHash('556181748795'));
+  assert.equal(decrypt(contact.phoneEncrypted), '551131234567');
+  assert.equal(contact.phoneHash, searchHash('551131234567'));
 });
 
 test('identidade sem wa_id ou @c.us sinaliza telefone ausente e Cloud recusa o destino', async (context) => {
@@ -66,11 +66,11 @@ test('identidade sem wa_id ou @c.us sinaliza telefone ausente e Cloud recusa o d
   contact.channels = [{
     _id: '507f1f77bcf86cd799439013',
     channel: 'whatsapp_cloud',
-    addressEncrypted: encrypt('274985348251713'),
-    addressHash: searchHash('274985348251713'),
+    addressEncrypted: encrypt('123456789012345'),
+    addressHash: searchHash('123456789012345'),
     authorized: true,
     consentStatus: 'granted',
-    metadataEncrypted: encrypt({ fromLogicalId: '274985348251713', userId: 'BR.274985348251713' })
+    metadataEncrypted: encrypt({ fromLogicalId: '123456789012345', userId: 'BR.123456789012345' })
   }];
   Contact.findById = () => ({ select: async () => contact });
 
@@ -88,18 +88,18 @@ test('WhatsApp Web prioriza id @c.us e rejeita contactData.number quando ele e o
   const real = whatsappWebManager.verifiedContactPhone(
     {},
     {
-      id: { _serialized: '556181748795@c.us', user: '556181748795', server: 'c.us' },
-      number: '274985348251713'
+      id: { _serialized: '551131234567@c.us', user: '551131234567', server: 'c.us' },
+      number: '123456789012345'
     },
-    '274985348251713@lid',
-    '556181748795@c.us'
+    '123456789012345@lid',
+    '551131234567@c.us'
   );
-  assert.equal(real, '556181748795');
+  assert.equal(real, '551131234567');
   assert.equal(whatsappWebManager.verifiedContactPhone(
     {},
-    { id: { _serialized: '274985348251713@lid' }, number: '274985348251713' },
-    '274985348251713@lid',
-    '274985348251713@lid'
+    { id: { _serialized: '123456789012345@lid' }, number: '123456789012345' },
+    '123456789012345@lid',
+    '123456789012345@lid'
   ), null);
 });
 
@@ -109,14 +109,14 @@ test('Cloud usa somente from/wa_id como telefone e correlaciona from_logical_id 
     [contactsManager, 'findByChannelOrPhone'],
     [contactsManager, 'upsertFromChannel']
   ]);
-  assert.equal(whatsappCloudManager.cloudIdentity({ user_id: 'BR.28770155782584312' }), null);
-  assert.equal(whatsappCloudManager.cloudIdentity({ from_logical_id: '274985348251713' }), null);
-  assert.equal(whatsappCloudManager.cloudIdentity({ from: '556181748795' }), '556181748795');
+  assert.equal(whatsappCloudManager.cloudIdentity({ user_id: 'BR.12345678901234567' }), null);
+  assert.equal(whatsappCloudManager.cloudIdentity({ from_logical_id: '123456789012345' }), null);
+  assert.equal(whatsappCloudManager.cloudIdentity({ from: '551131234567' }), '551131234567');
 
   const lookups = [];
   contactsManager.findByChannelAddress = async (channel, address) => {
     lookups.push([channel, address]);
-    if (channel === 'whatsapp_web' && address === '274985348251713@lid') {
+    if (channel === 'whatsapp_web' && address === '123456789012345@lid') {
       return { id: '507f1f77bcf86cd799439011', channels: [] };
     }
     return null;
@@ -136,15 +136,15 @@ test('Cloud usa somente from/wa_id como telefone e correlaciona from_logical_id 
   };
 
   const result = await whatsappCloudManager.upsertCloudContact({
-    from: '556181748795',
-    from_user_id: 'BR.28770155782584312',
-    from_logical_id: '274985348251713',
+    from: '551131234567',
+    from_user_id: 'BR.12345678901234567',
+    from_logical_id: '123456789012345',
     type: 'text'
   }, { metadata: {} });
 
-  assert.ok(lookups.some(([channel, address]) => channel === 'whatsapp_web' && address === '274985348251713@lid'));
+  assert.ok(lookups.some(([channel, address]) => channel === 'whatsapp_web' && address === '123456789012345@lid'));
   assert.equal(upsertInput.matchedContactId, '507f1f77bcf86cd799439011');
-  assert.equal(upsertInput.phone, '556181748795');
-  assert.equal(upsertInput.address, '556181748795');
+  assert.equal(upsertInput.phone, '551131234567');
+  assert.equal(upsertInput.address, '551131234567');
   assert.equal(result.created, false);
 });

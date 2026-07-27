@@ -94,7 +94,7 @@ export function profileIdentifierRule(value, mode = inferMode(value)) {
   const raw = String(value ?? '').trim()
   if (mode === 'phone') {
     return [10, 11].includes(digitsOnly(raw).length)
-      || 'Digite um telefone com DDD, por exemplo (61)98174-8795'
+      || 'Digite um telefone com DDD, por exemplo (11) 93123-4567'
   }
   if (mode === 'email') {
     return EMAIL_PATTERN.test(raw) || 'Digite um email válido'

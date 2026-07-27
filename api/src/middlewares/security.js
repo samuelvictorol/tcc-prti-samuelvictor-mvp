@@ -82,7 +82,18 @@ const profileCodeVerifyLimiter = rateLimit({
   legacyHeaders: false
 });
 
+const settingsRevealLimiter = rateLimit({
+  windowMs: env.rateLimitWindowMs,
+  limit: Math.max(3, Math.min(10, env.authRateLimitMax)),
+  keyGenerator: (req) => String(req.admin?.id || 'authenticated-admin'),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler(_req, _res, next) {
+    next(new ApiError(429, 'Muitas consultas de credenciais. Tente novamente mais tarde.', null, 'SETTINGS_REVEAL_RATE_LIMITED'));
+  }
+});
+
 module.exports = {
   requestContext, ipBlock, registerSecurityStrike, apiLimiter, webhookLimiter, authLimiter,
-  profileCodeRequestLimiter, profileCodeVerifyLimiter
+  profileCodeRequestLimiter, profileCodeVerifyLimiter, settingsRevealLimiter
 };

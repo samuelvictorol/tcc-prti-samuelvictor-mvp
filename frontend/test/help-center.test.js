@@ -74,13 +74,14 @@ describe('Central de Ajuda', () => {
     expect(cloud).not.toContain('<p class="section-copy">Status de entrega')
   })
 
-  it('mascara segredo salvo e só copia um valor existente ou recém-gerado', () => {
+  it('mascara segredo salvo e revela credenciais somente por ação autenticada', () => {
     const home = source('pages/HomePage.vue')
 
-    expect(home).toContain("const TELEGRAM_WEBHOOK_SECRET_MASK = '••••")
     expect(home).toContain('delete telegramSource.webhookSecret')
+    expect(home).toContain('savedCredentialPreviews')
+    expect(home).toContain('http.get(`/settings/reveal/${channel}`)')
+    expect(home).toContain('Exiba as credenciais do Telegram antes de copiar')
     expect(home).toContain('generateSecureWebhookSecret()')
-    expect(home).toContain('Por segurança, a API não devolve o segredo já salvo')
     expect(home).toContain('aria-label="Gerar novo webhook secret"')
     expect(home).toContain('aria-label="Copiar webhook secret"')
   })

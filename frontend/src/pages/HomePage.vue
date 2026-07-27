@@ -7,9 +7,12 @@ import EmptyState from '../components/EmptyState.vue'
 import ContextHelp from '../components/ContextHelp.vue'
 import { useAppStore } from '../stores/app.js'
 import {
+  channelCredentialFields,
+  channelCredentialPreviews,
   channelSettingsPayload,
   generateSecureWebhookSecret,
   isMaskedSecret,
+  mergeRevealedChannelValues,
   normalizeTelegramWebhookUrl,
 } from '../services/channels.js'
 import { asList, errorMessage, http, paginationOf, unwrap } from '../services/http.js'
@@ -36,7 +39,10 @@ const savingTelegramPermission = ref(false)
 const connectingWhatsappWeb = ref(false)
 const regeneratingWhatsappWeb = ref(false)
 const disconnectingWhatsappWeb = ref(false)
-const telegramWebhookSecretVisible = ref(false)
+const revealingCredentials = reactive({ telegram: false, whatsappCloud: false, email: false })
+const channelCredentialsVisible = reactive({ telegram: false, whatsappCloud: false, email: false })
+const savedCredentialPreviews = reactive({ telegram: {}, whatsappCloud: {}, email: {} })
+const revealedCredentialBaselines = reactive({ telegram: {}, whatsappCloud: {}, email: {} })
 const whatsappWebStatus = ref(normalizeWhatsappWebStatus())
 const logItems = ref([])
 const logLoading = ref(false)
@@ -50,8 +56,6 @@ const settings = reactive({
   telegramPermission: { command: DEFAULT_TELEGRAM_PERMISSION_COMMAND },
   email: { user: '', appPassword: '', from: '', fromName: '' },
 })
-
-const TELEGRAM_WEBHOOK_SECRET_MASK = '••••••••••••••••••••••••'
 
 let whatsappWebPollTimer
 let whatsappWebPollDeadline = 0
@@ -120,7 +124,6 @@ async function copyWhatsappCloudCallbackUrl() {
 function generateTelegramWebhookSecret({ notify = true } = {}) {
   try {
     settings.telegram.webhookSecret = generateSecureWebhookSecret()
-    telegramWebhookSecretVisible.value = false
     if (notify) {
       $q.notify({
         type: 'positive',
@@ -165,37 +168,78 @@ function copyTelegramWebhookSecret() {
     return
   }
 
-  $q.dialog({
-    title: 'Gerar um novo webhook secret?',
-    message: 'Por segurança, a API não devolve o segredo já salvo. Para copiar um valor, será gerado um novo segredo no seu navegador. Ele só substituirá o atual depois que você salvar o Telegram ou registrar o webhook.',
-    cancel: { flat: true, label: 'Cancelar' },
-    ok: { color: 'primary', label: 'Gerar e copiar' },
-    persistent: true,
-  }).onOk(generateAndCopyTelegramWebhookSecret)
+  $q.notify({
+    type: 'info',
+    message: 'Exiba as credenciais do Telegram antes de copiar o segredo salvo.',
+    caption: 'Use o único botão de visibilidade no início desta seção.',
+  })
 }
 
 function applySettings(value = {}) {
   const source = value.configuration || value.settings || value
-  settings.telegram.botToken = ''
-  settings.telegram.webhookSecret = ''
   settings.telegram.webhookSecretConfigured = false
   settings.telegram.bot = null
-  settings.whatsappCloud.accessToken = ''
-  settings.whatsappCloud.verifyToken = ''
-  settings.whatsappCloud.appSecret = ''
-  settings.email.appPassword = ''
   const telegramSource = { ...(source.telegram || {}) }
   delete telegramSource.botToken
   delete telegramSource.webhookSecret
   Object.assign(settings.telegram, telegramSource)
-  settings.telegram.webhookSecret = telegramSource.webhookSecretConfigured
-    ? TELEGRAM_WEBHOOK_SECRET_MASK
-    : ''
-  telegramWebhookSecretVisible.value = false
   Object.assign(settings.whatsappCloud, source.whatsappCloud || source.whatsapp_cloud || source.meta || {})
   Object.assign(settings.email, source.email || source.gmail || {})
+  for (const channel of ['telegram', 'whatsappCloud', 'email']) {
+    const channelSource = channel === 'whatsappCloud'
+      ? (source.whatsappCloud || source.whatsapp_cloud || source.meta || {})
+      : (source[channel] || {})
+    const previews = channelCredentialPreviews(channel, channelSource)
+    Object.assign(savedCredentialPreviews[channel], previews)
+    for (const key of Object.keys(revealedCredentialBaselines[channel])) {
+      delete revealedCredentialBaselines[channel][key]
+    }
+    for (const field of channelCredentialFields[channel]) settings[channel][field] = previews[field] || ''
+    channelCredentialsVisible[channel] = false
+  }
   settings.whatsappPermission.command = whatsappPermissionCommandFromSettings(value)
   settings.telegramPermission.command = telegramPermissionCommandFromSettings(value)
+}
+
+function credentialFieldIsMasked(channel, field) {
+  return !channelCredentialsVisible[channel] && Boolean(savedCredentialPreviews[channel]?.[field])
+}
+
+function channelHasSavedCredentials(channel) {
+  return Object.values(savedCredentialPreviews[channel] || {}).some(Boolean)
+}
+
+function hideChannelCredentials(channel) {
+  for (const field of channelCredentialFields[channel] || []) {
+    settings[channel][field] = savedCredentialPreviews[channel]?.[field] || ''
+  }
+  channelCredentialsVisible[channel] = false
+  for (const key of Object.keys(revealedCredentialBaselines[channel])) {
+    delete revealedCredentialBaselines[channel][key]
+  }
+}
+
+async function toggleChannelCredentials(channel) {
+  if (channelCredentialsVisible[channel]) {
+    hideChannelCredentials(channel)
+    return
+  }
+  revealingCredentials[channel] = true
+  try {
+    const result = unwrap(await http.get(`/settings/reveal/${channel}`)) || {}
+    const values = result.values || {}
+    const merged = mergeRevealedChannelValues(channel, values, settings[channel])
+    Object.assign(revealedCredentialBaselines[channel], values)
+    Object.assign(settings[channel], merged)
+    channelCredentialsVisible[channel] = true
+  } catch (error) {
+    $q.notify({
+      type: 'negative',
+      message: errorMessage(error, `Não foi possível exibir as credenciais de ${channelNames[channel]}.`),
+    })
+  } finally {
+    revealingCredentials[channel] = false
+  }
 }
 
 function stopWhatsappWebPolling() {
@@ -387,7 +431,11 @@ async function loadDashboard() {
 }
 
 async function saveChannel(channel, { quiet = false } = {}) {
-  const payload = channelSettingsPayload(channel, settings[channel])
+  const payload = channelSettingsPayload(
+    channel,
+    settings[channel],
+    channelCredentialsVisible[channel] ? revealedCredentialBaselines[channel] : {},
+  )
   if (!payload) {
     if (!quiet) $q.notify({ type: 'info', message: `Nenhum novo valor de ${channelNames[channel]} para salvar.` })
     return false
@@ -421,7 +469,11 @@ async function registerTelegramWebhook() {
   }
   registeringWebhook.value = true
   try {
-    const pendingCredentials = channelSettingsPayload('telegram', settings.telegram)
+    const pendingCredentials = channelSettingsPayload(
+      'telegram',
+      settings.telegram,
+      channelCredentialsVisible.telegram ? revealedCredentialBaselines.telegram : {},
+    )
     if (pendingCredentials && !(await saveChannel('telegram', { quiet: true }))) return
     if (!telegramTokenConfigured.value) {
       $q.notify({ type: 'warning', message: 'Salve ou informe o token do bot antes de registrar o webhook.' })
@@ -588,26 +640,42 @@ onBeforeUnmount(() => {
               </div>
               <q-icon name="verified" color="positive" size="22px" />
             </div>
-            <q-input v-model="settings.telegram.botToken" outlined type="password" label="Token do Bot API" autocomplete="off" hint="O token sozinho já permite testar envios manuais" />
+            <div class="full-span credential-visibility" aria-live="polite">
+              <div>
+                <q-icon :name="channelCredentialsVisible.telegram ? 'visibility' : 'visibility_off'" />
+                <span>{{ channelCredentialsVisible.telegram ? 'Credenciais visíveis nesta sessão' : 'Valores salvos protegidos por máscara' }}</span>
+              </div>
+              <q-btn
+                flat
+                round
+                color="primary"
+                :icon="channelCredentialsVisible.telegram ? 'visibility_off' : 'visibility'"
+                :loading="revealingCredentials.telegram"
+                :disable="!channelHasSavedCredentials('telegram')"
+                :aria-label="channelCredentialsVisible.telegram ? 'Ocultar todas as credenciais do Telegram' : 'Exibir todas as credenciais do Telegram'"
+                @click="toggleChannelCredentials('telegram')"
+              >
+                <q-tooltip>{{ channelCredentialsVisible.telegram ? 'Ocultar todas as credenciais' : 'Exibir todas as credenciais' }}</q-tooltip>
+              </q-btn>
+            </div>
+            <q-input
+              v-model="settings.telegram.botToken"
+              outlined
+              :type="channelCredentialsVisible.telegram ? 'text' : 'password'"
+              :readonly="credentialFieldIsMasked('telegram', 'botToken')"
+              label="Token do Bot API"
+              autocomplete="off"
+              hint="O token sozinho já permite testar envios manuais"
+            />
             <q-input
               v-model="settings.telegram.webhookSecret"
               outlined
-              :type="telegramWebhookSecretVisible ? 'text' : 'password'"
+              :type="channelCredentialsVisible.telegram ? 'text' : 'password'"
+              :readonly="credentialFieldIsMasked('telegram', 'webhookSecret')"
               :label="telegramWebhookSecretIsMasked ? 'Webhook secret configurado' : 'Novo webhook secret (opcional)'"
               autocomplete="new-password"
             >
               <template #append>
-                <q-btn
-                  v-if="settings.telegram.webhookSecret && !telegramWebhookSecretIsMasked"
-                  flat
-                  round
-                  dense
-                  :icon="telegramWebhookSecretVisible ? 'visibility_off' : 'visibility'"
-                  :aria-label="telegramWebhookSecretVisible ? 'Ocultar novo webhook secret' : 'Exibir novo webhook secret'"
-                  @click="telegramWebhookSecretVisible = !telegramWebhookSecretVisible"
-                >
-                  <q-tooltip>{{ telegramWebhookSecretVisible ? 'Ocultar segredo' : 'Exibir novo segredo' }}</q-tooltip>
-                </q-btn>
                 <q-btn flat round dense color="primary" icon="key" aria-label="Gerar novo webhook secret" @click="generateTelegramWebhookSecret()">
                   <q-tooltip>Gerar novo segredo seguro</q-tooltip>
                 </q-btn>
@@ -619,7 +687,7 @@ onBeforeUnmount(() => {
                   tooltip="Entenda como o segredo é protegido"
                   :text="[
                     'Se ficar vazio ao registrar, a API gera um segredo seguro.',
-                    'Um segredo já salvo aparece somente como máscara e nunca é devolvido pela API. Para copiá-lo, o navegador gera um novo valor seguro; salve ou registre o webhook para ativá-lo.',
+                    'Um segredo já salvo aparece somente como máscara. O botão de visibilidade da seção faz uma consulta autenticada e o oculta novamente sem alterar o valor salvo.',
                   ]"
                 />
               </template>
@@ -656,6 +724,24 @@ onBeforeUnmount(() => {
           :header-class="app.isChannelEnabled('whatsappCloud') ? 'channel-config-header channel-config-header--configured text-weight-bold' : 'channel-config-header text-weight-bold'"
         >
           <div class="form-grid q-pa-md">
+            <div class="full-span credential-visibility" aria-live="polite">
+              <div>
+                <q-icon :name="channelCredentialsVisible.whatsappCloud ? 'visibility' : 'visibility_off'" />
+                <span>{{ channelCredentialsVisible.whatsappCloud ? 'Credenciais visíveis nesta sessão' : 'Valores salvos protegidos por máscara' }}</span>
+              </div>
+              <q-btn
+                flat
+                round
+                color="primary"
+                :icon="channelCredentialsVisible.whatsappCloud ? 'visibility_off' : 'visibility'"
+                :loading="revealingCredentials.whatsappCloud"
+                :disable="!channelHasSavedCredentials('whatsappCloud')"
+                :aria-label="channelCredentialsVisible.whatsappCloud ? 'Ocultar todas as credenciais do WhatsApp Cloud' : 'Exibir todas as credenciais do WhatsApp Cloud'"
+                @click="toggleChannelCredentials('whatsappCloud')"
+              >
+                <q-tooltip>{{ channelCredentialsVisible.whatsappCloud ? 'Ocultar todas as credenciais' : 'Exibir todas as credenciais' }}</q-tooltip>
+              </q-btn>
+            </div>
             <q-input
               :model-value="whatsappCloudCallbackUrl"
               class="full-span"
@@ -679,6 +765,7 @@ onBeforeUnmount(() => {
             <q-input
               v-model="settings.whatsappCloud.phoneNumberId"
               outlined
+              :readonly="credentialFieldIsMasked('whatsappCloud', 'phoneNumberId')"
               label="Phone Number ID"
             >
               <template #append>
@@ -692,10 +779,11 @@ onBeforeUnmount(() => {
             <q-input
               v-model="settings.whatsappCloud.displayPhoneNumber"
               outlined
+              :readonly="credentialFieldIsMasked('whatsappCloud', 'displayPhoneNumber')"
               label="Número público do WhatsApp (com DDI)"
-              mask="+## (##) #####-####"
+              :mask="credentialFieldIsMasked('whatsappCloud', 'displayPhoneNumber') ? undefined : '+## (##) #####-####'"
               unmasked-value
-              placeholder="+55 (61) 98174-8795"
+              placeholder="+55 (11) 93123-4567"
             >
               <template #append>
                 <ContextHelp
@@ -705,8 +793,8 @@ onBeforeUnmount(() => {
                 />
               </template>
             </q-input>
-            <q-input v-model="settings.whatsappCloud.businessAccountId" outlined label="Business Account ID" />
-            <q-input v-model.trim="settings.whatsappCloud.apiVersion" outlined label="Versão da Graph API">
+            <q-input v-model="settings.whatsappCloud.businessAccountId" outlined :readonly="credentialFieldIsMasked('whatsappCloud', 'businessAccountId')" label="Business Account ID" />
+            <q-input v-model.trim="settings.whatsappCloud.apiVersion" outlined :readonly="credentialFieldIsMasked('whatsappCloud', 'apiVersion')" label="Versão da Graph API">
               <template #append>
                 <ContextHelp
                   title="Versão da Graph API"
@@ -715,9 +803,9 @@ onBeforeUnmount(() => {
                 />
               </template>
             </q-input>
-            <q-input v-model="settings.whatsappCloud.accessToken" outlined type="password" label="Access token" autocomplete="off" />
-            <q-input v-model="settings.whatsappCloud.verifyToken" outlined type="password" label="Webhook verify token" autocomplete="off" />
-            <q-input v-model="settings.whatsappCloud.appSecret" class="full-span" outlined type="password" label="App secret (validação X-Hub-Signature-256)" autocomplete="off" />
+            <q-input v-model="settings.whatsappCloud.accessToken" outlined :type="channelCredentialsVisible.whatsappCloud ? 'text' : 'password'" :readonly="credentialFieldIsMasked('whatsappCloud', 'accessToken')" label="Access token" autocomplete="off" />
+            <q-input v-model="settings.whatsappCloud.verifyToken" outlined :type="channelCredentialsVisible.whatsappCloud ? 'text' : 'password'" :readonly="credentialFieldIsMasked('whatsappCloud', 'verifyToken')" label="Webhook verify token" autocomplete="off" />
+            <q-input v-model="settings.whatsappCloud.appSecret" class="full-span" outlined :type="channelCredentialsVisible.whatsappCloud ? 'text' : 'password'" :readonly="credentialFieldIsMasked('whatsappCloud', 'appSecret')" label="App secret (validação X-Hub-Signature-256)" autocomplete="off" />
             <div class="full-span channel-actions">
               <q-btn outline color="primary" no-caps icon="save" label="Salvar WhatsApp Cloud" :loading="savingChannel.whatsappCloud" @click="saveChannel('whatsappCloud')" />
               <q-btn flat color="primary" no-caps icon="send" label="Teste manual" to="/whatsapp-cloud" :disable="!app.isChannelEnabled('whatsappCloud')" />
@@ -732,10 +820,28 @@ onBeforeUnmount(() => {
           :header-class="app.isChannelEnabled('email') ? 'channel-config-header channel-config-header--configured text-weight-bold' : 'channel-config-header text-weight-bold'"
         >
           <div class="form-grid q-pa-md">
-            <q-input v-model="settings.email.user" outlined type="email" label="Conta Gmail" />
-            <q-input v-model="settings.email.from" outlined type="email" label="Email do remetente (GMAIL_FROM)" />
-            <q-input v-model="settings.email.fromName" outlined label="Nome do remetente (opcional)" />
-            <q-input v-model="settings.email.appPassword" class="full-span" outlined type="password" label="Senha de app" autocomplete="off" />
+            <div class="full-span credential-visibility" aria-live="polite">
+              <div>
+                <q-icon :name="channelCredentialsVisible.email ? 'visibility' : 'visibility_off'" />
+                <span>{{ channelCredentialsVisible.email ? 'Credenciais visíveis nesta sessão' : 'Valores salvos protegidos por máscara' }}</span>
+              </div>
+              <q-btn
+                flat
+                round
+                color="primary"
+                :icon="channelCredentialsVisible.email ? 'visibility_off' : 'visibility'"
+                :loading="revealingCredentials.email"
+                :disable="!channelHasSavedCredentials('email')"
+                :aria-label="channelCredentialsVisible.email ? 'Ocultar todas as credenciais do Gmail' : 'Exibir todas as credenciais do Gmail'"
+                @click="toggleChannelCredentials('email')"
+              >
+                <q-tooltip>{{ channelCredentialsVisible.email ? 'Ocultar todas as credenciais' : 'Exibir todas as credenciais' }}</q-tooltip>
+              </q-btn>
+            </div>
+            <q-input v-model="settings.email.user" outlined type="email" :readonly="credentialFieldIsMasked('email', 'user')" label="Conta Gmail" />
+            <q-input v-model="settings.email.from" outlined type="email" :readonly="credentialFieldIsMasked('email', 'from')" label="Email do remetente (GMAIL_FROM)" />
+            <q-input v-model="settings.email.fromName" outlined :readonly="credentialFieldIsMasked('email', 'fromName')" label="Nome do remetente (opcional)" />
+            <q-input v-model="settings.email.appPassword" class="full-span" outlined :type="channelCredentialsVisible.email ? 'text' : 'password'" :readonly="credentialFieldIsMasked('email', 'appPassword')" label="Senha de app" autocomplete="off" />
             <div class="full-span channel-actions">
               <q-btn outline color="primary" no-caps icon="save" label="Salvar Gmail" :loading="savingChannel.email" @click="saveChannel('email')" />
               <q-btn flat color="primary" no-caps icon="send" label="Teste manual" to="/email" :disable="!app.isChannelEnabled('email')" />
@@ -1079,6 +1185,31 @@ onBeforeUnmount(() => {
   color: #5d7470;
   font-size: 0.78rem;
   line-height: 1.45;
+}
+
+.credential-visibility {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px 6px 13px;
+  border: 1px solid rgba(19, 125, 108, 0.15);
+  border-radius: 13px;
+  background: rgba(235, 250, 247, 0.62);
+  color: #426b64;
+  font-size: 0.78rem;
+}
+
+.credential-visibility > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.credential-visibility > div > .q-icon {
+  color: #16866f;
+  font-size: 18px;
 }
 
 .whatsapp-cloud-webhook-hint {

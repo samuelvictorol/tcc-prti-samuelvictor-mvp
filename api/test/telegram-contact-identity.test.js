@@ -106,14 +106,14 @@ test('Telegram aceita telefone somente do contato compartilhado pelo proprio rem
   const state = stubTelegramInbound(context);
   const result = await telegramManager.webhook(telegramUpdate(2_026_072_201, {
     contact: {
-      phone_number: '+55 (61) 8174-8795',
+      phone_number: '+55 (11) 3123-4567',
       first_name: 'Samuel',
       user_id: 445566
     }
   }), 'webhook-secret');
 
   assert.equal(result.received, true);
-  assert.equal(state.input().phone, '556181748795');
+  assert.equal(state.input().phone, '551131234567');
   assert.equal(state.input().phoneVerified, true);
   assert.equal(state.input().metadata.phoneSharedByOwner, true);
   assert.equal(state.input().metadata.contactUserId, '445566');
@@ -337,14 +337,14 @@ test('callback de onboarding encaminhado para outro chat nao pode solicitar tele
 });
 
 test('telefone Telegram so participa da deduplicacao quando foi verificado', () => {
-  assert.equal(contactsManager.mergePhoneIdentity('telegram', '+55 61 98174-8795'), null);
+  assert.equal(contactsManager.mergePhoneIdentity('telegram', '+55 11 93123-4567'), null);
   const verified = contactsManager.mergePhoneIdentity(
     'telegram',
-    '+55 61 98174-8795',
+    '+55 11 93123-4567',
     { verified: true }
   );
-  assert.equal(verified.normalized, '5561981748795');
-  assert.ok(verified.hashes.includes(searchHash('556181748795')));
+  assert.equal(verified.normalized, '5511931234567');
+  assert.ok(verified.hashes.includes(searchHash('551131234567')));
 });
 
 test('Telegram-only e consolidado no contato WhatsApp do mesmo telefone sem perder consentimento ou avatar', async (context) => {
@@ -381,13 +381,13 @@ test('Telegram-only e consolidado no contato WhatsApp do mesmo telefone sem perd
     displayNameEncrypted: encrypt('Samuel cadastrado'),
     displayNameHash: searchHash('samuel cadastrado'),
     displayNameSource: 'manual',
-    phoneEncrypted: encrypt('556181748795'),
-    phoneHash: searchHash('556181748795'),
+    phoneEncrypted: encrypt('551131234567'),
+    phoneHash: searchHash('551131234567'),
     channels: [{
       _id: '507f1f77bcf86cd799439024',
       channel: 'whatsapp_web',
-      addressEncrypted: encrypt('556181748795@c.us'),
-      addressHash: searchHash('556181748795@c.us'),
+      addressEncrypted: encrypt('551131234567@c.us'),
+      addressHash: searchHash('551131234567@c.us'),
       authorized: true,
       consentStatus: 'granted',
       source: 'whatsapp_web_message'
@@ -449,7 +449,7 @@ test('Telegram-only e consolidado no contato WhatsApp do mesmo telefone sem perd
     channel: 'telegram',
     address: telegramAddress,
     displayName: 'Samuel Telegram',
-    phone: '+55 61 8174-8795',
+    phone: '+55 11 3123-4567',
     phoneVerified: true,
     avatarUrl: 'https://cdn.example/telegram-nova.jpg',
     authorize: true,

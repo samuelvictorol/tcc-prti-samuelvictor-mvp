@@ -4,6 +4,7 @@ const contactsManager = require('./contacts.manager');
 const invitesManager = require('./invites.manager');
 const logsManager = require('./logs.manager');
 const adminNotificationsManager = require('./admin-notifications.manager');
+const webhookEventsManager = require('./whatsapp-cloud-webhook-events.manager');
 const { timingSafeEqual } = require('../services/crypto.service');
 const { env } = require('../config/env');
 const { emit } = require('../services/socket.service');
@@ -225,129 +226,179 @@ async function upsertCloudContact(source, value, fallback = {}, options = {}) {
   };
 }
 
+async function processCloudInboundMessage(message, value, businessAccountId) {
+  const resultSummary = { receivedMessages: 1, createdContacts: 0, updatedContacts: 0 };
+  const messageAddress = message?.id ? cloudIdentity(message) : null;
+  const matchedProviderContact = matchingCloudContact(value.contacts || [], message) || {};
+  const address = messageAddress;
+  if (!address) return resultSummary;
+  const inboundText = String(message.text?.body || '');
+  const strictPermissionGranted = await settingsManager.isWhatsappPermissionCommand(inboundText);
+  const markerCandidate = inboundText.normalize('NFKC').trim().split(/\s+/).at(-1);
+  const hasValidAttributionMarker = !strictPermissionGranted
+    && Boolean(invitesManager.parseAttributionMarker(markerCandidate));
+  const configuredPermissionCommand = hasValidAttributionMarker
+    ? await settingsManager.getWhatsappPermissionCommand()
+    : null;
+  const invitationInvocation = hasValidAttributionMarker
+    ? await invitesManager.resolveWhatsappInviteInvocation(inboundText, configuredPermissionCommand)
+    : null;
+  const permissionGranted = Boolean(invitationInvocation) || strictPermissionGranted;
+  const permissionCommand = permissionGranted
+    ? invitationInvocation?.command || String(message.text?.body || '').trim()
+    : null;
+  const result = await upsertCloudContact(
+    { ...matchedProviderContact, ...message },
+    { ...value, businessAccountId: businessAccountId || null },
+    matchedProviderContact,
+    { permissionGranted, permissionCommand }
+  );
+  if (!result) return resultSummary;
+  const invitationAttribution = invitationInvocation
+    ? await invitesManager.attributeContactFromMarker(
+      result.contact.id,
+      invitationInvocation.attributionMarker,
+      'whatsapp_cloud'
+    )
+    : null;
+  if (result.permissionRequired) {
+    emit('whatsapp_cloud:permission_required', {
+      contactId: result.contact.id,
+      providerMessageId: message.id || null,
+      at: new Date().toISOString()
+    });
+  }
+  const { contact } = result;
+  if (result.created) resultSummary.createdContacts += 1;
+  else resultSummary.updatedContacts += 1;
+  await logsManager.create({
+    channel: 'whatsapp_cloud',
+    action: permissionGranted ? 'contact.permission_granted' : 'message.received',
+    message: permissionGranted
+      ? 'Permissao de notificacao para WhatsApp Web e Cloud recebida pelo WhatsApp Cloud'
+      : 'Mensagem WhatsApp Cloud recebida',
+    context: {
+      contactId: contact.id,
+      providerMessageId: message.id,
+      type: message.type,
+      ...(permissionGranted ? {
+        permissionChannels: ['whatsapp_web', 'whatsapp_cloud'],
+        permissionCommand,
+        permissionReceivedVia: 'whatsapp_cloud'
+      } : {})
+    }
+  });
+  const timestampMs = Number(message.timestamp) * 1000;
+  emit('whatsapp_cloud:message', {
+    contactId: contact.id,
+    providerMessageId: message.id || null,
+    from: address,
+    type: message.type || 'unknown',
+    text: message.text?.body ? String(message.text.body).slice(0, 2000) : null,
+    ...(invitationInvocation ? {
+      text: permissionCommand,
+      inviteAttributed: Boolean(invitationAttribution)
+    } : {}),
+    sentAt: Number.isFinite(timestampMs) && timestampMs > 0
+      ? new Date(timestampMs).toISOString()
+      : new Date().toISOString()
+  });
+  return resultSummary;
+}
+
+async function processCloudReceipt(receipt) {
+  const notificationsManager = require('./notifications.manager');
+  const storedReceipt = await notificationsManager.storeCloudReceipt(receipt);
+  let reconciliation;
+  try {
+    reconciliation = await notificationsManager.reconcileCloudReceipt({
+      ...receipt,
+      revisionToken: storedReceipt?.revisionToken
+    });
+  } catch (error) {
+    if (error.code !== 'WHATSAPP_CLOUD_RECEIPT_PROCESSING') throw error;
+    reconciliation = { matched: false, deferred: true, providerStatus: receipt.status };
+  }
+  if (reconciliation.matched) {
+    await notificationsManager.markCloudReceiptProcessed(receipt.id, storedReceipt?.revisionToken);
+  }
+  await logsManager.create({
+    level: receipt.status === 'failed' ? 'error' : 'info',
+    channel: 'whatsapp_cloud',
+    action: receipt.status === 'failed' ? 'notification.provider_failed' : 'message.status',
+    message: receipt.status === 'failed'
+      ? 'A Meta informou falha na entrega da mensagem'
+      : 'Status de mensagem WhatsApp atualizado',
+    context: {
+      providerMessageId: receipt.id,
+      status: receipt.status,
+      notificationId: reconciliation.notificationId || null,
+      deliveryStatus: reconciliation.deliveryStatus || null,
+      deferred: Boolean(reconciliation.deferred),
+      retryScheduled: Boolean(reconciliation.retryScheduled),
+      errors: reconciliation.errors || []
+    }
+  });
+  return { receivedStatuses: 1 };
+}
+
+async function processCloudWebhookDescriptor(descriptor) {
+  const value = descriptor.value || {};
+  const summary = {
+    receivedMessages: 0,
+    receivedStatuses: 0,
+    createdContacts: 0,
+    updatedContacts: 0
+  };
+  for (const message of Array.isArray(value.messages) ? value.messages : []) {
+    const result = await processCloudInboundMessage(message, value, descriptor.businessAccountId);
+    for (const key of Object.keys(result)) summary[key] += result[key];
+  }
+  for (const receipt of Array.isArray(value.statuses) ? value.statuses : []) {
+    const result = await processCloudReceipt(receipt);
+    for (const key of Object.keys(result)) summary[key] += result[key];
+  }
+  return summary;
+}
+
 async function webhook(payload, rawBody, signature) {
   await verifySignature(rawBody, signature);
-  let receivedMessages = 0;
-  let receivedStatuses = 0;
-  let createdContacts = 0;
-  let updatedContacts = 0;
-  for (const entry of payload.entry || []) {
-    for (const change of entry.changes || []) {
-      const value = change.value || {};
-      for (const message of value.messages || []) {
-        receivedMessages += 1;
-        const messageAddress = message?.id ? cloudIdentity(message) : null;
-        const matchedProviderContact = matchingCloudContact(value.contacts || [], message) || {};
-        const address = messageAddress;
-        if (!address) continue;
-        const inboundText = String(message.text?.body || '');
-        const strictPermissionGranted = await settingsManager.isWhatsappPermissionCommand(inboundText);
-        const markerCandidate = inboundText.normalize('NFKC').trim().split(/\s+/).at(-1);
-        const hasValidAttributionMarker = !strictPermissionGranted
-          && Boolean(invitesManager.parseAttributionMarker(markerCandidate));
-        const configuredPermissionCommand = hasValidAttributionMarker
-          ? await settingsManager.getWhatsappPermissionCommand()
-          : null;
-        const invitationInvocation = hasValidAttributionMarker
-          ? await invitesManager.resolveWhatsappInviteInvocation(inboundText, configuredPermissionCommand)
-          : null;
-        const permissionGranted = Boolean(invitationInvocation) || strictPermissionGranted;
-        const permissionCommand = permissionGranted
-          ? invitationInvocation?.command || String(message.text?.body || '').trim()
-          : null;
-        const result = await upsertCloudContact(
-          { ...matchedProviderContact, ...message },
-          { ...value, businessAccountId: entry.id || null },
-          matchedProviderContact,
-          { permissionGranted, permissionCommand }
+  const persisted = await webhookEventsManager.persistPayload(payload, rawBody);
+  const summary = {
+    receivedMessages: 0,
+    receivedStatuses: 0,
+    createdContacts: 0,
+    updatedContacts: 0,
+    receivedEvents: persisted.events.length,
+    persistedEvents: persisted.createdCount,
+    duplicateEvents: persisted.duplicateCount,
+    claimedEvents: 0,
+    at: new Date().toISOString()
+  };
+
+  for (const workItem of persisted.workItems || []) {
+    const claim = await webhookEventsManager.claimEvent(workItem.eventId);
+    if (!claim) continue;
+    summary.claimedEvents += 1;
+    try {
+      const result = await processCloudWebhookDescriptor(workItem.descriptor);
+      const finalized = await webhookEventsManager.markProcessed(claim);
+      if (!finalized) {
+        throw new ApiError(
+          503,
+          'Lease do webhook expirou durante o processamento',
+          null,
+          'WHATSAPP_CLOUD_WEBHOOK_LEASE_LOST'
         );
-        if (!result) continue;
-        const invitationAttribution = invitationInvocation
-          ? await invitesManager.attributeContactFromMarker(
-            result.contact.id,
-            invitationInvocation.attributionMarker,
-            'whatsapp_cloud'
-          )
-          : null;
-        if (result.permissionRequired) {
-          emit('whatsapp_cloud:permission_required', {
-            contactId: result.contact.id,
-            providerMessageId: message.id || null,
-            at: new Date().toISOString()
-          });
-        }
-        const { contact } = result;
-        if (result.created) createdContacts += 1;
-        else updatedContacts += 1;
-        await logsManager.create({
-          channel: 'whatsapp_cloud',
-          action: permissionGranted ? 'contact.permission_granted' : 'message.received',
-          message: permissionGranted
-            ? 'Permissao de notificacao para WhatsApp Web e Cloud recebida pelo WhatsApp Cloud'
-            : 'Mensagem WhatsApp Cloud recebida',
-          context: {
-            contactId: contact.id,
-            providerMessageId: message.id,
-            type: message.type,
-            ...(permissionGranted ? {
-              permissionChannels: ['whatsapp_web', 'whatsapp_cloud'],
-              permissionCommand,
-              permissionReceivedVia: 'whatsapp_cloud'
-            } : {})
-          }
-        });
-        const timestampMs = Number(message.timestamp) * 1000;
-        emit('whatsapp_cloud:message', {
-          contactId: contact.id,
-          providerMessageId: message.id || null,
-          from: address,
-          type: message.type || 'unknown',
-          text: message.text?.body ? String(message.text.body).slice(0, 2000) : null,
-          ...(invitationInvocation ? {
-            text: permissionCommand,
-            inviteAttributed: Boolean(invitationAttribution)
-          } : {}),
-          sentAt: Number.isFinite(timestampMs) && timestampMs > 0 ? new Date(timestampMs).toISOString() : new Date().toISOString()
-        });
       }
-      for (const receipt of value.statuses || []) {
-        receivedStatuses += 1;
-        const notificationsManager = require('./notifications.manager');
-        const storedReceipt = await notificationsManager.storeCloudReceipt(receipt);
-        let reconciliation;
-        try {
-          reconciliation = await notificationsManager.reconcileCloudReceipt({
-            ...receipt,
-            revisionToken: storedReceipt?.revisionToken
-          });
-        } catch (error) {
-          if (error.code !== 'WHATSAPP_CLOUD_RECEIPT_PROCESSING') throw error;
-          reconciliation = { matched: false, deferred: true, providerStatus: receipt.status };
-        }
-        if (reconciliation.matched) {
-          await notificationsManager.markCloudReceiptProcessed(receipt.id, storedReceipt?.revisionToken);
-        }
-        await logsManager.create({
-          level: receipt.status === 'failed' ? 'error' : 'info',
-          channel: 'whatsapp_cloud',
-          action: receipt.status === 'failed' ? 'notification.provider_failed' : 'message.status',
-          message: receipt.status === 'failed'
-            ? 'A Meta informou falha na entrega da mensagem'
-            : 'Status de mensagem WhatsApp atualizado',
-          context: {
-            providerMessageId: receipt.id,
-            status: receipt.status,
-            notificationId: reconciliation.notificationId || null,
-            deliveryStatus: reconciliation.deliveryStatus || null,
-            deferred: Boolean(reconciliation.deferred),
-            retryScheduled: Boolean(reconciliation.retryScheduled),
-            errors: reconciliation.errors || []
-          }
-        });
-      }
+      for (const key of Object.keys(result)) summary[key] += result[key];
+    } catch (error) {
+      await webhookEventsManager.markFailed(claim, error).catch(() => undefined);
+      throw error;
     }
   }
-  const summary = { receivedMessages, receivedStatuses, createdContacts, updatedContacts, at: new Date().toISOString() };
+
+  summary.duplicateDelivery = summary.claimedEvents === 0;
   emit('whatsapp_cloud:webhook', summary);
   return { received: true, ...summary };
 }

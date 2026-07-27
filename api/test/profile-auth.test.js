@@ -321,10 +321,10 @@ test('perfil rejeita LID conhecido como telefone editavel', async (context) => {
   restoreAfter(context, [[contactsManager, 'getById'], [contactsManager, 'update']]);
   contactsManager.getById = async () => ({
     ...profileContact(),
-    phone: '556181748795',
+    phone: '551131234567',
     channels: [{
       channel: 'whatsapp_web',
-      address: '274985348251713@lid',
+      address: '123456789012345@lid',
       authorized: true,
       consentStatus: 'granted'
     }]
@@ -333,7 +333,7 @@ test('perfil rejeita LID conhecido como telefone editavel', async (context) => {
   contactsManager.update = async () => { updated = true; };
 
   await assert.rejects(
-    () => profileManager.updateOwnProfile('507f1f77bcf86cd799439011', { phone: '274985348251713' }),
+    () => profileManager.updateOwnProfile('507f1f77bcf86cd799439011', { phone: '123456789012345' }),
     (error) => error.code === 'PROFILE_PHONE_PROVIDER_IDENTIFIER_INVALID'
   );
   assert.equal(updated, false);
@@ -347,7 +347,7 @@ test('links de ativacao usam numero runtime e adaptam comando configurado ao dee
   contactsManager.getById = async () => profileContact();
   settingsManager.getWhatsappPermissionCommand = async () => '/notify-me';
   settingsManager.getValue = async (key) => key === 'WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER'
-    ? '+1 (555) 182-2496'
+    ? '+1 (555) 000-1111'
     : null;
   telegramManager.status = async () => ({ configured: true, bot: { username: 'NotifyFlowBot' } });
 
@@ -357,7 +357,7 @@ test('links de ativacao usam numero runtime e adaptam comando configurado ao dee
   assert.equal(result.telegram.deepLinkCommand, '/start notify-me');
   assert.equal(result.telegram.url, 'https://t.me/NotifyFlowBot?start=notify-me');
   assert.match(result.telegram.explanation, /\/start notify-me/);
-  assert.equal(result.whatsapp.url, 'https://wa.me/15551822496?text=%2Fnotify-me');
+  assert.equal(result.whatsapp.url, 'https://wa.me/15550001111?text=%2Fnotify-me');
 });
 
 test('historico filtra delivery do contato e retorna grupos/templates sem dados de terceiros', async (context) => {

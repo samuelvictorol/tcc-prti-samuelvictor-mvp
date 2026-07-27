@@ -29,6 +29,66 @@ const REQUIRED = Object.freeze({
   whatsapp_web: []
 });
 
+const SENSITIVE_PREVIEW = '••••••••••••';
+
+const CHANNEL_REVEAL_FIELDS = Object.freeze({
+  telegram: Object.freeze({
+    botToken: 'TELEGRAM_BOT_TOKEN',
+    webhookSecret: 'TELEGRAM_WEBHOOK_SECRET'
+  }),
+  whatsappCloud: Object.freeze({
+    accessToken: 'WHATSAPP_CLOUD_ACCESS_TOKEN',
+    phoneNumberId: 'WHATSAPP_CLOUD_PHONE_NUMBER_ID',
+    displayPhoneNumber: 'WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER',
+    businessAccountId: 'WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID',
+    verifyToken: 'WHATSAPP_CLOUD_VERIFY_TOKEN',
+    appSecret: 'WHATSAPP_CLOUD_APP_SECRET',
+    apiVersion: 'WHATSAPP_CLOUD_API_VERSION'
+  }),
+  email: Object.freeze({
+    user: 'GMAIL_USER',
+    from: 'GMAIL_FROM',
+    fromName: 'GMAIL_FROM_NAME',
+    appPassword: 'GMAIL_APP_PASSWORD'
+  })
+});
+
+function maskedPreview(value) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) return null;
+  if (normalized.length <= 4) return '••••••••';
+  const visibleStart = Math.min(3, Math.max(1, Math.floor(normalized.length / 4)));
+  const visibleEnd = Math.min(4, Math.max(1, Math.floor(normalized.length / 4)));
+  return `${normalized.slice(0, visibleStart)}••••••••${normalized.slice(-visibleEnd)}`;
+}
+
+function isMaskedSentinel(value) {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim();
+  return /[•*]{4,}/u.test(normalized) || /^\[?(?:redacted|masked)\]?$/i.test(normalized);
+}
+
+function assertWritableValue(key, value, config) {
+  if (config.sensitive && isMaskedSentinel(value)) {
+    throw new ApiError(
+      422,
+      'Valor mascarado nao pode substituir uma credencial sensivel',
+      { key },
+      'MASKED_SECRET_NOT_ALLOWED'
+    );
+  }
+}
+
+function revealFields(channel) {
+  const fields = CHANNEL_REVEAL_FIELDS[channel];
+  if (!fields) {
+    throw new ApiError(400, 'Canal de configuracao desconhecido', {
+      allowedChannels: Object.keys(CHANNEL_REVEAL_FIELDS)
+    }, 'SETTING_CHANNEL_NOT_ALLOWED');
+  }
+  return fields;
+}
+
 function definition(key) {
   const normalized = String(key).toUpperCase();
   if (!DEFINITIONS[normalized]) throw new ApiError(400, 'Configuracao nao permitida: ' + normalized, null, 'SETTING_NOT_ALLOWED');
@@ -45,6 +105,7 @@ async function getValue(key) {
 async function setValue(key, value, actorId, options = {}) {
   const [normalized, config] = definition(key);
   if (config.internal && !options.internal) throw new ApiError(403, 'Configuracao reservada');
+  assertWritableValue(normalized, value, config);
   await Setting.updateOne({ key: normalized }, {
     $set: {
       valueEncrypted: encrypt(String(value)),
@@ -68,15 +129,31 @@ async function list() {
   return Object.entries(DEFINITIONS).filter(([, config]) => !config.internal).map(([key, config]) => {
     const runtime = byKey.get(key);
     const configured = Boolean(runtime || process.env[key]);
+    const readableValue = configured && !config.sensitive
+      ? (runtime ? decrypt(runtime.valueEncrypted) : process.env[key])
+      : null;
     return {
       key,
       channel: config.channel,
       sensitive: config.sensitive,
       configured,
       source: runtime ? 'runtime' : process.env[key] ? 'environment' : null,
-      value: configured && !config.sensitive ? (runtime ? decrypt(runtime.valueEncrypted) : process.env[key]) : undefined
+      preview: configured && config.sensitive ? SENSITIVE_PREVIEW : maskedPreview(readableValue),
+      value: configured && !config.sensitive ? readableValue : undefined
     };
   });
+}
+
+async function revealChannel(channel) {
+  const fields = revealFields(channel);
+  const entries = await Promise.all(Object.entries(fields).map(async ([field, key]) => {
+    const value = await getValue(key);
+    return value === null || value === undefined || value === '' ? null : [field, String(value)];
+  }));
+  return {
+    channel,
+    values: Object.fromEntries(entries.filter(Boolean))
+  };
 }
 
 async function channelConfigured(channel) {
@@ -119,18 +196,26 @@ async function setBulk(input, actorId) {
     'email.fromName': 'GMAIL_FROM_NAME',
     'email.appPassword': 'GMAIL_APP_PASSWORD'
   };
-  const updated = [];
+  const pending = [];
   for (const [path, key] of Object.entries(mapping)) {
     const value = path.split('.').reduce((current, part) => current?.[part], input);
     if (value === undefined || value === null || value === '') continue;
-    updated.push(await setValue(key, value, actorId));
+    const [normalized, config] = definition(key);
+    assertWritableValue(normalized, value, config);
+    pending.push({ key: normalized, value });
   }
+  const updated = [];
+  for (const item of pending) updated.push(await setValue(item.key, item.value, actorId));
   return { updated: updated.map((item) => item.key), configuration: await getStructured() };
 }
 
 async function getStructured() {
   const [items, channelStatuses] = await Promise.all([list(), statuses()]);
   const values = Object.fromEntries(items.map((item) => [item.key, item]));
+  const previewsFor = (channel) => Object.fromEntries(
+    Object.entries(revealFields(channel))
+      .map(([field, key]) => [field, values[key]?.preview || null])
+  );
   const permissionCommand = values.START_NOTIFY_WHATSAPP_PERMISSION?.value
     || process.env.START_NOTIFY_WHATSAPP_PERMISSION
     || '/notify-me';
@@ -142,6 +227,7 @@ async function getStructured() {
       configured: channelStatuses.telegram.configured,
       botTokenConfigured: values.TELEGRAM_BOT_TOKEN?.configured || false,
       webhookSecretConfigured: values.TELEGRAM_WEBHOOK_SECRET?.configured || false,
+      previews: previewsFor('telegram'),
       permissionCommand: telegramPermissionCommand
     },
     telegramPermission: { command: telegramPermissionCommand },
@@ -164,6 +250,7 @@ async function getStructured() {
       webhookSignatureConfigured: values.WHATSAPP_CLOUD_APP_SECRET?.configured || false,
       webhookConfigured: Boolean(values.WHATSAPP_CLOUD_VERIFY_TOKEN?.configured && values.WHATSAPP_CLOUD_APP_SECRET?.configured),
       apiVersion: values.WHATSAPP_CLOUD_API_VERSION?.value || process.env.WHATSAPP_CLOUD_API_VERSION || null,
+      previews: previewsFor('whatsappCloud'),
       permissionCommand
     },
     email: {
@@ -171,7 +258,8 @@ async function getStructured() {
       user: values.GMAIL_USER?.value || null,
       from: values.GMAIL_FROM?.value || null,
       fromName: values.GMAIL_FROM_NAME?.value || null,
-      appPasswordConfigured: values.GMAIL_APP_PASSWORD?.configured || false
+      appPasswordConfigured: values.GMAIL_APP_PASSWORD?.configured || false,
+      previews: previewsFor('email')
     },
     items
   };
@@ -204,5 +292,6 @@ async function isTelegramPermissionCommand(value) {
 module.exports = {
   DEFINITIONS, getValue, setValue, remove, list, setBulk, getStructured, channelConfigured, statuses,
   getWhatsappPermissionCommand, isWhatsappPermissionCommand, getTelegramPermissionCommand,
-  isTelegramPermissionCommand, normalizeWhatsappPermissionText
+  isTelegramPermissionCommand, normalizeWhatsappPermissionText, CHANNEL_REVEAL_FIELDS,
+  SENSITIVE_PREVIEW, maskedPreview, isMaskedSentinel, revealChannel
 };

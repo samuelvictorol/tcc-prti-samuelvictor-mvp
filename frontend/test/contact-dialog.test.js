@@ -16,7 +16,7 @@ describe('autorizações manuais do contato', () => {
       consents: { whatsappCloud: true },
     })).toContain('Informe um telefone')
     expect(contactAuthorizationValidation({
-      phone: '5561981748795',
+      phone: '5511931234567',
       consents: { whatsappCloud: true },
     })).toBeNull()
   })

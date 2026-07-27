@@ -24,9 +24,9 @@ describe('convites públicos e documentos LGPD', () => {
   })
 
   it('gera ações oficiais de WhatsApp e Telegram a partir das configurações detectadas', () => {
-    expect(normalizeWhatsappDisplayPhone('+55 (61) 98174-8795')).toBe('5561981748795')
-    expect(buildWhatsappInviteUrl('+55 (61) 98174-8795', '/notify-me'))
-      .toBe('https://wa.me/5561981748795?text=%2Fnotify-me')
+    expect(normalizeWhatsappDisplayPhone('+55 (11) 93123-4567')).toBe('5511931234567')
+    expect(buildWhatsappInviteUrl('+55 (11) 93123-4567', '/notify-me'))
+      .toBe('https://wa.me/5511931234567?text=%2Fnotify-me')
     expect(buildWhatsappInviteUrl('', '/quero alertas'))
       .toBe('https://wa.me/?text=%2Fquero%20alertas')
     expect(buildTelegramInviteUrl('@Notify_App_Bot')).toBe('https://t.me/Notify_App_Bot?start=notify-me')
@@ -34,11 +34,11 @@ describe('convites públicos e documentos LGPD', () => {
       .toBe('https://t.me/Notify_App_Bot?start=quero-alertas')
     expect(buildTelegramInviteUrl('inválido')).toBe('')
     expect(defaultInviteActionLink('whatsapp_cloud', {
-      whatsappPhoneNumber: '5561981748795',
+      whatsappPhoneNumber: '5511931234567',
       whatsappPermissionCommand: '/notify-me',
     })).toMatchObject({
       label: 'Autorizar WhatsApp',
-      url: 'https://wa.me/5561981748795?text=%2Fnotify-me',
+      url: 'https://wa.me/5511931234567?text=%2Fnotify-me',
       channel: 'whatsapp_cloud',
       _generated: true,
     })

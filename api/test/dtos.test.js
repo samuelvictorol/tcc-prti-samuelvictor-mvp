@@ -162,8 +162,8 @@ test('settings bulk aceita comando separado do onboarding Telegram', () => {
 test('settings bulk normaliza o numero publico do WhatsApp sem confundir com Phone Number ID', () => {
   const valid = bulkSettingsSchema.safeParse({ body: {
     whatsappCloud: {
-      phoneNumberId: '1273327629189888',
-      displayPhoneNumber: '+55 (61) 98174-8795'
+      phoneNumberId: '1000000000000001',
+      displayPhoneNumber: '+55 (11) 93123-4567'
     }
   } });
   const invalid = bulkSettingsSchema.safeParse({ body: {
@@ -171,8 +171,8 @@ test('settings bulk normaliza o numero publico do WhatsApp sem confundir com Pho
   } });
 
   assert.equal(valid.success, true);
-  assert.equal(valid.data.body.whatsappCloud.phoneNumberId, '1273327629189888');
-  assert.equal(valid.data.body.whatsappCloud.displayPhoneNumber, '5561981748795');
+  assert.equal(valid.data.body.whatsappCloud.phoneNumberId, '1000000000000001');
+  assert.equal(valid.data.body.whatsappCloud.displayPhoneNumber, '5511931234567');
   assert.equal(invalid.success, false);
   assert.equal(settingsManager.DEFINITIONS.WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER.sensitive, false);
 });
@@ -185,14 +185,14 @@ test('numero publico do WhatsApp e persistido criptografado mesmo sendo legivel 
 
   const result = await settingsManager.setValue(
     'WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER',
-    '5561981748795',
+    '5511931234567',
     '507f1f77bcf86cd799439011'
   );
 
   assert.equal(result.sensitive, false);
   assert.equal(update[0].key, 'WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER');
   assert.match(update[1].$set.valueEncrypted, /^enc:v1:/);
-  assert.equal(update[1].$set.valueEncrypted.includes('5561981748795'), false);
+  assert.equal(update[1].$set.valueEncrypted.includes('5511931234567'), false);
 });
 
 test('comando de permissao WhatsApp e comparado de forma exata sem diferenciar maiusculas', async (context) => {

@@ -15,8 +15,8 @@ function contactFixture(identity) {
     displayNameEncrypted: encrypt('Samuel'),
     displayNameHash: searchHash('samuel'),
     displayNameSource: 'whatsapp_cloud',
-    phoneEncrypted: encrypt('556181748795'),
-    phoneHash: searchHash('556181748795'),
+    phoneEncrypted: encrypt('551131234567'),
+    phoneHash: searchHash('551131234567'),
     channelAvatars: [],
     channels: Array.isArray(identity) ? identity : [identity],
     pendingWhatsappConsents: [],
@@ -29,7 +29,7 @@ function contactFixture(identity) {
 }
 
 function webIdentityFixture(overrides = {}) {
-  const address = overrides.address || '556181748795@c.us';
+  const address = overrides.address || '551131234567@c.us';
   return {
     _id: '507f1f77bcf86cd799439013',
     channel: 'whatsapp_web',
@@ -44,7 +44,7 @@ function webIdentityFixture(overrides = {}) {
 }
 
 function identityFixture(overrides = {}) {
-  const address = overrides.address || '556181748795';
+  const address = overrides.address || '551131234567';
   return {
     _id: '507f1f77bcf86cd799439012',
     channel: 'whatsapp_cloud',
@@ -81,7 +81,7 @@ test('cadastro manual sempre cria identidade unknown e remove proveniencia reser
     displayName: 'Samuel',
     channels: [{
       channel: 'whatsapp_cloud',
-      address: '556181748795',
+      address: '551131234567',
       authorized: true,
       consentStatus: 'granted',
       source: 'automatic_permission_command',
@@ -133,7 +133,7 @@ test('criacao automatica nao efetiva grant se auditoria falhar e retry consegue 
   };
   const input = {
     channel: 'whatsapp_cloud',
-    address: '556181748795',
+    address: '551131234567',
     displayName: 'Samuel',
     source: 'whatsapp_cloud_permission_command',
     authorize: true,
@@ -170,7 +170,7 @@ test('inbound comum preserva proveniencia do comando e mescla metadata do proved
     consentCommand: '/notify-me',
     consentChangedAt: changedAt,
     consentChangedBy: null,
-    metadataEncrypted: encrypt({ waId: '556181748795', permissionCommandReceived: true })
+    metadataEncrypted: encrypt({ waId: '551131234567', permissionCommandReceived: true })
   });
   const contact = contactFixture(identity);
   Contact.findOne = () => selected(contact);
@@ -179,8 +179,8 @@ test('inbound comum preserva proveniencia do comando e mescla metadata do proved
 
   const result = await contactsManager.upsertFromChannel({
     channel: 'whatsapp_cloud',
-    address: '556181748795',
-    phone: '556181748795',
+    address: '551131234567',
+    phone: '551131234567',
     displayName: 'Samuel atualizado',
     source: 'whatsapp_cloud_webhook',
     authorize: false,
@@ -210,8 +210,8 @@ test('comando promove identidade unknown uma unica vez e registra evidencia', as
 
   await contactsManager.upsertFromChannel({
     channel: 'whatsapp_cloud',
-    address: '556181748795',
-    phone: '556181748795',
+    address: '551131234567',
+    phone: '551131234567',
     source: 'whatsapp_cloud_permission_command',
     authorize: true,
     consentStatus: 'granted',
@@ -222,8 +222,8 @@ test('comando promove identidade unknown uma unica vez e registra evidencia', as
   const firstChangedAt = identity.consentChangedAt;
   await contactsManager.upsertFromChannel({
     channel: 'whatsapp_cloud',
-    address: '556181748795',
-    phone: '556181748795',
+    address: '551131234567',
+    phone: '551131234567',
     source: 'whatsapp_cloud_permission_command',
     authorize: true,
     consentStatus: 'granted',
@@ -246,7 +246,7 @@ test('comando promove identidade unknown uma unica vez e registra evidencia', as
 test('PUT generico nao altera consentimento nem permite forjar sua origem', async (context) => {
   const original = Contact.findById;
   context.after(() => { Contact.findById = original; });
-  const address = '556181748795';
+  const address = '551131234567';
   const identity = identityFixture({
     authorized: true,
     consentStatus: 'granted',
@@ -255,7 +255,7 @@ test('PUT generico nao altera consentimento nem permite forjar sua origem', asyn
     consentCommand: '/notify-me',
     consentChangedAt: new Date('2026-07-21T12:00:00.000Z'),
     metadataEncrypted: encrypt({
-      waId: '556181748795',
+      waId: '551131234567',
       consentSource: 'automatic_permission_command',
       permissionCommandReceived: true,
       autoRegisteredVia: 'whatsapp_cloud'
@@ -392,13 +392,13 @@ for (const scenario of [
   {
     label: 'WhatsApp Web',
     sourceChannel: 'whatsapp_web',
-    address: '556181748795@c.us',
+    address: '551131234567@c.us',
     source: 'whatsapp_web_permission_command'
   },
   {
     label: 'WhatsApp Cloud',
     sourceChannel: 'whatsapp_cloud',
-    address: '556181748795',
+    address: '551131234567',
     source: 'whatsapp_cloud_permission_command'
   }
 ]) {
@@ -422,7 +422,7 @@ for (const scenario of [
     const result = await contactsManager.upsertFromChannel({
       channel: scenario.sourceChannel,
       address: scenario.address,
-      phone: '556181748795',
+      phone: '551131234567',
       displayName: 'Samuel',
       source: scenario.source,
       authorize: true,
@@ -472,8 +472,8 @@ test('canal ausente recebe grant pendente sem destino inventado e o consome ao s
 
   const commandResult = await contactsManager.upsertFromChannel({
     channel: 'whatsapp_web',
-    address: '556181748795@c.us',
-    phone: '556181748795',
+    address: '551131234567@c.us',
+    phone: '551131234567',
     displayName: 'Samuel',
     source: 'whatsapp_web_permission_command',
     authorize: true,
@@ -503,15 +503,15 @@ test('canal ausente recebe grant pendente sem destino inventado e o consome ao s
 
   const discovered = await contactsManager.upsertFromChannel({
     channel: 'whatsapp_cloud',
-    address: '556181748795',
-    phone: '556181748795',
+    address: '551131234567',
+    phone: '551131234567',
     displayName: 'Samuel',
     source: 'whatsapp_cloud_webhook',
-    metadata: { waId: '556181748795' }
+    metadata: { waId: '551131234567' }
   });
 
   const cloud = discovered.channels.find((identity) => identity.channel === 'whatsapp_cloud');
-  assert.equal(cloud.address, '556181748795');
+  assert.equal(cloud.address, '551131234567');
   assert.equal(cloud.authorized, true);
   assert.equal(cloud.consentStatus, 'granted');
   assert.equal(cloud.consentSource, 'automatic_permission_command');

@@ -1,4 +1,4 @@
-const editableSettings = Object.freeze({
+export const channelCredentialFields = Object.freeze({
   telegram: ['botToken', 'webhookSecret'],
   whatsappWeb: ['sessionTtlDays'],
   whatsappCloud: ['accessToken', 'phoneNumberId', 'displayPhoneNumber', 'businessAccountId', 'verifyToken', 'appSecret', 'apiVersion'],
@@ -21,22 +21,39 @@ export function generateSecureWebhookSecret(cryptoApi = globalThis.crypto, byteL
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-export function compactChannelSettings(channel, values = {}) {
-  const allowed = editableSettings[channel] || []
+export function channelCredentialPreviews(channel, configuration = {}) {
+  const allowed = channelCredentialFields[channel] || []
+  const previews = configuration?.previews || {}
+  return Object.fromEntries(allowed.map((key) => [key, String(previews[key] || '')]))
+}
+
+export function mergeRevealedChannelValues(channel, revealed = {}, current = {}) {
+  const allowed = channelCredentialFields[channel] || []
+  return Object.fromEntries(allowed.map((key) => {
+    const draft = current?.[key]
+    const hasDraft = typeof draft === 'string' && draft.trim() && !isMaskedSecret(draft)
+    return [key, hasDraft ? draft : String(revealed?.[key] ?? '')]
+  }))
+}
+
+export function compactChannelSettings(channel, values = {}, baseline = {}) {
+  const allowed = channelCredentialFields[channel] || []
   return Object.fromEntries(allowed.flatMap((key) => {
     const value = values?.[key]
     if (value === undefined || value === null) return []
     if (typeof value === 'string') {
       const normalized = value.trim()
       if (!normalized || isMaskedSecret(normalized)) return []
+      if (String(baseline?.[key] ?? '').trim() === normalized) return []
       return [[key, normalized]]
     }
+    if (baseline?.[key] === value) return []
     return [[key, value]]
   }))
 }
 
-export function channelSettingsPayload(channel, values) {
-  const settings = compactChannelSettings(channel, values)
+export function channelSettingsPayload(channel, values, baseline = {}) {
+  const settings = compactChannelSettings(channel, values, baseline)
   return Object.keys(settings).length ? { [channel]: settings } : null
 }
 

@@ -25,22 +25,22 @@ describe('identidades exibidas dos provedores', () => {
   it('expõe IDs da Cloud e do WhatsApp Web sem inventar user_id ausente', () => {
     expect(identityIdentifiers({
       channel: 'whatsapp_cloud',
-      address: '5561981748795',
-      metadata: { waId: '5561981748795', userId: 'BR.123', phoneNumberId: 'phone-1' },
+      address: '5511931234567',
+      metadata: { waId: '5511931234567', userId: 'BR.123', phoneNumberId: 'phone-1' },
     })).toEqual(expect.arrayContaining([
-      expect.objectContaining({ key: 'waId', value: '5561981748795' }),
+      expect.objectContaining({ key: 'waId', value: '5511931234567' }),
       expect.objectContaining({ key: 'userId', value: 'BR.123' }),
       expect.objectContaining({ key: 'phoneNumberId', value: 'phone-1' }),
     ]))
 
     expect(identityIdentifiers({
       channel: 'whatsapp_web',
-      address: '5561981748795@c.us',
-      metadata: { contactUser: '5561981748795' },
+      address: '5511931234567@c.us',
+      metadata: { contactUser: '5511931234567' },
     })).toEqual(expect.arrayContaining([
-      expect.objectContaining({ key: 'chatId', value: '5561981748795@c.us' }),
-      expect.objectContaining({ key: 'contactId', value: '5561981748795@c.us' }),
-      expect.objectContaining({ key: 'contactUser', value: '5561981748795' }),
+      expect.objectContaining({ key: 'chatId', value: '5511931234567@c.us' }),
+      expect.objectContaining({ key: 'contactId', value: '5511931234567@c.us' }),
+      expect.objectContaining({ key: 'contactUser', value: '5511931234567' }),
     ]))
   })
 

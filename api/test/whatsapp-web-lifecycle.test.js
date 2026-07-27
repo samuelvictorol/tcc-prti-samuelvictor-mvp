@@ -237,10 +237,10 @@ test('shim restaura _serialized a partir de $1 nos identificadores da versao atu
 
   await webService.ensureCompatibility(target);
 
-  const rawKey = new FakeMsgKey('false_274985348251713@lid_ABC123');
-  assert.equal(rawKey._serialized, 'false_274985348251713@lid_ABC123');
-  const serialized = page.WWebJS.getMessageModel({ id: { $1: 'false_274985348251713@lid_DEF456' } });
-  assert.equal(serialized.id._serialized, 'false_274985348251713@lid_DEF456');
+  const rawKey = new FakeMsgKey('false_123456789012345@lid_ABC123');
+  assert.equal(rawKey._serialized, 'false_123456789012345@lid_ABC123');
+  const serialized = page.WWebJS.getMessageModel({ id: { $1: 'false_123456789012345@lid_DEF456' } });
+  assert.equal(serialized.id._serialized, 'false_123456789012345@lid_DEF456');
 });
 
 test('service limita avatar travado no evento inbound sem acionar fallback lento', async (context) => {

@@ -7,6 +7,7 @@ const logsManager = require('../src/managers/logs.manager');
 const contactsManager = require('../src/managers/contacts.manager');
 const adminNotificationsManager = require('../src/managers/admin-notifications.manager');
 const whatsappCloudManager = require('../src/managers/whatsapp-cloud.manager');
+const webhookEventsManager = require('../src/managers/whatsapp-cloud-webhook-events.manager');
 const whatsappCloudController = require('../src/controllers/whatsapp-cloud.controller');
 const templatesManager = require('../src/managers/templates.manager');
 const notificationsManager = require('../src/managers/notifications.manager');
@@ -19,6 +20,38 @@ function restoreAfter(context, overrides) {
   context.after(() => {
     for (const [target, key, original] of originals) target[key] = original;
   });
+}
+
+function stubWebhookPersistence(context) {
+  restoreAfter(context, [
+    [webhookEventsManager, 'persistPayload'],
+    [webhookEventsManager, 'claimEvent'],
+    [webhookEventsManager, 'markProcessed'],
+    [webhookEventsManager, 'markFailed']
+  ]);
+  webhookEventsManager.persistPayload = async (payload) => {
+    const descriptors = webhookEventsManager.extractEvents(payload);
+    const events = descriptors.map((descriptor, index) => ({
+      id: '507f1f77bcf86cd7994391' + index,
+      field: descriptor.field,
+      eventType: webhookEventsManager.eventTypeFor(descriptor.field, descriptor.value),
+      summary: webhookEventsManager.buildSummary(descriptor.field, descriptor.value),
+      processingStatus: 'received',
+      created: true
+    }));
+    return {
+      events,
+      workItems: descriptors.map((descriptor, index) => ({
+        eventId: events[index].id,
+        descriptor
+      })),
+      createdCount: events.length,
+      duplicateCount: 0
+    };
+  };
+  webhookEventsManager.claimEvent = async (eventId) => ({ id: eventId, token: 'claim-token' });
+  webhookEventsManager.markProcessed = async () => true;
+  webhookEventsManager.markFailed = async () => true;
 }
 
 test('canal fica disponivel para envio sem depender das credenciais de webhook', async (context) => {
@@ -101,6 +134,7 @@ test('controller aceita parametros hub sanitizados com underscore', async (conte
 });
 
 test('POST do webhook valida somente com App Secret', async (context) => {
+  stubWebhookPersistence(context);
   restoreAfter(context, [[settingsManager, 'getValue']]);
   const rawBody = Buffer.from('{"object":"whatsapp_business_account","entry":[]}');
   const appSecret = 'app-secret-only';
@@ -126,7 +160,7 @@ test('envio oficial usa apenas credenciais de envio e normaliza telefone para di
   context.after(() => { global.fetch = originalFetch; });
   const values = {
     WHATSAPP_CLOUD_ACCESS_TOKEN: 'access',
-    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1273327629189888',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
     WHATSAPP_CLOUD_API_VERSION: 'v25.0'
   };
   settingsManager.getValue = async (key) => values[key] || null;
@@ -138,7 +172,7 @@ test('envio oficial usa apenas credenciais de envio e normaliza telefone para di
   };
 
   const result = await whatsappCloudManager.send({
-    destination: '+55 (61) 98174-8795',
+    destination: '+55 (11) 93123-4567',
     allowUnconsented: true,
     officialTemplate: {
       preset: 'order_confirmation',
@@ -147,7 +181,7 @@ test('envio oficial usa apenas credenciais de envio e normaliza telefone para di
   });
 
   assert.equal(result.providerMessageId, 'wamid.confirmation');
-  assert.equal(request.url, 'https://graph.facebook.com/v25.0/1273327629189888/messages');
+  assert.equal(request.url, 'https://graph.facebook.com/v25.0/1000000000000001/messages');
   assert.equal(request.headers.authorization, 'Bearer access');
   assert.deepEqual(request.body, {
     type: 'template',
@@ -165,7 +199,7 @@ test('envio oficial usa apenas credenciais de envio e normaliza telefone para di
     },
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to: '5561981748795'
+    to: '5511931234567'
   });
 });
 
@@ -186,7 +220,7 @@ test('templates oficiais sem parametros omitem components', async (context) => {
   };
 
   for (const preset of ['plain_text', 'hello_world']) {
-    await whatsappCloudManager.send({ destination: '5561981748795', allowUnconsented: true, officialTemplate: { preset } });
+    await whatsappCloudManager.send({ destination: '5511931234567', allowUnconsented: true, officialTemplate: { preset } });
   }
   assert.deepEqual(sent.map((payload) => payload.template), [
     { name: 'jaspers_market_plain_text_v1', language: { code: 'en_US' } },
@@ -195,7 +229,7 @@ test('templates oficiais sem parametros omitem components', async (context) => {
 });
 
 test('contrato amigavel valida os tres presets sem payload JSON manual', () => {
-  const destination = '5561981748795';
+  const destination = '5511931234567';
   assert.equal(channelSendSchema.safeParse({ body: {
     destination,
     officialTemplate: {
@@ -455,6 +489,7 @@ test('copy_code exige coupon_code enquanto quick_reply preserva payload', () => 
 });
 
 test('webhook Cloud vincula payload Meta e concede somente ao receber o comando', async (context) => {
+  stubWebhookPersistence(context);
   restoreAfter(context, [
     [settingsManager, 'getValue'], [settingsManager, 'isWhatsappPermissionCommand'], [contactsManager, 'findByChannelAddress'], [contactsManager, 'findByChannelOrPhone'], [contactsManager, 'upsertFromChannel'],
     [logsManager, 'create'], [adminNotificationsManager, 'create'], [notificationsManager, 'reconcileCloudReceipt']
@@ -474,10 +509,10 @@ test('webhook Cloud vincula payload Meta e concede somente ao receber o comando'
   let adminNotification;
   adminNotificationsManager.create = async (input) => { adminNotification = input; return {}; };
   const payload = {
-    entry: [{ id: '4424939574412010', changes: [{ value: {
-      metadata: { display_phone_number: '15551822496', phone_number_id: '1273327629189888' },
-      contacts: [{ user_id: 'BR.28770155782584312', country_code: 'BR', profile: { name: 'Samuel', avatar_url: 'https://example.com/avatar.jpg' } }],
-      messages: [{ id: 'wamid.inbound', from: '556181748795', from_user_id: 'BR.28770155782584312', from_logical_id: '274985348251713', type: 'text', text: { body: '/notify-me' }, timestamp: '1784605483' }]
+    entry: [{ id: '1000000000000002', changes: [{ value: {
+      metadata: { display_phone_number: '15550001111', phone_number_id: '1000000000000001' },
+      contacts: [{ user_id: 'BR.12345678901234567', country_code: 'BR', profile: { name: 'Samuel', avatar_url: 'https://example.com/avatar.jpg' } }],
+      messages: [{ id: 'wamid.inbound', from: '551131234567', from_user_id: 'BR.12345678901234567', from_logical_id: '123456789012345', type: 'text', text: { body: '/notify-me' }, timestamp: '1784605483' }]
     } }] }]
   };
   const rawBody = Buffer.from(JSON.stringify(payload));
@@ -486,8 +521,8 @@ test('webhook Cloud vincula payload Meta e concede somente ao receber o comando'
   const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
   assert.equal(result.createdContacts, 1);
   assert.equal(result.receivedMessages, 1);
-  assert.equal(upsertInput.address, '556181748795');
-  assert.equal(upsertInput.phone, '556181748795');
+  assert.equal(upsertInput.address, '551131234567');
+  assert.equal(upsertInput.phone, '551131234567');
   assert.equal(upsertInput.displayName, 'Samuel');
   assert.equal(upsertInput.avatarUrl, 'https://example.com/avatar.jpg');
   assert.equal(upsertInput.authorize, true);
@@ -497,11 +532,11 @@ test('webhook Cloud vincula payload Meta e concede somente ao receber o comando'
   assert.equal(upsertInput.shareWhatsappConsent, true);
   assert.equal(upsertInput.metadata.permissionCommandReceivedVia, 'whatsapp_cloud');
   assert.equal(upsertInput.metadata.sharedWhatsappConsent, true);
-  assert.equal(upsertInput.metadata.userId, 'BR.28770155782584312');
-  assert.equal(upsertInput.metadata.fromUserId, 'BR.28770155782584312');
-  assert.equal(upsertInput.metadata.fromLogicalId, '274985348251713');
-  assert.equal(upsertInput.metadata.businessAccountId, '4424939574412010');
-  assert.equal(upsertInput.metadata.phoneNumberId, '1273327629189888');
+  assert.equal(upsertInput.metadata.userId, 'BR.12345678901234567');
+  assert.equal(upsertInput.metadata.fromUserId, 'BR.12345678901234567');
+  assert.equal(upsertInput.metadata.fromLogicalId, '123456789012345');
+  assert.equal(upsertInput.metadata.businessAccountId, '1000000000000002');
+  assert.equal(upsertInput.metadata.phoneNumberId, '1000000000000001');
   assert.ok(actions.includes('contact.auto_created'));
   assert.ok(actions.includes('contact.permission_granted'));
   assert.equal(adminNotification.channel, 'whatsapp_cloud');
@@ -509,6 +544,7 @@ test('webhook Cloud vincula payload Meta e concede somente ao receber o comando'
 });
 
 test('webhook Cloud salva novo usuario como unknown sem o comando de permissao', async (context) => {
+  stubWebhookPersistence(context);
   restoreAfter(context, [
     [settingsManager, 'getValue'], [settingsManager, 'isWhatsappPermissionCommand'],
     [contactsManager, 'findByChannelAddress'], [contactsManager, 'findByChannelOrPhone'], [contactsManager, 'upsertFromChannel'],
@@ -534,8 +570,8 @@ test('webhook Cloud salva novo usuario como unknown sem o comando de permissao',
   logsManager.create = async (input) => { actions.push(input.action); return {}; };
   const payload = {
     entry: [{ changes: [{ value: {
-      contacts: [{ wa_id: '556181748795', profile: { name: 'Samuel' } }],
-      messages: [{ id: 'wamid.without-permission', from: '556181748795', type: 'text', text: { body: 'Ola' } }]
+      contacts: [{ wa_id: '551131234567', profile: { name: 'Samuel' } }],
+      messages: [{ id: 'wamid.without-permission', from: '551131234567', type: 'text', text: { body: 'Ola' } }]
     } }] }]
   };
   const rawBody = Buffer.from(JSON.stringify(payload));
@@ -554,6 +590,7 @@ test('webhook Cloud salva novo usuario como unknown sem o comando de permissao',
 });
 
 test('webhook Cloud contact-only nao cadastra contato nem concede opt-in', async (context) => {
+  stubWebhookPersistence(context);
   restoreAfter(context, [
     [settingsManager, 'getValue'], [contactsManager, 'findByChannelAddress'], [contactsManager, 'upsertFromChannel'],
     [logsManager, 'create'], [adminNotificationsManager, 'create'], [notificationsManager, 'reconcileCloudReceipt']
@@ -578,7 +615,7 @@ test('webhook Cloud contact-only nao cadastra contato nem concede opt-in', async
   const payload = {
     entry: [{ changes: [{ value: {
       metadata: { phone_number_id: 'phone-id' },
-      contacts: [{ wa_id: '556181748795', profile: { name: 'Samuel' } }],
+      contacts: [{ wa_id: '551131234567', profile: { name: 'Samuel' } }],
       statuses: [{ id: 'wamid.status', status: 'delivered' }]
     } }] }]
   };
@@ -595,6 +632,7 @@ test('webhook Cloud contact-only nao cadastra contato nem concede opt-in', async
 });
 
 test('webhook Cloud trata canal anexado por telefone como identidade nova, nao contato novo', async (context) => {
+  stubWebhookPersistence(context);
   restoreAfter(context, [
     [settingsManager, 'getValue'], [settingsManager, 'isWhatsappPermissionCommand'], [contactsManager, 'findByChannelAddress'], [contactsManager, 'findByChannelOrPhone'], [contactsManager, 'upsertFromChannel'],
     [logsManager, 'create'], [adminNotificationsManager, 'create']
@@ -605,7 +643,7 @@ test('webhook Cloud trata canal anexado por telefone como identidade nova, nao c
   contactsManager.findByChannelAddress = async () => null;
   contactsManager.findByChannelOrPhone = async () => ({
     id: '507f1f77bcf86cd799439011',
-    channels: [{ channel: 'whatsapp_web', address: '556181748795@c.us', authorized: true, consentStatus: 'granted' }]
+    channels: [{ channel: 'whatsapp_web', address: '551131234567@c.us', authorized: true, consentStatus: 'granted' }]
   });
   contactsManager.upsertFromChannel = async (input) => ({
     id: '507f1f77bcf86cd799439011',
@@ -619,8 +657,8 @@ test('webhook Cloud trata canal anexado por telefone como identidade nova, nao c
   adminNotificationsManager.create = async () => { adminNotifications += 1; return {}; };
   const payload = {
     entry: [{ changes: [{ value: {
-      contacts: [{ wa_id: '556181748795', profile: { name: 'Samuel' } }],
-      messages: [{ id: 'wamid.inbound', from: '556181748795', type: 'text', text: { body: '/notify-me' } }]
+      contacts: [{ wa_id: '551131234567', profile: { name: 'Samuel' } }],
+      messages: [{ id: 'wamid.inbound', from: '551131234567', type: 'text', text: { body: '/notify-me' } }]
     } }] }]
   };
   const rawBody = Buffer.from(JSON.stringify(payload));
@@ -637,7 +675,7 @@ test('webhook Cloud trata canal anexado por telefone como identidade nova, nao c
 });
 
 test('numero Meta rejeita destino sem DDI ou acima do limite E.164', () => {
-  assert.equal(whatsappCloudManager.normalizeMetaDestination('+55-61-98174-8795'), '5561981748795');
+  assert.equal(whatsappCloudManager.normalizeMetaDestination('+55-11-93123-4567'), '5511931234567');
   assert.throws(() => whatsappCloudManager.normalizeMetaDestination('123'), (error) => error.code === 'WHATSAPP_DESTINATION_INVALID');
   assert.throws(() => whatsappCloudManager.normalizeMetaDestination('1234567890123456'), (error) => error.code === 'WHATSAPP_DESTINATION_INVALID');
 });

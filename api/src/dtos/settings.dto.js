@@ -16,6 +16,12 @@ const deleteSettingSchema = z.object({
   params: z.object({ key: z.string().min(2).max(100).regex(/^[A-Za-z0-9_]+$/) })
 });
 
+const revealSettingsSchema = z.object({
+  params: z.object({
+    channel: z.enum(['telegram', 'whatsappCloud', 'email'])
+  })
+});
+
 const whatsappPermissionCommand = optionalField(
   z.string().trim().min(1).max(100).refine(
     (value) => ![...value].some((character) => {
@@ -70,4 +76,10 @@ const bulkSettingsSchema = z.object({
   }).refine((body) => Object.keys(body).length > 0)
 });
 
-module.exports = { updateSettingSchema, deleteSettingSchema, bulkSettingsSchema, whatsappDisplayPhoneNumber };
+module.exports = {
+  updateSettingSchema,
+  deleteSettingSchema,
+  revealSettingsSchema,
+  bulkSettingsSchema,
+  whatsappDisplayPhoneNumber
+};

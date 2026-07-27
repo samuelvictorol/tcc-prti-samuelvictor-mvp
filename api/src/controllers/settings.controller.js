@@ -1,5 +1,12 @@
 const settingsManager = require('../managers/settings.manager');
 const telegramManager = require('../managers/telegram.manager');
+const logsManager = require('../managers/logs.manager');
+
+const AUDIT_CHANNELS = Object.freeze({
+  telegram: 'telegram',
+  whatsappCloud: 'whatsapp_cloud',
+  email: 'email'
+});
 
 async function enrichTelegram(configuration, options = {}) {
   const telegram = await telegramManager.status({ probe: options.probe !== false, force: Boolean(options.force) });
@@ -17,6 +24,24 @@ async function list(_req, res) {
 async function statuses(_req, res) {
   const channelStatuses = await settingsManager.statuses();
   res.json({ success: true, data: await enrichTelegram(channelStatuses, { probe: false }) });
+}
+
+async function reveal(req, res) {
+  const channel = req.validated.params.channel;
+  const data = await settingsManager.revealChannel(channel);
+  await logsManager.create({
+    level: 'info',
+    channel: AUDIT_CHANNELS[channel] || 'system',
+    action: 'settings.credentials_revealed',
+    message: 'Administrador consultou credenciais salvas do canal',
+    actor: req.admin.id,
+    requestId: req.id,
+    context: { settingsChannel: channel }
+  });
+  res.set('Cache-Control', 'no-store, max-age=0');
+  res.set('Pragma', 'no-cache');
+  res.vary('Authorization');
+  res.json({ success: true, data });
 }
 
 async function update(req, res) {
@@ -42,4 +67,4 @@ async function remove(req, res) {
   res.json({ success: true, data });
 }
 
-module.exports = { list, statuses, update, updateBulk, remove };
+module.exports = { list, statuses, reveal, update, updateBulk, remove };

@@ -9,32 +9,32 @@ import {
 
 describe('identificador do login de perfil', () => {
   it('formata telefones brasileiros de dez e onze dígitos', () => {
-    expect(formatBrazilianProfilePhone('6181748795')).toBe('(61) 8174-8795')
-    expect(formatBrazilianProfilePhone('61981748795')).toBe('(61) 9 8174-8795')
+    expect(formatBrazilianProfilePhone('1131234567')).toBe('(11) 3123-4567')
+    expect(formatBrazilianProfilePhone('11931234567')).toBe('(11) 9 3123-4567')
   })
 
   it('mantém a formatação durante a digitação e envia o país para a API', () => {
-    const input = updateProfileIdentifierInput('61981748795')
+    const input = updateProfileIdentifierInput('11931234567')
 
-    expect(input).toEqual({ mode: 'phone', value: '(61) 9 8174-8795' })
+    expect(input).toEqual({ mode: 'phone', value: '(11) 9 3123-4567' })
     expect(profileIdentifierRule(input.value, input.mode)).toBe(true)
-    expect(normalizeProfileIdentifierForRequest(input.value, input.mode)).toBe('5561981748795')
+    expect(normalizeProfileIdentifierForRequest(input.value, input.mode)).toBe('5511931234567')
   })
 
   it('aplica a máscara nacional sem aceitar mais de onze dígitos', () => {
-    expect(updateBrazilianProfilePhoneInput('6181748795')).toBe('(61) 8174-8795')
-    expect(updateBrazilianProfilePhoneInput('61981748795')).toBe('(61) 9 8174-8795')
-    expect(updateBrazilianProfilePhoneInput('61981748795123')).toBe('(61) 9 8174-8795')
+    expect(updateBrazilianProfilePhoneInput('1131234567')).toBe('(11) 3123-4567')
+    expect(updateBrazilianProfilePhoneInput('11931234567')).toBe('(11) 9 3123-4567')
+    expect(updateBrazilianProfilePhoneInput('11931234567123')).toBe('(11) 9 3123-4567')
   })
 
   it('troca para email ao ultrapassar o telefone sem perder nenhum dígito', () => {
     const input = updateProfileIdentifierInput(
-      '(61) 9 8174-87952',
+      '(11) 9 3123-45672',
       'phone',
-      '(61) 9 8174-8795',
+      '(11) 9 3123-4567',
     )
 
-    expect(input).toEqual({ mode: 'email', value: '619817487952' })
+    expect(input).toEqual({ mode: 'email', value: '119312345672' })
     expect(profileIdentifierRule(input.value, input.mode)).toBe('Digite um email válido')
   })
 
@@ -61,8 +61,8 @@ describe('identificador do login de perfil', () => {
   })
 
   it('volta automaticamente ao telefone se a entrada tornar-se compatível novamente', () => {
-    const input = updateProfileIdentifierInput('61981748795', 'email')
+    const input = updateProfileIdentifierInput('11931234567', 'email')
 
-    expect(input).toEqual({ mode: 'phone', value: '(61) 9 8174-8795' })
+    expect(input).toEqual({ mode: 'phone', value: '(11) 9 3123-4567' })
   })
 })
