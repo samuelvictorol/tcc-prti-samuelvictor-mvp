@@ -463,9 +463,15 @@ async function listMessages(id, query = {}) {
 }
 
 async function markRead(id) {
-  const conversation = await Conversation.findByIdAndUpdate(id, { $set: { unreadCount: 0 } }, { new: true })
+  const conversation = await Conversation.findOneAndUpdate(
+    { _id: id, unreadCount: { $gt: 0 } },
+    { $set: { unreadCount: 0 } },
+    { new: true }
+  )
     .select(CONVERSATION_SECRET_SELECT);
-  if (!conversation) throw new ApiError(404, 'Conversa nao encontrada');
+  if (!conversation) {
+    return serializeConversation(await getRawById(id));
+  }
   const result = serializeConversation(conversation);
   socketService.emit('conversations:updated', { conversation: result });
   return result;

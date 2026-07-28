@@ -590,6 +590,69 @@ test('avatar do contato prefere WhatsApp Cloud e usa Telegram como alternativa',
   assert.equal(fallback.avatarSource, 'telegram');
 });
 
+test('marcar conversa ja lida e idempotente e nao realimenta o socket', async (context) => {
+  const originals = {
+    update: Conversation.findOneAndUpdate,
+    find: Conversation.findById,
+    emit: socketService.emit
+  };
+  context.after(() => {
+    Conversation.findOneAndUpdate = originals.update;
+    Conversation.findById = originals.find;
+    socketService.emit = originals.emit;
+  });
+
+  const id = '507f1f77bcf86cd799439091';
+  let updateFilter;
+  Conversation.findOneAndUpdate = (filter) => {
+    updateFilter = filter;
+    return selected(null);
+  };
+  Conversation.findById = () => selected({
+    _id: id,
+    channel: 'whatsapp_cloud',
+    externalIdEncrypted: encrypt('5511999999999'),
+    unreadCount: 0
+  });
+  const events = [];
+  socketService.emit = (event) => events.push(event);
+
+  const result = await conversationsManager.markRead(id);
+
+  assert.deepEqual(updateFilter, { _id: id, unreadCount: { $gt: 0 } });
+  assert.equal(result.id, id);
+  assert.equal(result.unreadCount, 0);
+  assert.deepEqual(events, []);
+});
+
+test('marcar conversa nao lida emite atualizacao uma unica vez', async (context) => {
+  const originals = {
+    update: Conversation.findOneAndUpdate,
+    emit: socketService.emit
+  };
+  context.after(() => {
+    Conversation.findOneAndUpdate = originals.update;
+    socketService.emit = originals.emit;
+  });
+
+  const id = '507f1f77bcf86cd799439092';
+  Conversation.findOneAndUpdate = () => selected({
+    _id: id,
+    channel: 'whatsapp_cloud',
+    externalIdEncrypted: encrypt('5511888888888'),
+    unreadCount: 0
+  });
+  const events = [];
+  socketService.emit = (event, payload) => events.push({ event, payload });
+
+  const result = await conversationsManager.markRead(id);
+
+  assert.equal(result.unreadCount, 0);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, 'conversations:updated');
+  assert.equal(events[0].payload.conversation.id, id);
+});
+
 test('rotas de conversas exigem autenticacao administrativa', async () => {
   const response = await request(createApp()).get('/api/conversations');
   assert.equal(response.status, 401);

@@ -14,6 +14,8 @@ describe('visibilidade das credenciais no Início', () => {
     expect(source).toContain("toggleChannelCredentials('telegram')")
     expect(source).toContain("toggleChannelCredentials('whatsappCloud')")
     expect(source).toContain("toggleChannelCredentials('email')")
+    expect(source.match(/\? 'edit_off' : 'edit'/g)).toHaveLength(3)
+    expect(source).toContain('Exibir todas as credenciais')
     expect(source).not.toContain('telegramWebhookSecretVisible')
   })
 

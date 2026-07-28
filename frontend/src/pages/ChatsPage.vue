@@ -137,6 +137,8 @@ const contactForDialog = ref(null)
 let clockTimer = null
 let realtimeRefreshTimer = null
 let conversationsRequest = 0
+let messagesRequest = 0
+const readRequests = new Set()
 
 const filteredConversations = computed(() => {
   const needle = search.value.trim().toLowerCase()
@@ -237,41 +239,82 @@ async function loadConversations({ background = false, keepSelection = true } = 
   }
 }
 
-async function selectConversation(conversation) {
-  selected.value = conversation
-  messages.value = []
-  historyNote.value = ''
-  loadingMessages.value = true
+async function markConversationRead(id) {
+  if (!id || readRequests.has(id)) return
+  readRequests.add(id)
+  selected.value = cloudConversationId(selected.value) === id
+    ? { ...selected.value, unreadCount: 0 }
+    : selected.value
+  conversations.value = conversations.value.map((item) => (
+    cloudConversationId(item) === id ? { ...item, unreadCount: 0 } : item
+  ))
+  try {
+    await http.patch(`/whatsapp-cloud/conversations/${id}/read`)
+  } finally {
+    readRequests.delete(id)
+  }
+}
+
+async function loadConversation(conversation, { background = false, markRead = false } = {}) {
   const id = cloudConversationId(conversation)
+  if (!id) return
+  const requestId = ++messagesRequest
+  if (!background) {
+    messages.value = []
+    historyNote.value = ''
+    loadingMessages.value = true
+  }
   try {
     const [detailResult, messagesResult] = await Promise.all([
       http.get(`/whatsapp-cloud/conversations/${id}`).catch(() => null),
       http.get(`/whatsapp-cloud/conversations/${id}/messages`, { params: { page: 1, limit: 100 } }),
     ])
-    if (cloudConversationId(selected.value) !== id) return
+    if (requestId !== messagesRequest || cloudConversationId(selected.value) !== id) return
     const detail = detailResult ? unwrap(detailResult) : null
     if (detail) {
-      selected.value = { ...conversation, ...detail }
+      selected.value = { ...selected.value, ...detail }
       conversations.value = upsertCloudConversation(conversations.value, selected.value)
     }
-    messages.value = mergeCloudMessages(asList(unwrap(messagesResult), 'items'))
+    const loadedMessages = asList(unwrap(messagesResult), 'items')
+    messages.value = mergeCloudMessages([...messages.value, ...loadedMessages])
     if (!messages.value.length) historyNote.value = 'Ainda não há mensagens armazenadas nesta conversa.'
-    await http.patch(`/whatsapp-cloud/conversations/${id}/read`).catch(() => undefined)
-    selected.value = { ...selected.value, unreadCount: 0 }
-    conversations.value = conversations.value.map((item) => (
-      cloudConversationId(item) === id ? { ...item, unreadCount: 0 } : item
-    ))
+    else historyNote.value = ''
+    if (markRead && Number(selected.value?.unreadCount || conversation.unreadCount || 0) > 0) {
+      await markConversationRead(id).catch(() => undefined)
+    }
     await scrollToBottom()
   } catch (error) {
-    if (cloudConversationId(selected.value) !== id) return
-    historyNote.value = 'Não foi possível carregar o histórico desta conversa.'
-    $q.notify({ type: 'warning', message: errorMessage(error, historyNote.value) })
+    if (requestId !== messagesRequest || cloudConversationId(selected.value) !== id) return
+    if (!background) {
+      historyNote.value = 'Não foi possível carregar o histórico desta conversa.'
+      $q.notify({ type: 'warning', message: errorMessage(error, historyNote.value) })
+    }
   } finally {
-    if (cloudConversationId(selected.value) === id) loadingMessages.value = false
+    if (requestId === messagesRequest && cloudConversationId(selected.value) === id) {
+      loadingMessages.value = false
+    }
   }
 }
 
+async function selectConversation(conversation) {
+  const id = cloudConversationId(conversation)
+  if (!id) return
+  const switching = cloudConversationId(selected.value) !== id
+  selected.value = switching ? conversation : { ...selected.value, ...conversation }
+  if (switching) {
+    messagesRequest += 1
+    messages.value = []
+    historyNote.value = ''
+  }
+  await loadConversation(selected.value, {
+    background: !switching && messages.value.length > 0,
+    markRead: true,
+  })
+}
+
 function closeConversation() {
+  messagesRequest += 1
+  loadingMessages.value = false
   selected.value = null
   messages.value = []
   historyNote.value = ''
@@ -287,8 +330,12 @@ async function refreshSelected() {
   if (!selected.value) return
   const id = cloudConversationId(selected.value)
   await loadConversations({ background: true })
+  if (cloudConversationId(selected.value) !== id) return
   const current = conversations.value.find((item) => cloudConversationId(item) === id)
-  if (current) await selectConversation(current)
+  if (current) {
+    selected.value = { ...selected.value, ...current }
+    await loadConversation(selected.value, { background: true, markRead: false })
+  }
 }
 
 async function sendMessage() {
@@ -410,24 +457,48 @@ function clearMessages() {
   })
 }
 
+function applyRealtimeConversation(payload = {}) {
+  const conversation = payload.conversation || payload
+  const id = cloudConversationId(conversation)
+  if (!id) return null
+  if (conversation.channel && String(conversation.channel).replaceAll('-', '_') !== 'whatsapp_cloud') {
+    return null
+  }
+  conversations.value = upsertCloudConversation(conversations.value, conversation)
+  if (cloudConversationId(selected.value) === id) {
+    selected.value = { ...selected.value, ...conversation }
+  }
+  return conversation
+}
+
+function onRealtimeConversation(payload = {}) {
+  applyRealtimeConversation(payload)
+}
+
+function onRealtimeMessage(payload = {}) {
+  const conversation = applyRealtimeConversation(payload)
+  const id = cloudConversationId(conversation)
+  if (!id || cloudConversationId(selected.value) !== id || !payload.message) return
+  messages.value = mergeCloudMessages([...messages.value, payload.message])
+  historyNote.value = ''
+  void scrollToBottom()
+  if (payload.message.direction === 'inbound' && Number(conversation.unreadCount || 0) > 0) {
+    void markConversationRead(id).catch(() => undefined)
+  }
+}
+
 function scheduleRealtimeRefresh(payload = {}) {
   const conversation = payload.conversation || payload
   if (conversation.channel && String(conversation.channel).replaceAll('-', '_') !== 'whatsapp_cloud') return
-  if (cloudConversationId(conversation)) {
-    conversations.value = upsertCloudConversation(conversations.value, conversation)
-    if (cloudConversationId(selected.value) === cloudConversationId(conversation)) {
-      selected.value = { ...selected.value, ...conversation }
-    }
-  }
+  applyRealtimeConversation(payload)
   if (realtimeRefreshTimer) window.clearTimeout(realtimeRefreshTimer)
   realtimeRefreshTimer = window.setTimeout(async () => {
     realtimeRefreshTimer = null
     const activeId = cloudConversationId(selected.value)
     await loadConversations({ background: true })
-    if (activeId) {
-      const current = conversations.value.find((item) => cloudConversationId(item) === activeId)
-      if (current) await selectConversation(current)
-    }
+    if (!activeId || cloudConversationId(selected.value) !== activeId) return
+    const current = conversations.value.find((item) => cloudConversationId(item) === activeId)
+    if (current) await loadConversation(current, { background: true, markRead: false })
   }, 220)
 }
 
@@ -450,8 +521,8 @@ onMounted(() => {
   socket.on('whatsapp_cloud:conversation', scheduleRealtimeRefresh)
   socket.on('whatsapp_cloud:conversation_updated', scheduleRealtimeRefresh)
   socket.on('whatsapp_cloud:message', scheduleRealtimeRefresh)
-  socket.on('conversation:message', scheduleRealtimeRefresh)
-  socket.on('conversations:updated', scheduleRealtimeRefresh)
+  socket.on('conversation:message', onRealtimeMessage)
+  socket.on('conversations:updated', onRealtimeConversation)
   loadConversations()
 })
 
@@ -465,8 +536,8 @@ onBeforeUnmount(() => {
   socket.off('whatsapp_cloud:conversation', scheduleRealtimeRefresh)
   socket.off('whatsapp_cloud:conversation_updated', scheduleRealtimeRefresh)
   socket.off('whatsapp_cloud:message', scheduleRealtimeRefresh)
-  socket.off('conversation:message', scheduleRealtimeRefresh)
-  socket.off('conversations:updated', scheduleRealtimeRefresh)
+  socket.off('conversation:message', onRealtimeMessage)
+  socket.off('conversations:updated', onRealtimeConversation)
 })
 </script>
 
@@ -666,27 +737,29 @@ onBeforeUnmount(() => {
             <div v-if="loadingMessages" class="q-pa-lg">
               <q-skeleton v-for="item in 5" :key="item" type="text" />
             </div>
-            <div v-else-if="!messages.length" class="day-note">
-              {{ historyNote || 'Nenhuma mensagem armazenada' }}
-            </div>
-            <div
-              v-for="item in messages"
-              :key="item.providerMessageId || item.id || item._id || item.timestamp"
-              :class="['message-row', { 'message-row--mine': item.direction === 'outbound' || item.fromMe }]"
-            >
-              <div class="message-bubble">
-                <div>{{ messageBody(item) }}</div>
-                <span>
-                  {{ formatTime(item.sentAt || item.createdAt || item.timestamp) }}
-                  <q-icon
-                    v-if="item.direction === 'outbound' || item.fromMe"
-                    :name="item.status === 'failed' ? 'error_outline' : 'done_all'"
-                    :color="item.status === 'failed' ? 'negative' : 'primary'"
-                    size="15px"
-                  />
-                </span>
+            <template v-else>
+              <div v-if="!messages.length" class="day-note">
+                {{ historyNote || 'Nenhuma mensagem armazenada' }}
               </div>
-            </div>
+              <div
+                v-for="item in messages"
+                :key="item.providerMessageId || item.id || item._id || item.timestamp"
+                :class="['message-row', { 'message-row--mine': item.direction === 'outbound' || item.fromMe }]"
+              >
+                <div class="message-bubble">
+                  <div>{{ messageBody(item) }}</div>
+                  <span>
+                    {{ formatTime(item.sentAt || item.createdAt || item.timestamp) }}
+                    <q-icon
+                      v-if="item.direction === 'outbound' || item.fromMe"
+                      :name="item.status === 'failed' ? 'error_outline' : 'done_all'"
+                      :color="item.status === 'failed' ? 'negative' : 'primary'"
+                      size="15px"
+                    />
+                  </span>
+                </div>
+              </div>
+            </template>
           </div>
 
           <footer class="message-composer">

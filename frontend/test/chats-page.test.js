@@ -104,7 +104,8 @@ describe('Chats oficiais do WhatsApp Cloud', () => {
     expect(chats).toContain('`/whatsapp-cloud/conversations/${cloudConversationId(selected.value)}/consent-request`')
     expect(chats).toContain("'/whatsapp-cloud/conversations/backup'")
     expect(chats).toContain("socket.on('whatsapp_cloud:message', scheduleRealtimeRefresh)")
-    expect(chats).toContain("socket.on('conversation:message', scheduleRealtimeRefresh)")
+    expect(chats).toContain("socket.on('conversation:message', onRealtimeMessage)")
+    expect(chats).toContain("socket.on('conversations:updated', onRealtimeConversation)")
     expect(chats).toContain('A Cloud API não oferece uma importação retroativa')
     expect(chats).toContain('label="Fazer backup agora"')
     expect(chats).toContain('@media (max-width: 850px)')
@@ -123,5 +124,18 @@ describe('Chats oficiais do WhatsApp Cloud', () => {
     expect(chats).toContain(':disable="!consentRequestAvailable"')
     expect(chats).toContain('Respostas livres bloqueadas após 24 horas.')
     expect(chats).toContain('template oficial aprovado pela Meta')
+  })
+
+  it('atualiza o chat em segundo plano sem reabrir o skeleton ou aceitar respostas obsoletas', () => {
+    const chats = source('pages/ChatsPage.vue')
+
+    expect(chats).toContain('let messagesRequest = 0')
+    expect(chats).toContain('requestId !== messagesRequest')
+    expect(chats).toContain("await loadConversation(current, { background: true, markRead: false })")
+    expect(chats).toContain('messages.value = mergeCloudMessages([...messages.value, payload.message])')
+    expect(chats).not.toContain('if (current) await selectConversation(current)')
+    expect(chats).toMatch(
+      /<div v-if="loadingMessages"[\s\S]+?<template v-else>[\s\S]+?v-for="item in messages"/,
+    )
   })
 })

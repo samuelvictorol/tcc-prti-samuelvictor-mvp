@@ -520,7 +520,7 @@ onBeforeUnmount(() => {
                 flat
                 round
                 color="primary"
-                :icon="channelCredentialsVisible.telegram ? 'visibility_off' : 'visibility'"
+                :icon="channelCredentialsVisible.telegram ? 'edit_off' : 'edit'"
                 :loading="revealingCredentials.telegram"
                 :disable="!channelHasSavedCredentials('telegram')"
                 :aria-label="channelCredentialsVisible.telegram ? 'Ocultar todas as credenciais do Telegram' : 'Exibir todas as credenciais do Telegram'"
@@ -604,7 +604,7 @@ onBeforeUnmount(() => {
                 flat
                 round
                 color="primary"
-                :icon="channelCredentialsVisible.whatsappCloud ? 'visibility_off' : 'visibility'"
+                :icon="channelCredentialsVisible.whatsappCloud ? 'edit_off' : 'edit'"
                 :loading="revealingCredentials.whatsappCloud"
                 :disable="!channelHasSavedCredentials('whatsappCloud')"
                 :aria-label="channelCredentialsVisible.whatsappCloud ? 'Ocultar todas as credenciais do WhatsApp Cloud' : 'Exibir todas as credenciais do WhatsApp Cloud'"
@@ -700,7 +700,7 @@ onBeforeUnmount(() => {
                 flat
                 round
                 color="primary"
-                :icon="channelCredentialsVisible.email ? 'visibility_off' : 'visibility'"
+                :icon="channelCredentialsVisible.email ? 'edit_off' : 'edit'"
                 :loading="revealingCredentials.email"
                 :disable="!channelHasSavedCredentials('email')"
                 :aria-label="channelCredentialsVisible.email ? 'Ocultar todas as credenciais do Gmail' : 'Exibir todas as credenciais do Gmail'"
