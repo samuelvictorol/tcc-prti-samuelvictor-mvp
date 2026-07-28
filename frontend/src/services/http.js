@@ -62,8 +62,36 @@ export function paginationOf(payload, fallback = {}) {
 }
 
 export function errorMessage(error, fallback = 'Não foi possível concluir a operação.') {
-  const details = error?.response?.data
-  return details?.message || details?.error?.message || details?.error || error?.message || fallback
+  const response = error?.response?.data
+  const envelope = response?.error && typeof response.error === 'object'
+    ? response.error
+    : response
+  const message = envelope?.message
+    || response?.message
+    || (typeof response?.error === 'string' ? response.error : '')
+    || error?.message
+    || fallback
+  const validation = envelope?.details || response?.details
+  const detailMessages = []
+  const append = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(append)
+      return
+    }
+    if (typeof value === 'string' && value.trim()) detailMessages.push(value.trim())
+  }
+
+  append(validation?.formErrors)
+  if (validation?.fieldErrors && typeof validation.fieldErrors === 'object') {
+    Object.values(validation.fieldErrors).forEach(append)
+  }
+
+  const uniqueDetails = [...new Set(detailMessages)]
+    .filter((detail) => !String(message).includes(detail))
+
+  return uniqueDetails.length
+    ? `${message}: ${uniqueDetails.join(' ')}`
+    : message
 }
 
 export async function fetchAll(path, options = {}) {

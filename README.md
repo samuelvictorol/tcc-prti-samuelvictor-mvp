@@ -81,13 +81,19 @@ A revisão pode exigir documentos societários, correspondência exata dos dados
 
 Três templates WhatsApp Cloud são semeados e protegidos contra exclusão:
 
-| Nome oficial | Idioma | Uso |
-|---|---|---|
-| `verify_code_1` | `pt_BR` | Código de acesso ao Meu perfil; BODY e botão de copiar recebem `{{codigo}}`. |
-| `jaspers_market_plain_text_v1` | `en_US` | Exemplo disponibilizado em determinadas contas de teste; sem parâmetros. |
-| `jaspers_market_order_confirmation_v1` | `en_US` | Exemplo de conta de teste com nome, número do pedido e data. |
+| Ambiente | Nome oficial | Idioma | Uso |
+|---|---|---|---|
+| OFICIAL META TEST NUMBER | `jaspers_market_plain_text_v1` | `en_US` | Exemplo disponibilizado em determinadas contas de teste; sem parâmetros. |
+| OFICIAL META TEST NUMBER | `jaspers_market_order_confirmation_v1` | `en_US` | Exemplo de conta de teste com nome, número do pedido e data. |
+| OFICIAL META PROD NUMBER | `3p_direct_integration_test_template` | `en_US` | Teste de integração com um número de produção; sem parâmetros. |
 
-O nome e idioma precisam existir e estar aprovados na WABA usada pelo envio. O preset `hello_world` também está disponível para teste, mas não é um registro fixo do banco.
+O nome e o idioma precisam estar disponíveis e aprovados na conta do WhatsApp Business que atende o número remetente correspondente. O preset `hello_world` também está disponível para teste, mas não é um registro fixo do banco.
+
+O acesso ao Meu perfil não depende mais de um template de autenticação: a página abre o número oficial com `/gerar-codigo`, o contato inicia a conversa e a API responde com texto livre dentro da janela de atendimento de 24 horas. O mesmo código temporário é enviado, de forma independente, ao Gmail e Telegram previamente vinculados.
+
+### Conjuntos de templates
+
+Um conjunto reutilizável associa de um a três templates, no máximo um por WhatsApp Cloud, Telegram e Gmail, e pode ser vinculado a um convite. O mesmo template pode participar de vários conjuntos. No disparo global, o administrador escolhe um conjunto ou monta a seleção manual por canal; apenas os canais presentes entram na fila.
 
 ## Execução local com Docker
 

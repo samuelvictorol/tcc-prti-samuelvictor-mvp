@@ -31,7 +31,10 @@ const routes = [
       { path: 'templates', name: 'templates', component: () => import('../pages/TemplatesPage.vue') },
       { path: 'notifications', name: 'notifications', component: () => import('../pages/NotificationsPage.vue') },
       { path: 'telegram', name: 'telegram', component: () => import('../pages/TelegramPage.vue'), meta: { channel: 'telegram' } },
-      { path: 'chats', name: 'chats', component: () => import('../pages/ChatsPage.vue') },
+      {
+        path: 'chats',
+        redirect: { name: 'whatsapp-cloud', query: { tab: 'conversations' } },
+      },
       { path: 'whatsapp-cloud', name: 'whatsapp-cloud', component: () => import('../pages/WhatsappCloudPage.vue') },
       { path: 'email', name: 'email', component: () => import('../pages/EmailPage.vue'), meta: { channel: 'email' } },
       { path: 'invites', name: 'invites', component: () => import('../pages/InvitesPage.vue') },

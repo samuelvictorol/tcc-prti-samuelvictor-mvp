@@ -105,6 +105,30 @@ export function cloudConsentSourceLabel(consent = {}) {
 export function canSendCloudServiceMessage(conversation, now = Date.now()) {
   return Boolean(conversation && serviceWindowOf(conversation, now).open)
 }
+
+export function cloudChatTemplateParameters(template = {}) {
+  const builderComponents = template.payload?.builder?.components
+  if (Array.isArray(builderComponents)) {
+    return builderComponents.flatMap((component, componentIndex) => (
+      (component.parameters || []).map((parameter, parameterIndex) => ({
+        key: parameter.key || `campo_${componentIndex + 1}_${parameterIndex + 1}`,
+        label: parameter.label || parameter.parameterName || `Campo ${parameterIndex + 1}`,
+        type: parameter.type || 'text',
+      }))
+    ))
+  }
+  return (template.variables || []).map((key, index) => ({
+    key,
+    label: `Campo ${index + 1}`,
+    type: 'text',
+  }))
+}
+
+export function canSendCloudChatMode(conversation, mode = 'quick', now = Date.now()) {
+  if (!conversation) return false
+  if (mode === 'template') return cloudConsentOf(conversation).authorized
+  return canSendCloudServiceMessage(conversation, now)
+}
 </script>
 
 <script setup>
@@ -114,9 +138,12 @@ import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ContactDialog from '../components/ContactDialog.vue'
 import ContextHelp from '../components/ContextHelp.vue'
-import { asList, errorMessage, http, unwrap } from '../services/http.js'
+import { asList, errorMessage, fetchAll, http, unwrap } from '../services/http.js'
 import { connectSocket, getSocket } from '../services/socket.js'
+import { newIdempotencyKey } from '../services/bulk-notifications.js'
+import { playAppSound } from '../services/sounds.js'
 
+const props = defineProps({ embedded: { type: Boolean, default: false } })
 const $q = useQuasar()
 const loading = ref(false)
 const loadingMessages = ref(false)
@@ -129,6 +156,10 @@ const messages = ref([])
 const selected = ref(null)
 const search = ref('')
 const draft = ref('')
+const sendMode = ref('quick')
+const templateId = ref(null)
+const templateVariables = ref({})
+const templates = ref([])
 const historyNote = ref('')
 const now = ref(Date.now())
 const messagesPanel = ref(null)
@@ -156,7 +187,22 @@ const filteredConversations = computed(() => {
 const selectedWindow = computed(() => serviceWindowOf(selected.value, now.value))
 const selectedConsent = computed(() => cloudConsentOf(selected.value))
 const selectedCanSend = computed(() => canSendCloudServiceMessage(selected.value, now.value))
+const selectedCanCompose = computed(() => canSendCloudChatMode(selected.value, sendMode.value, now.value))
 const consentRequestAvailable = computed(() => selectedCanSend.value && !selectedConsent.value.authorized)
+const selectedContactId = computed(() => selected.value?.contact?.id
+  || selected.value?.contact?._id
+  || selected.value?.contactId
+  || null)
+const templateOptions = computed(() => templates.value
+  .filter((item) => item.active !== false && item.externalTemplateName)
+  .map((item) => ({
+    label: `${item.name || item.title} · ${item.languageCode || 'pt_BR'}`,
+    value: item.id || item._id,
+  })))
+const selectedTemplate = computed(() => templates.value.find(
+  (item) => String(item.id || item._id) === String(templateId.value),
+) || null)
+const selectedTemplateParameters = computed(() => cloudChatTemplateParameters(selectedTemplate.value || {}))
 
 function conversationName(conversation) {
   return conversation?.contact?.displayName
@@ -239,6 +285,20 @@ async function loadConversations({ background = false, keepSelection = true } = 
   }
 }
 
+async function loadTemplates() {
+  try {
+    templates.value = await fetchAll('/templates', {
+      params: { channel: 'whatsapp_cloud' },
+      preferredKey: 'templates',
+    })
+  } catch (error) {
+    $q.notify({
+      type: 'warning',
+      message: errorMessage(error, 'Não foi possível carregar os templates oficiais do chat.'),
+    })
+  }
+}
+
 async function markConversationRead(id) {
   if (!id || readRequests.has(id)) return
   readRequests.add(id)
@@ -305,6 +365,10 @@ async function selectConversation(conversation) {
     messagesRequest += 1
     messages.value = []
     historyNote.value = ''
+    sendMode.value = 'quick'
+    draft.value = ''
+    templateId.value = null
+    templateVariables.value = {}
   }
   await loadConversation(selected.value, {
     background: !switching && messages.value.length > 0,
@@ -318,6 +382,10 @@ function closeConversation() {
   selected.value = null
   messages.value = []
   historyNote.value = ''
+  sendMode.value = 'quick'
+  draft.value = ''
+  templateId.value = null
+  templateVariables.value = {}
 }
 
 async function scrollToBottom() {
@@ -339,19 +407,54 @@ async function refreshSelected() {
 }
 
 async function sendMessage() {
-  const text = draft.value.trim()
-  if (!selected.value || !text) return
-  if (!selectedCanSend.value) {
+  if (!selected.value) return
+  if (!selectedCanCompose.value) {
     $q.notify({
       type: 'warning',
-      message: 'A janela de atendimento de 24 horas terminou. Use um template oficial para iniciar uma nova conversa.',
+      message: sendMode.value === 'quick'
+        ? 'A janela de atendimento de 24 horas terminou. Use um template oficial autorizado.'
+        : 'O contato precisa autorizar notificações antes de receber este template.',
+    })
+    return
+  }
+  const text = draft.value.trim()
+  if (sendMode.value === 'quick' && !text) return
+  if (sendMode.value === 'template' && !templateId.value) {
+    $q.notify({ type: 'warning', message: 'Selecione um template oficial.' })
+    return
+  }
+  if (sendMode.value === 'template' && !selectedContactId.value) {
+    $q.notify({ type: 'warning', message: 'Associe esta conversa a um contato antes de enviar um template.' })
+    return
+  }
+  const missingParameters = selectedTemplateParameters.value.filter(
+    (parameter) => !String(templateVariables.value[parameter.key] || '').trim(),
+  )
+  if (sendMode.value === 'template' && missingParameters.length) {
+    $q.notify({
+      type: 'warning',
+      message: `Preencha: ${missingParameters.map((parameter) => parameter.label).join(', ')}.`,
     })
     return
   }
   sending.value = true
   try {
-    await http.post(`/whatsapp-cloud/conversations/${cloudConversationId(selected.value)}/messages`, { text })
-    draft.value = ''
+    if (sendMode.value === 'quick') {
+      await http.post(`/whatsapp-cloud/conversations/${cloudConversationId(selected.value)}/messages`, { text })
+      draft.value = ''
+    } else {
+      await http.post('/notifications', {
+        kind: 'template',
+        channel: 'whatsapp_cloud',
+        contactIds: [selectedContactId.value],
+        groupIds: [],
+        templateId: templateId.value,
+        content: { variables: { ...templateVariables.value } },
+        idempotencyKey: newIdempotencyKey('whatsapp-cloud-chat'),
+      })
+      templateVariables.value = {}
+      $q.notify({ type: 'positive', message: 'Template colocado na fila de envio.' })
+    }
     await refreshSelected()
   } catch (error) {
     if (error.response?.status === 409) {
@@ -478,7 +581,9 @@ function onRealtimeConversation(payload = {}) {
 function onRealtimeMessage(payload = {}) {
   const conversation = applyRealtimeConversation(payload)
   const id = cloudConversationId(conversation)
-  if (!id || cloudConversationId(selected.value) !== id || !payload.message) return
+  if (!id || !payload.message) return
+  if (payload.message.direction === 'inbound') void playAppSound('whatsapp')
+  if (cloudConversationId(selected.value) !== id) return
   messages.value = mergeCloudMessages([...messages.value, payload.message])
   historyNote.value = ''
   void scrollToBottom()
@@ -523,7 +628,7 @@ onMounted(() => {
   socket.on('whatsapp_cloud:message', scheduleRealtimeRefresh)
   socket.on('conversation:message', onRealtimeMessage)
   socket.on('conversations:updated', onRealtimeConversation)
-  loadConversations()
+  void Promise.all([loadConversations(), loadTemplates()])
 })
 
 onBeforeUnmount(() => {
@@ -542,8 +647,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <q-page class="page-container">
+  <component
+    :is="props.embedded ? 'section' : 'q-page'"
+    :class="props.embedded ? 'embedded-chats' : 'page-container'"
+  >
     <PageHeader
+      v-if="!props.embedded"
       eyebrow="Atendimento oficial"
       title="Chats"
       description="Responda conversas iniciadas pelos clientes durante a janela oficial de atendimento de 24 horas."
@@ -786,8 +895,23 @@ onBeforeUnmount(() => {
                 </q-tooltip>
               </q-btn>
             </div>
+            <q-btn-toggle
+              v-model="sendMode"
+              spread
+              no-caps
+              unelevated
+              toggle-color="positive"
+              color="white"
+              text-color="dark"
+              :options="[
+                { label: 'Mensagem rápida', value: 'quick' },
+                { label: 'Usar template', value: 'template' },
+              ]"
+              class="composer-mode"
+            />
             <div class="composer-row">
               <q-input
+                v-if="sendMode === 'quick'"
                 v-model="draft"
                 dense
                 outlined
@@ -796,23 +920,52 @@ onBeforeUnmount(() => {
                 counter
                 placeholder="Digite uma resposta"
                 class="composer-input"
-                :disable="!selectedCanSend"
+                :disable="!selectedCanCompose"
                 @keydown.ctrl.enter="sendMessage"
               />
+              <div v-else class="template-composer">
+                <q-select
+                  v-model="templateId"
+                  dense
+                  outlined
+                  emit-value
+                  map-options
+                  :options="templateOptions"
+                  label="Template oficial"
+                  :disable="!selectedCanCompose"
+                  @update:model-value="templateVariables = {}"
+                />
+                <q-input
+                  v-for="parameter in selectedTemplateParameters"
+                  :key="parameter.key"
+                  v-model="templateVariables[parameter.key]"
+                  dense
+                  outlined
+                  :type="['image', 'video', 'document'].includes(parameter.type) ? 'url' : 'text'"
+                  :label="parameter.label"
+                  :disable="!selectedCanCompose"
+                />
+              </div>
               <q-btn
                 round
                 unelevated
-                color="primary"
+                color="positive"
                 icon="send"
                 aria-label="Enviar mensagem"
                 :loading="sending"
-                :disable="!selectedCanSend || !draft.trim()"
+                :disable="!selectedCanCompose
+                  || (sendMode === 'quick' ? !draft.trim() : !templateId)"
                 @click="sendMessage"
               />
             </div>
-            <div v-if="!selectedCanSend" class="composer-lock">
+            <div v-if="!selectedCanCompose" class="composer-lock">
               <q-icon name="lock" />
-              Respostas livres bloqueadas após 24 horas.
+              <span v-if="sendMode === 'quick'">Respostas livres bloqueadas após 24 horas.</span>
+              <span v-else>Templates exigem autorização de notificações deste contato.</span>
+            </div>
+            <div v-else-if="sendMode === 'template'" class="composer-hint">
+              <q-icon name="verified" />
+              O template será validado e processado pela fila oficial da Meta.
             </div>
           </footer>
         </template>
@@ -824,7 +977,7 @@ onBeforeUnmount(() => {
       :contact="contactForDialog"
       @saved="loadConversations({ background: true })"
     />
-  </q-page>
+  </component>
 </template>
 
 <style scoped>
@@ -1063,9 +1216,25 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 
+.composer-mode {
+  margin-bottom: 9px;
+}
+
 .composer-input {
   min-width: 0;
   flex: 1;
+}
+
+.template-composer {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.template-composer > :first-child {
+  grid-column: 1 / -1;
 }
 
 .composer-lock {
@@ -1075,6 +1244,19 @@ onBeforeUnmount(() => {
   margin-top: 6px;
   color: #93621c;
   font-size: 0.72rem;
+}
+
+.composer-hint {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  color: #16826d;
+  font-size: 0.72rem;
+}
+
+.embedded-chats {
+  min-width: 0;
 }
 
 @media (max-width: 850px) {
@@ -1132,6 +1314,14 @@ onBeforeUnmount(() => {
 
   .consent-callout .q-btn {
     width: 100%;
+  }
+
+  .template-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .template-composer > :first-child {
+    grid-column: auto;
   }
 }
 

@@ -6,6 +6,8 @@ vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 
 import {
   canSendCloudServiceMessage,
+  canSendCloudChatMode,
+  cloudChatTemplateParameters,
   cloudConsentOf,
   cloudConsentSourceLabel,
   cloudConversationId,
@@ -111,19 +113,39 @@ describe('Chats oficiais do WhatsApp Cloud', () => {
     expect(chats).toContain('@media (max-width: 850px)')
     expect(chats).toContain('@media (max-width: 430px)')
     expect(chats).toContain('chats-shell--conversation-mobile')
-    expect(layout).toContain("label: 'Chats'")
+    expect(layout).not.toContain("label: 'Chats'")
     expect(router).toContain("path: 'chats'")
-    expect(router).toContain("import('../pages/ChatsPage.vue')")
+    expect(router).toContain("redirect: { name: 'whatsapp-cloud', query: { tab: 'conversations' } }")
+    expect(source('pages/WhatsappCloudPage.vue')).toContain('<ChatsPage v-if="activeTab === \'conversations\'" embedded />')
     expect(`${chats}\n${layout}\n${router}`).not.toMatch(/whatsapp[_-]?web|WhatsApp Web/i)
   })
 
   it('não oferece resposta livre nem pedido de consentimento depois do prazo', () => {
     const chats = source('pages/ChatsPage.vue')
 
-    expect(chats).toContain(':disable="!selectedCanSend || !draft.trim()"')
+    expect(chats).toContain(':disable="!selectedCanCompose')
     expect(chats).toContain(':disable="!consentRequestAvailable"')
     expect(chats).toContain('Respostas livres bloqueadas após 24 horas.')
     expect(chats).toContain('template oficial aprovado pela Meta')
+  })
+
+  it('permite texto na janela ou template depois do opt-in, com campos amigáveis', () => {
+    const open = {
+      serviceWindow: { expiresAt: '2026-07-28T13:00:00.000Z' },
+      consent: { authorized: false },
+    }
+    const optedIn = {
+      serviceWindow: { expiresAt: '2026-07-28T11:00:00.000Z' },
+      consent: { authorized: true },
+    }
+
+    expect(canSendCloudChatMode(open, 'quick', now)).toBe(true)
+    expect(canSendCloudChatMode(open, 'template', now)).toBe(false)
+    expect(canSendCloudChatMode(optedIn, 'quick', now)).toBe(false)
+    expect(canSendCloudChatMode(optedIn, 'template', now)).toBe(true)
+    expect(cloudChatTemplateParameters({
+      payload: { builder: { components: [{ parameters: [{ key: 'pedido', label: 'Pedido' }] }] } },
+    })).toEqual([{ key: 'pedido', label: 'Pedido', type: 'text' }])
   })
 
   it('atualiza o chat em segundo plano sem reabrir o skeleton ou aceitar respostas obsoletas', () => {

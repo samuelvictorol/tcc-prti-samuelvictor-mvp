@@ -6,6 +6,7 @@ import { useAppStore } from '../stores/app.js'
 import { useAuthStore } from '../stores/auth.js'
 import { connectSocket, disconnectSocket, getSocket } from '../services/socket.js'
 import { asList, http, unwrap } from '../services/http.js'
+import { playAppSound } from '../services/sounds.js'
 
 const $q = useQuasar()
 const router = useRouter()
@@ -22,10 +23,9 @@ const navigation = computed(() => [
   { label: 'Templates', caption: 'Conteúdo por canal', icon: 'dashboard_customize', to: '/templates', available: true },
   { label: 'Notificações', caption: 'Envios e histórico', icon: 'send', to: '/notifications', available: true },
   { separator: true, label: 'Canais' },
-  { label: 'Telegram', icon: 'send_to_mobile', to: '/telegram', available: app.isChannelEnabled('telegram') },
-  { label: 'Chats', caption: 'Atendimento oficial · janela de 24 h', icon: 'forum', to: '/chats', available: true },
-  { label: 'WhatsApp Cloud', icon: 'cloud_sync', to: '/whatsapp-cloud', available: true },
-  { label: 'Gmail', icon: 'mail', to: '/email', available: app.isChannelEnabled('email') },
+  { label: 'WhatsApp Cloud', icon: 'cloud_sync', to: '/whatsapp-cloud', available: true, channelColor: 'whatsapp' },
+  { label: 'Telegram', icon: 'send_to_mobile', to: '/telegram', available: app.isChannelEnabled('telegram'), channelColor: 'telegram' },
+  { label: 'Gmail', icon: 'mail', to: '/email', available: app.isChannelEnabled('email'), channelColor: 'gmail' },
   { separator: true, label: 'Governança' },
   { label: 'Convites', icon: 'link', to: '/invites', available: true },
   { label: 'Termos e LGPD', icon: 'verified_user', to: '/terms', available: true },
@@ -77,7 +77,10 @@ function onAdminNotification(notification) {
   if (!notification?.id) return
   const alreadyListed = adminNotifications.value.some((item) => item.id === notification.id)
   adminNotifications.value = [notification, ...adminNotifications.value.filter((item) => item.id !== notification.id)].slice(0, 20)
-  if (!alreadyListed && !notification.read) unreadAdminNotifications.value += 1
+  if (!alreadyListed && !notification.read) {
+    unreadAdminNotifications.value += 1
+    void playAppSound('notify')
+  }
 }
 
 function onSocketReady() {
@@ -103,7 +106,7 @@ async function openAdminNotification(notification) {
     return
   }
   if (notification.channel === 'telegram') await router.push('/telegram')
-  else if (notification.channel === 'whatsapp_cloud') await router.push('/chats')
+  else if (notification.channel === 'whatsapp_cloud') await router.push({ path: '/whatsapp-cloud', query: { tab: 'conversations' } })
 }
 
 async function markAllAdminNotificationsRead() {
@@ -236,7 +239,11 @@ onBeforeUnmount(() => {
               clickable
               :active="$route.path === item.to"
               active-class="nav-item--active"
-              :class="['nav-item', { 'nav-item--disabled': !item.available }]"
+              :class="[
+                'nav-item',
+                item.channelColor && `nav-item--${item.channelColor}`,
+                { 'nav-item--disabled': !item.available },
+              ]"
               :aria-disabled="String(!item.available)"
               @click="goTo(item)"
             >
@@ -353,6 +360,45 @@ onBeforeUnmount(() => {
 
 .nav-item--active .q-icon {
   color: #137d6c;
+}
+
+.nav-item--whatsapp .q-icon {
+  color: #128c6a;
+}
+
+.nav-item--telegram .q-icon {
+  color: #248bd6;
+}
+
+.nav-item--gmail .q-icon {
+  color: #d9514e;
+}
+
+.nav-item--whatsapp.nav-item--active {
+  background: linear-gradient(105deg, rgba(71, 211, 162, 0.26), rgba(18, 140, 106, 0.1));
+  color: #086146;
+}
+
+.nav-item--telegram.nav-item--active {
+  background: linear-gradient(105deg, rgba(91, 184, 245, 0.24), rgba(36, 139, 214, 0.09));
+  color: #11669d;
+}
+
+.nav-item--gmail.nav-item--active {
+  background: linear-gradient(105deg, rgba(242, 130, 126, 0.23), rgba(217, 81, 78, 0.08));
+  color: #a93431;
+}
+
+.nav-item--whatsapp.nav-item--active .q-icon {
+  color: #128c6a;
+}
+
+.nav-item--telegram.nav-item--active .q-icon {
+  color: #248bd6;
+}
+
+.nav-item--gmail.nav-item--active .q-icon {
+  color: #d9514e;
 }
 
 .nav-item--disabled {

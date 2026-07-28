@@ -65,7 +65,7 @@ describe('Central de Ajuda', () => {
     ]
 
     for (const hint of forbiddenInlineHints) expect(home).not.toContain(hint)
-    expect(home).toContain('title="Webhook secret do Telegram"')
+    expect(home).toContain('title="Callback automático do Telegram"')
     expect(home).toContain('title="Callback do WhatsApp Cloud"')
     expect(home).toContain('title="Phone Number ID"')
     expect(cloud).toContain('title="Cadastro pelo webhook"')
@@ -74,15 +74,17 @@ describe('Central de Ajuda', () => {
     expect(cloud).not.toContain('<p class="section-copy">Status de entrega')
   })
 
-  it('mascara segredo salvo e revela credenciais somente por ação autenticada', () => {
+  it('mantém o segredo do webhook no servidor e expõe somente o callback copiável', () => {
     const home = source('pages/HomePage.vue')
 
     expect(home).toContain('delete telegramSource.webhookSecret')
     expect(home).toContain('savedCredentialPreviews')
     expect(home).toContain('http.get(`/settings/reveal/${channel}`)')
-    expect(home).toContain('Exiba as credenciais do Telegram antes de copiar')
-    expect(home).toContain('generateSecureWebhookSecret()')
-    expect(home).toContain('aria-label="Gerar novo webhook secret"')
-    expect(home).toContain('aria-label="Copiar webhook secret"')
+    expect(home).toContain('telegramCallbackUrl')
+    expect(home).toContain('O webhook é registrado automaticamente')
+    expect(home).not.toContain('generateTelegramWebhookSecret')
+    expect(home).not.toContain('aria-label="Gerar novo webhook secret"')
+    expect(home).not.toContain('aria-label="Copiar webhook secret"')
+    expect(home).toContain('aria-label="Copiar URL de callback do Telegram"')
   })
 })

@@ -50,35 +50,51 @@ function profileContact(id = '507f1f77bcf86cd799439011') {
   };
 }
 
-test('solicitacao usa o mesmo codigo em Gmail, Cloud COPY_CODE e Telegram sem persistir plaintext', async (context) => {
+test('solicitacao aguarda /gerar-codigo e a ativacao envia o mesmo codigo sem persistir plaintext', async (context) => {
   restoreAfter(context, [
     [Contact, 'find'],
+    [Contact, 'findById'],
     [ProfileAuthChallenge, 'countDocuments'],
     [ProfileAuthChallenge, 'findOne'],
+    [ProfileAuthChallenge, 'findOneAndUpdate'],
     [ProfileAuthChallenge, 'updateMany'],
     [ProfileAuthChallenge, 'create'],
     [ProfileAuthChallenge, 'updateOne'],
     [contactsManager, 'serialize'],
     [gmailManager, 'send'],
-    [whatsappCloudManager, 'send'],
-    [telegramManager, 'send']
+    [whatsappCloudManager, 'sendConversationText'],
+    [telegramManager, 'send'],
+    [settingsManager, 'getValue']
   ]);
   const contact = profileContact();
   Contact.find = () => chain([contact]);
+  Contact.findById = () => chain(contact);
   contactsManager.serialize = () => contact;
   ProfileAuthChallenge.countDocuments = async () => 0;
-  ProfileAuthChallenge.findOne = () => chain(null);
-  ProfileAuthChallenge.updateMany = async () => ({ modifiedCount: 0 });
   let stored;
+  ProfileAuthChallenge.findOne = (filter) => chain(filter.contact
+    ? { _id: '507f1f77bcf86cd799439088', ...stored }
+    : null);
+  ProfileAuthChallenge.updateMany = async () => ({ modifiedCount: 0 });
   ProfileAuthChallenge.create = async (input) => {
     stored = input;
     return { _id: '507f1f77bcf86cd799439088', ...input };
   };
+  let persistedCodeHash;
+  let activationUpdate;
+  ProfileAuthChallenge.findOneAndUpdate = async (_filter, update) => {
+    activationUpdate = update;
+    persistedCodeHash = update.$set.codeHash;
+    return { _id: '507f1f77bcf86cd799439088', ...stored, ...update.$set };
+  };
   let persistedDeliveries;
   ProfileAuthChallenge.updateOne = async (_filter, update) => {
-    persistedDeliveries = update.$set.deliveries;
+    if (update.$set.deliveries) persistedDeliveries = update.$set.deliveries;
     return { modifiedCount: 1 };
   };
+  settingsManager.getValue = async (key) => (
+    key === 'WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER' ? '+55 11 98888-7777' : null
+  );
   let emailInput;
   gmailManager.send = async (input) => {
     emailInput = input;
@@ -86,9 +102,9 @@ test('solicitacao usa o mesmo codigo em Gmail, Cloud COPY_CODE e Telegram sem pe
     error.code = 'SMTP_DOWN';
     throw error;
   };
-  let cloudInput;
-  whatsappCloudManager.send = async (input) => {
-    cloudInput = input;
+  let cloudText;
+  whatsappCloudManager.sendConversationText = async (conversationId, text, options) => {
+    cloudText = { conversationId, text, options };
     return { providerMessageId: 'provider-secret' };
   };
   let telegramInput;
@@ -97,53 +113,93 @@ test('solicitacao usa o mesmo codigo em Gmail, Cloud COPY_CODE e Telegram sem pe
     return { delivered: true };
   };
 
-  const result = await profileManager.requestCode({ identifier: 'samuel@example.test' }, {
+  const request = await profileManager.requestCode({ identifier: 'samuel@example.test' }, {
     ip: '127.0.0.1', userAgent: 'test-agent'
   });
+  assert.equal(Object.hasOwn(stored, 'codeHash'), false);
+  assert.equal(request.command, '/gerar-codigo');
+  assert.equal(request.awaitingWhatsapp, true);
+  assert.equal(new URL(request.whatsappUrl).hostname, 'wa.me');
+  assert.equal(new URL(request.whatsappUrl).pathname, '/5511988887777');
+  assert.equal(new URL(request.whatsappUrl).searchParams.get('text'), '/gerar-codigo');
+  assert.equal(
+    new Date(stored.codeExpiresAt).getTime() - new Date(stored.expiresAt).getTime(),
+    (env.profileCodeTtlSeconds - Math.max(
+      env.profileCodeWindowSeconds,
+      env.profileCodeTtlSeconds
+    )) * 1000
+  );
+  assert.equal(emailInput, undefined);
+  assert.equal(cloudText, undefined);
+  assert.equal(telegramInput, undefined);
 
+  const result = await profileManager.activatePendingCodeFromWhatsapp({
+    contactId: contact.id,
+    conversationId: '507f1f77bcf86cd799439077'
+  });
   const emailCode = /\b(\d{6})\b/.exec(emailInput.text)?.[1];
-  const cloudCode = cloudInput.components[0].parameters[0].text;
+  const cloudCode = /\b(\d{6})\b/.exec(cloudText.text)?.[1];
   const telegramCode = /\b(\d{6})\b/.exec(telegramInput.text)?.[1];
   assert.match(emailCode, /^\d{6}$/);
   assert.equal(cloudCode, emailCode);
   assert.equal(telegramCode, emailCode);
-  assert.equal(cloudInput.templateName, 'verify_code_1');
-  assert.equal(cloudInput.languageCode, 'pt_BR');
   assert.equal(emailInput.destination, 'samuel@example.test');
-  assert.equal(cloudInput.destination, '5561999999999');
-  assert.equal(emailInput.contactId, undefined);
-  assert.equal(cloudInput.contactId, undefined);
   assert.equal(emailInput.allowUnconsented, true);
-  assert.equal(cloudInput.allowUnconsented, true);
   assert.equal(emailInput.useCase, 'profile_auth');
-  assert.equal(cloudInput.useCase, 'profile_auth');
+  assert.equal(cloudText.options.useCase, 'profile_auth');
+  assert.equal(cloudText.conversationId, '507f1f77bcf86cd799439077');
+  assert.match(cloudText.text, /\*“\d{6}”\*/);
   assert.equal(telegramInput.useCase, 'profile_auth');
   assert.equal(telegramInput.contactId, contact.id);
-  assert.deepEqual(cloudInput.components, [
-    { type: 'body', parameters: [{ type: 'text', text: emailCode }] },
-    {
-      type: 'button', sub_type: 'url', index: '0',
-      parameters: [{ type: 'text', text: emailCode }]
-    }
-  ]);
   assert.equal(Object.hasOwn(stored, 'code'), false);
-  assert.match(stored.codeHash, /^[a-f\d]{64}$/);
-  assert.notEqual(stored.codeHash, emailCode);
+  assert.match(persistedCodeHash, /^[a-f\d]{64}$/);
+  assert.notEqual(persistedCodeHash, emailCode);
+  assert.ok(new Date(activationUpdate.$set.codeExpiresAt) >= new Date(stored.codeExpiresAt));
+  assert.equal(activationUpdate.$inc.activationCount, 1);
+  assert.ok(new Date(activationUpdate.$max.expiresAt) > new Date(activationUpdate.$set.codeExpiresAt));
   assert.deepEqual(persistedDeliveries.map((item) => [item.channel, item.status, item.errorCode || null]), [
     ['email', 'failed', 'SMTP_DOWN'],
     ['whatsapp_cloud', 'sent', null],
     ['telegram', 'sent', null]
   ]);
-  assert.equal(result.message, 'Codigo enviado pelos canais de acesso disponiveis.');
-  assert.equal(result.expiresInSeconds, 600);
-  assert.ok(new Date(result.expiresAt).getTime() > Date.now());
+  assert.equal(result.activated, true);
+});
+
+test('solicitacao repetida nao revela o desafio ativo para outra sessao', async (context) => {
+  restoreAfter(context, [
+    [ProfileAuthChallenge, 'findOne'],
+    [ProfileAuthChallenge, 'countDocuments'],
+    [ProfileAuthChallenge, 'create']
+  ]);
+  const now = Date.now();
+  const reusable = {
+    challengeId: 'challenge-reutilizavel',
+    codeExpiresAt: new Date(now + 300_000),
+    expiresAt: new Date(now + 3_600_000),
+    activatedAt: new Date(now - 10_000)
+  };
+  ProfileAuthChallenge.findOne = () => chain(reusable);
+  ProfileAuthChallenge.countDocuments = async () => {
+    throw new Error('rate limit nao deve ser consultado');
+  };
+  ProfileAuthChallenge.create = async () => {
+    throw new Error('nao deve criar outro desafio');
+  };
+
+  await assert.rejects(
+    () => profileManager.requestCode({ identifier: 'samuel@example.test' }),
+    (error) => error.statusCode === 429
+      && error.code === 'PROFILE_CODE_RATE_LIMIT'
+      && !String(error.message).includes(reusable.challengeId)
+  );
 });
 
 test('identificador inexistente retorna erro claro sem criar desafio ou acionar provedores', async (context) => {
   restoreAfter(context, [
     [Contact, 'find'], [ProfileAuthChallenge, 'countDocuments'], [ProfileAuthChallenge, 'findOne'],
     [ProfileAuthChallenge, 'create'],
-    [gmailManager, 'send'], [whatsappCloudManager, 'send'], [telegramManager, 'send']
+    [gmailManager, 'send'], [whatsappCloudManager, 'send'], [telegramManager, 'send'],
+    [settingsManager, 'getValue']
   ]);
   Contact.find = () => chain([]);
   ProfileAuthChallenge.countDocuments = async () => 0;
@@ -154,6 +210,7 @@ test('identificador inexistente retorna erro claro sem criar desafio ou acionar 
   gmailManager.send = async () => { sends += 1; };
   whatsappCloudManager.send = async () => { sends += 1; };
   telegramManager.send = async () => { sends += 1; };
+  settingsManager.getValue = async () => '+55 11 98888-7777';
 
   await assert.rejects(
     () => profileManager.requestCode({ identifier: 'nobody@example.test' }),
@@ -163,40 +220,39 @@ test('identificador inexistente retorna erro claro sem criar desafio ou acionar 
   assert.equal(challenges, 0);
 });
 
-test('desafio e revogado quando os tres canais falham, mas um canal bem-sucedido basta', async (context) => {
+test('desafio ativado e revogado quando os tres canais de entrega falham', async (context) => {
   restoreAfter(context, [
-    [Contact, 'find'], [contactsManager, 'serialize'], [ProfileAuthChallenge, 'countDocuments'],
-    [ProfileAuthChallenge, 'findOne'], [ProfileAuthChallenge, 'updateMany'],
-    [ProfileAuthChallenge, 'create'], [ProfileAuthChallenge, 'updateOne'],
-    [gmailManager, 'send'], [whatsappCloudManager, 'send'], [telegramManager, 'send']
+    [Contact, 'findById'], [contactsManager, 'serialize'],
+    [ProfileAuthChallenge, 'findOne'], [ProfileAuthChallenge, 'findOneAndUpdate'],
+    [ProfileAuthChallenge, 'updateOne'], [gmailManager, 'send'],
+    [whatsappCloudManager, 'sendConversationText'], [telegramManager, 'send']
   ]);
   const contact = profileContact();
-  Contact.find = () => chain([contact]);
+  Contact.findById = () => chain(contact);
   contactsManager.serialize = () => contact;
-  ProfileAuthChallenge.countDocuments = async () => 0;
-  ProfileAuthChallenge.findOne = () => chain(null);
-  ProfileAuthChallenge.updateMany = async () => ({});
-  ProfileAuthChallenge.create = async (input) => ({ _id: '507f1f77bcf86cd799439088', ...input });
+  const challenge = {
+    _id: '507f1f77bcf86cd799439088',
+    challengeId: '9f9e0f12-353a-4c28-9a96-b9e267def122',
+    contact: contact.id,
+    expiresAt: new Date(Date.now() + 600_000),
+    maxAttempts: 5
+  };
+  ProfileAuthChallenge.findOne = () => chain(challenge);
+  ProfileAuthChallenge.findOneAndUpdate = async (_filter, update) => ({ ...challenge, ...update.$set });
   let lastUpdate;
   ProfileAuthChallenge.updateOne = async (_filter, update) => { lastUpdate = update; return {}; };
   gmailManager.send = async () => { const error = new Error('down'); error.code = 'SMTP_DOWN'; throw error; };
-  whatsappCloudManager.send = async () => { const error = new Error('down'); error.code = 'META_DOWN'; throw error; };
+  whatsappCloudManager.sendConversationText = async () => { const error = new Error('down'); error.code = 'META_DOWN'; throw error; };
   telegramManager.send = async () => { const error = new Error('down'); error.code = 'TELEGRAM_DOWN'; throw error; };
 
-  await assert.rejects(
-    () => profileManager.requestCode({ identifier: 'samuel@example.test' }),
-    (error) => error.statusCode === 503 && error.code === 'PROFILE_CODE_DELIVERY_FAILED'
-  );
+  const result = await profileManager.activatePendingCodeFromWhatsapp({
+    contactId: contact.id,
+    conversationId: '507f1f77bcf86cd799439077'
+  });
+  assert.equal(result.activated, false);
+  assert.equal(result.reasonCode, 'PROFILE_CODE_DELIVERY_FAILED');
   assert.ok(lastUpdate.$set.revokedAt instanceof Date);
   assert.deepEqual(lastUpdate.$set.deliveries.map((item) => item.status), ['failed', 'failed', 'failed']);
-
-  whatsappCloudManager.send = async () => ({ providerMessageId: 'sensitive-provider-id' });
-  ProfileAuthChallenge.findOne = () => chain(null);
-  const result = await profileManager.requestCode({ identifier: 'samuel@example.test' });
-  assert.ok(result.challengeId);
-  assert.equal(lastUpdate.$set.revokedAt, undefined);
-  assert.deepEqual(lastUpdate.$set.deliveries.map((item) => item.status), ['failed', 'sent', 'failed']);
-  assert.doesNotMatch(JSON.stringify(lastUpdate), /sensitive-provider-id/);
 });
 
 test('limite por identificador bloqueia nova solicitacao antes de consultar o contato', async (context) => {
@@ -226,11 +282,14 @@ test('codigo correto e de uso unico emite JWT exclusivo de contato', async (cont
   const challenge = {
     _id: '507f1f77bcf86cd799439088', challengeId, contact: contactId,
     codeHash: hash, attempts: 0, maxAttempts: 5,
+    activatedAt: new Date(), activationChannel: 'whatsapp_cloud',
     expiresAt: new Date(Date.now() + 60_000), consumedAt: null, revokedAt: null
   };
   ProfileAuthChallenge.findOne = () => ({ select: async () => challenge });
   let claims = 0;
-  ProfileAuthChallenge.findOneAndUpdate = async () => {
+  let claimFilter;
+  ProfileAuthChallenge.findOneAndUpdate = async (filter) => {
+    claimFilter = filter;
     claims += 1;
     return claims === 1 ? { ...challenge, consumedAt: new Date() } : null;
   };
@@ -243,6 +302,9 @@ test('codigo correto e de uso unico emite JWT exclusivo de contato', async (cont
   });
 
   assert.equal(claims, 1);
+  assert.equal(claimFilter.codeHash, hash);
+  assert.equal(claimFilter.activatedAt, challenge.activatedAt);
+  assert.equal(claimFilter.expiresAt, challenge.expiresAt);
   assert.equal(decoded.sub, contactId);
   assert.equal(decoded.type, 'profile_access');
   assert.equal(decoded.exp - decoded.iat, 600);
@@ -420,32 +482,19 @@ test('painel administrativo de logins nunca devolve codigo ou hashes', async (co
     WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID: 'waba-123',
     WHATSAPP_CLOUD_API_VERSION: 'v25.0'
   })[key];
-  global.fetch = async (url, options) => {
-    assert.match(String(url), /waba-123\/message_templates/);
-    assert.match(String(url), /name=verify_code_1/);
-    assert.match(String(url), /fields=id%2Cname%2Cstatus%2Clanguage%2Ccategory/);
-    assert.equal(options.headers.authorization, 'Bearer secret-token');
-    return {
-      ok: true,
-      json: async () => ({ data: [{
-        id: 'do-not-expose', name: 'verify_code_1', status: 'APPROVED',
-        language: 'pt_BR', category: 'AUTHENTICATION'
-      }] })
-    };
-  };
+  global.fetch = async () => { throw new Error('o fluxo nao deve consultar templates da Meta'); };
 
   const result = await profileManager.loginOverview({ page: 1, limit: 20 });
   const serialized = JSON.stringify(result);
-  assert.equal(result.configuration.template.name, 'verify_code_1');
-  assert.equal(result.configuration.template.languageCode, 'pt_BR');
-  assert.equal(result.configuration.template.bodyParameter, '{{codigo}}');
+  assert.equal(result.configuration.template.name, null);
+  assert.equal(result.configuration.template.command, '/gerar-codigo');
+  assert.equal(result.configuration.template.flow, 'whatsapp_service_window');
   assert.equal(result.configuration.template.editable, false);
   assert.equal(result.configuration.template.approvalConfirmed, true);
   assert.equal(result.configuration.template.found, true);
-  assert.equal(result.configuration.template.status, 'approved');
-  assert.deepEqual(result.configuration.template.languages, [{
-    language: 'pt_BR', status: 'approved', category: 'AUTHENTICATION'
-  }]);
+  assert.equal(result.configuration.template.status, 'active');
+  assert.deepEqual(result.configuration.template.languages, []);
+  assert.equal(result.configuration.providers.whatsapp_cloud.serviceWindowFlow, true);
   assert.equal(result.configuration.providers.telegram.configured, true);
   assert.doesNotMatch(serialized, /nao-pode-sair|tambem-nao|nem-ip|codeHash|identifierHash|requestIpHash/);
   assert.doesNotMatch(serialized, /secret-token|do-not-expose/);

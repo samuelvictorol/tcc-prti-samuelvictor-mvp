@@ -6,6 +6,7 @@ vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 
 import {
   mergeNotificationVariableDefinitions,
+  notificationGlobalChannelOptions,
   notificationTemplatePreview,
   notificationTemplateVariableDefinitions,
 } from '../src/pages/NotificationsPage.vue'
@@ -76,6 +77,42 @@ describe('compositor amigável de notificações', () => {
     expect(source).not.toContain('const missing = enabledChannelOptions.value.filter')
   })
 
+  it('permite alternar entre um conjunto e a seleção manual por canal', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
+
+    expect(source).toContain("const globalSelectionMode = ref('set')")
+    expect(source).toContain("fetchAll('/template-sets'")
+    expect(source).toContain('v-model="form.templateSetId"')
+    expect(source).toContain("{ label: 'Conjunto', value: 'set'")
+    expect(source).toContain("{ label: 'Por canal', value: 'manual'")
+    expect(source).toContain("globalSelectionMode.value === 'set'")
+    expect(source).toContain('templateSetId:')
+    expect(source).toContain("globalSelectionMode.value === 'manual'")
+  })
+
+  it('mantém todos os canais do conjunto na revisão e trata disponibilidade somente como aviso', () => {
+    const channels = [
+      { value: 'whatsapp_cloud', label: 'WhatsApp Cloud', enabled: false },
+      { value: 'telegram', label: 'Telegram', enabled: true },
+      { value: 'email', label: 'Email', enabled: false },
+    ]
+    const templateIds = {
+      whatsapp_cloud: 'wa-1',
+      telegram: 'tg-1',
+      email: 'mail-1',
+    }
+
+    expect(notificationGlobalChannelOptions(channels, templateIds, 'set').map((item) => item.value))
+      .toEqual(['whatsapp_cloud', 'telegram', 'email'])
+    expect(notificationGlobalChannelOptions(channels, templateIds, 'manual').map((item) => item.value))
+      .toEqual(['telegram'])
+
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
+    expect(source).toContain('unavailableGlobalChannelOptions')
+    expect(source).toContain("globalSelectionMode.value === 'manual' && !enabledChannelOptions.value.length")
+    expect(source).toContain("item.enabled ? 'Selecionado' : 'Canal indisponível'")
+  })
+
   it('monta uma prévia amigável por canal sem renderizar HTML bruto', () => {
     expect(notificationTemplatePreview({
       name: 'Boas-vindas',
@@ -84,6 +121,7 @@ describe('compositor amigável de notificações', () => {
     }, 'email', { nome: 'Ana' })).toEqual(expect.objectContaining({
       subject: 'Olá Ana',
       body: 'Bem-vindo, Ana.',
+      html: '<p>Bem-vindo, <strong>Ana</strong>.</p><script>alert(1)</script>',
     }))
 
     expect(notificationTemplatePreview({
@@ -96,6 +134,21 @@ describe('compositor amigável de notificações', () => {
       languageCode: 'pt_BR',
       body: 'Pedido ABC-123 confirmado.',
     }))
+
+    expect(notificationTemplatePreview({
+      body: 'Imagem',
+      payload: {
+        telegram: {
+          kind: 'photo',
+          mediaUrl: 'https://cdn.example.com/imagem.jpg',
+          caption: 'Olá {{nome}}',
+        },
+      },
+    }, 'telegram', { nome: 'Ana' })).toEqual(expect.objectContaining({
+      body: 'Olá Ana',
+      mediaType: 'photo',
+      mediaUrl: 'https://cdn.example.com/imagem.jpg',
+    }))
   })
 
   it('usa uma q-dialog responsiva para revisar os canais antes da fila', () => {
@@ -105,6 +158,8 @@ describe('compositor amigável de notificações', () => {
     expect(source).toContain('v-for="item in reviewItems"')
     expect(source).toContain('Confirmar e colocar na fila')
     expect(source).toContain('@click="confirmSend"')
+    expect(source).toContain('v-html="safeReviewHtml(item.preview.html)"')
+    expect(source).toContain('item.preview.mediaUrl')
     expect(source).not.toContain('$q.dialog({')
   })
 })

@@ -142,15 +142,21 @@ Somente Gmail aceita HTML. Telegram usa definições próprias; WhatsApp Cloud u
 
 ### Fixos do WhatsApp Cloud
 
-| Template | Definição |
-|---|---|
-| `verify_code_1` | `pt_BR`; BODY + botão OTP/copiar com a variável `codigo` |
-| `jaspers_market_plain_text_v1` | `en_US`; sem parâmetros |
-| `jaspers_market_order_confirmation_v1` | `en_US`; `customerName`, `orderNumber`, `orderDate` |
+| Ambiente | Template | Definição |
+|---|---|---|
+| OFICIAL META TEST NUMBER | `jaspers_market_plain_text_v1` | `en_US`; sem parâmetros |
+| OFICIAL META TEST NUMBER | `jaspers_market_order_confirmation_v1` | `en_US`; `customerName`, `orderNumber`, `orderDate` |
+| OFICIAL META PROD NUMBER | `3p_direct_integration_test_template` | `en_US`; teste de integração do número de produção, sem parâmetros |
 
-Esses registros são semeados, marcados como `systemManaged` e não podem ter sua identidade alterada ou ser excluídos. `hello_world` é apenas um preset de teste.
+Esses registros são semeados, marcados como `systemManaged` e não podem ter sua identidade alterada ou ser excluídos. Antes do envio, o mesmo nome e idioma devem estar disponíveis e aprovados na conta do WhatsApp Business que atende o número remetente correspondente. `hello_world` é apenas um preset de teste.
+
+O login público usa um desafio pendente associado ao contato. O código só é gerado quando o webhook recebe `/gerar-codigo` do mesmo número; a resposta usa a janela de atendimento aberta pelo contato e replica o código para Gmail e Telegram vinculados. Apenas o hash do código é persistido.
 
 O builder custom do Cloud valida componentes `header`, `body` e `button`, índices e subtipos, parâmetros nomeados/posicionais e os tipos aceitos pela Meta.
+
+### Conjuntos
+
+`/api/template-sets` oferece CRUD autenticado, paginação, busca por nome/descrição/convite e filtros por convite ou template. Cada conjunto contém de um a três IDs, no máximo um por canal. Um disparo global pode informar `templateSetId` no lugar de `templateIds`; a API valida as referências e grava o mapa resolvido como snapshot da campanha.
 
 ### Telegram
 

@@ -24,6 +24,8 @@ describe('configuração independente dos canais', () => {
 
   it('ignora segredos vazios ou mascarados sem apagar os existentes', () => {
     expect(isMaskedSecret('••••••')).toBe(true)
+    expect(isMaskedSecret('556••••••••9083')).toBe(true)
+    expect(isMaskedSecret('556********9083')).toBe(true)
     expect(compactChannelSettings('email', {
       user: 'admin@example.com',
       appPassword: '••••••',
@@ -38,12 +40,10 @@ describe('configuração independente dos canais', () => {
       },
     })).toEqual({
       botToken: '123••••••••reto',
-      webhookSecret: 'web••••••••reto',
     })
 
     const revealed = {
       botToken: '123:token-real',
-      webhookSecret: 'secret-real',
     }
     expect(mergeRevealedChannelValues('telegram', revealed, {
       botToken: '123••••••••real',
@@ -53,9 +53,7 @@ describe('configuração independente dos canais', () => {
     expect(channelSettingsPayload('telegram', {
       ...revealed,
       webhookSecret: 'secret-alterado',
-    }, revealed)).toEqual({
-      telegram: { webhookSecret: 'secret-alterado' },
-    })
+    }, revealed)).toBeNull()
   })
 
   it('gera webhook secret criptograficamente aleatório sem fallback fraco', () => {
@@ -80,6 +78,19 @@ describe('configuração independente dos canais', () => {
       whatsappCloud: {
         phoneNumberId: '1000000000000001',
         displayPhoneNumber: '5511931234567',
+      },
+    })
+  })
+
+  it('não reenvia o preview mascarado do número público ao alterar outro campo', () => {
+    expect(channelSettingsPayload('whatsappCloud', {
+      phoneNumberId: '1000000000000001',
+      displayPhoneNumber: '556••••••••9083',
+      businessAccountId: '2000000000000001',
+    })).toEqual({
+      whatsappCloud: {
+        phoneNumberId: '1000000000000001',
+        businessAccountId: '2000000000000001',
       },
     })
   })

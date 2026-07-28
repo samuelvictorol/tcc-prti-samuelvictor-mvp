@@ -106,7 +106,10 @@ async function resolvePublicHost(hostname) {
   if (addresses.some(({ address }) => isPrivateAddress(address))) {
     throw mediaError('A URL de midia aponta para uma rede privada ou reservada');
   }
-  return addresses[0];
+  // Render and other container hosts commonly resolve an IPv6 address first
+  // even when the runtime has no IPv6 egress. Prefer IPv4 when the hostname
+  // publishes both families, while still supporting truly IPv6-only hosts.
+  return addresses.find(({ family }) => Number(family) === 4) || addresses[0];
 }
 
 function sniffMedia(buffer) {
@@ -126,19 +129,57 @@ function sniffMedia(buffer) {
 }
 
 function assertMediaType(kind, declaredType, detected) {
-  const declared = String(declaredType || '').split(';')[0].trim().toLowerCase();
+  const declaredAliases = {
+    'image/jpg': 'image/jpeg',
+    'image/pjpeg': 'image/jpeg',
+    'image/x-png': 'image/png'
+  };
+  const rawDeclared = String(declaredType || '').split(';')[0].trim().toLowerCase();
+  const declared = declaredAliases[rawDeclared] || rawDeclared;
+  const genericDeclaredTypes = new Set(['application/octet-stream', 'application/binary', 'binary/octet-stream']);
   const allowed = kind === 'photo'
     ? new Set(['image/jpeg', 'image/png', 'image/webp'])
     : new Set(['video/mp4']);
   if (!detected || !allowed.has(detected.mimeType)) {
     throw mediaError(kind === 'photo' ? 'Arquivo nao e uma imagem JPEG, PNG ou WebP valida' : 'Video deve ser um arquivo MP4 valido', 'MEDIA_TYPE_INVALID');
   }
-  if (declared && declared !== 'application/octet-stream' && !allowed.has(declared)) {
+  if (declared && !genericDeclaredTypes.has(declared) && !allowed.has(declared)) {
     throw mediaError('O Content-Type da midia nao corresponde ao formato permitido', 'MEDIA_TYPE_INVALID');
   }
-  if (declared && declared !== 'application/octet-stream' && declared !== detected.mimeType) {
+  if (declared && !genericDeclaredTypes.has(declared) && declared !== detected.mimeType) {
     throw mediaError('O tipo declarado da midia difere do conteudo real', 'MEDIA_TYPE_MISMATCH');
   }
+}
+
+function downloadRequestError(error) {
+  if (error instanceof ApiError) return error;
+  const code = String(error?.code || '').toUpperCase();
+  if (['ENOTFOUND', 'EAI_AGAIN'].includes(code)) {
+    return mediaError('Nao foi possivel resolver o host da midia', 'MEDIA_HOST_UNREACHABLE');
+  }
+  if (['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT'].includes(code)) {
+    return mediaError(
+      'O servidor da midia nao esta acessivel pela internet. Confira se o link e publico e direto para o arquivo',
+      'MEDIA_HOST_UNREACHABLE'
+    );
+  }
+  if (['CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_TLS_CERT_ALTNAME_INVALID', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'].includes(code)) {
+    return mediaError('O certificado HTTPS do servidor da midia nao e valido', 'MEDIA_TLS_INVALID');
+  }
+  return mediaError(
+    'Nao foi possivel baixar a midia. Use um link HTTPS publico e direto para uma imagem ou video',
+    'MEDIA_DOWNLOAD_FAILED'
+  );
+}
+
+function pinnedLookup(pinned) {
+  return (_hostname, lookupOptions, callback) => {
+    if (lookupOptions?.all) {
+      callback(null, [{ address: pinned.address, family: pinned.family }]);
+      return;
+    }
+    callback(null, pinned.address, pinned.family);
+  };
 }
 
 async function requestBuffer(url, kind, redirectCount = 0, options = {}) {
@@ -155,7 +196,7 @@ async function requestBuffer(url, kind, redirectCount = 0, options = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(deadline);
-      reject(error instanceof ApiError ? error : mediaError('Falha ao baixar a midia do Telegram', 'MEDIA_DOWNLOAD_FAILED'));
+      reject(downloadRequestError(error));
     };
     const request = https.request({
       protocol: 'https:',
@@ -169,7 +210,10 @@ async function requestBuffer(url, kind, redirectCount = 0, options = {}) {
         'accept-encoding': 'identity',
         'user-agent': 'NotifyApp-MediaFetcher/1.0'
       },
-      lookup: (_hostname, _lookupOptions, callback) => callback(null, pinned.address, pinned.family)
+      // Node 20 enables autoSelectFamily and may request lookup({ all: true }).
+      // Returning the legacy scalar shape in that case produces
+      // ERR_INVALID_IP_ADDRESS before any network request is attempted.
+      lookup: pinnedLookup(pinned)
     }, (response) => {
       const status = Number(response.statusCode || 0);
       if ([301, 302, 303, 307, 308].includes(status)) {
@@ -245,5 +289,8 @@ module.exports = {
   resolvePublicHost,
   isPrivateAddress,
   sniffMedia,
+  assertMediaType,
+  downloadRequestError,
+  pinnedLookup,
   downloadTelegramMedia
 };

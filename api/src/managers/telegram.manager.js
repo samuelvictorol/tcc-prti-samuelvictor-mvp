@@ -9,6 +9,7 @@ const socketService = require('../services/socket.service');
 const { encrypt, decrypt, timingSafeEqual } = require('../services/crypto.service');
 const { getRedis } = require('../services/redis.service');
 const { downloadTelegramMedia } = require('../services/safe-media.service');
+const chatProfileFlow = require('../services/chat-profile-flow.service');
 const {
   telegramDefinitionFromTemplate,
   telegramTemplateBody,
@@ -199,23 +200,22 @@ async function refreshWebhookRegistration() {
   webhookRefreshPromise = (async () => {
     try {
       if (!await settingsManager.channelConfigured('telegram')) return { refreshed: false, reason: 'not_configured' };
-      const secret = await settingsManager.getValue('TELEGRAM_WEBHOOK_SECRET');
-      if (!secret) return { refreshed: false, reason: 'secret_missing' };
-      const info = await call('getWebhookInfo');
-      if (!info?.url) return { refreshed: false, reason: 'url_missing' };
-      cachePublicProfileUrlFromWebhook(info.url);
-      const result = await call('setWebhook', {
-        url: normalizeWebhookUrl(info.url),
-        secret_token: secret,
-        allowed_updates: TELEGRAM_ALLOWED_UPDATES
-      });
+      let webhookUrl;
+      try {
+        webhookUrl = automaticWebhookUrl();
+      } catch (_error) {
+        const info = await call('getWebhookInfo');
+        if (!info?.url) return { refreshed: false, reason: 'public_url_missing' };
+        webhookUrl = normalizeWebhookUrl(info.url);
+      }
+      const registration = await registerWebhook(webhookUrl);
       await logsManager.create({
         channel: 'telegram',
         action: 'webhook.refreshed',
         message: 'Webhook Telegram atualizado com os tipos de evento atuais',
         context: { allowedUpdates: TELEGRAM_ALLOWED_UPDATES }
       }).catch(() => undefined);
-      return { refreshed: Boolean(result), url: normalizeWebhookUrl(info.url) };
+      return { refreshed: registration.registered, url: registration.url };
     } catch (error) {
       await logsManager.create({
         level: 'warn',
@@ -382,6 +382,26 @@ async function sendOnboardingMenu(chatId, command) {
     }
   }).catch(() => undefined);
   return result;
+}
+
+async function sendEmailCapturePrompt(chatId, contactId) {
+  await chatProfileFlow.beginEmailCapture(contactId, 'telegram');
+  try {
+    const result = await call('sendMessage', {
+      chat_id: String(chatId),
+      text: chatProfileFlow.emailCapturePrompt()
+    });
+    await logsManager.create({
+      channel: 'telegram',
+      action: 'chat_profile.email_prompt_sent',
+      message: 'Pedido opcional de email enviado apos a autorizacao no Telegram',
+      context: { contactId, messageId: result?.message_id || null }
+    }).catch(() => undefined);
+    return result;
+  } catch (error) {
+    await chatProfileFlow.clearEmailCapture(contactId, 'telegram');
+    throw error;
+  }
 }
 
 function verifiedTelegramContactPhone(message = {}) {
@@ -827,9 +847,12 @@ async function webhook(update, providedSecret) {
         ? { matched: false, command: null, source: null }
         : await telegramPermissionInvocation(message.text || '');
       const existing = await contactsManager.findByChannelAddress('telegram', String(chat.id));
-      const wasBlocked = existing?.channels.some((identity) => identity.channel === 'telegram' && ['revoked', 'denied'].includes(identity.consentStatus));
-      const explicitAuthorization = started || writeAccessAllowed || permissionInvocation.matched;
-      const authorize = !stopped && (!wasBlocked || explicitAuthorization);
+      // Iniciar o bot, compartilhar permissao de escrita ou simplesmente mandar
+      // uma mensagem comprova a identidade/conversa, mas nao constitui opt-in
+      // para notificacoes. Somente o comando configurado (ou uma alteracao
+      // administrativa feita pelo fluxo de consentimento) concede o canal.
+      const explicitAuthorization = permissionInvocation.matched;
+      const authorize = !stopped && explicitAuthorization;
       const sharedContact = verifiedTelegramContactPhone(message);
       const avatarUser = message.from || chat;
       const avatarUrl = optionalAvatarUrl(message.from?.photo_url, chat.photo_url);
@@ -842,7 +865,11 @@ async function webhook(update, providedSecret) {
         avatarUrl,
         source: writeAccessAllowed ? 'telegram_write_access_allowed' : 'telegram_webhook',
         authorize,
-        consentStatus: stopped || wasBlocked && !explicitAuthorization ? 'revoked' : 'granted',
+        consentStatus: stopped
+          ? 'revoked'
+          : explicitAuthorization
+            ? 'granted'
+            : undefined,
         ...(permissionInvocation.matched ? {
           consentSource: 'automatic_permission_command',
           consentCommand: permissionInvocation.command,
@@ -939,7 +966,41 @@ async function webhook(update, providedSecret) {
           : message,
         { contactId: contact.id, inviteAttributed: Boolean(invitationAttribution) }
       );
-      if (sharedContact.provided && !sharedContact.verified) {
+      let chatProfileHandled = false;
+      if (message.text) {
+        try {
+          const chatResult = await chatProfileFlow.handleInbound({
+            contactId: contact.id,
+            channel: 'telegram',
+            text: message.text,
+            profileUrl: await publicProfileUrl()
+          });
+          chatProfileHandled = chatResult.handled;
+          if (chatResult.handled) {
+            await call('sendMessage', {
+              chat_id: String(chat.id),
+              text: chatResult.text
+            });
+            await logsManager.create({
+              channel: 'telegram',
+              action: `chat_profile.${chatResult.kind}`,
+              message: 'Comando de perfil processado na conversa do Telegram',
+              context: { contactId: contact.id, kind: chatResult.kind }
+            }).catch(() => undefined);
+          }
+        } catch (error) {
+          await logsManager.create({
+            level: 'warn',
+            channel: 'telegram',
+            action: 'chat_profile.processing_failed',
+            message: 'Nao foi possivel processar a atualizacao de perfil recebida pelo Telegram',
+            context: { contactId: contact.id, errorCode: error.code || 'CHAT_PROFILE_FAILED' }
+          }).catch(() => undefined);
+        }
+      }
+      if (chatProfileHandled) {
+        // O comando de perfil ja recebeu uma resposta dedicada.
+      } else if (sharedContact.provided && !sharedContact.verified) {
         await rejectPhoneShare(chat.id).catch(async (error) => {
           await logsManager.create({
             level: 'warn', channel: 'telegram', action: 'contact.phone_rejection_notice_failed',
@@ -961,6 +1022,15 @@ async function webhook(update, providedSecret) {
             level: 'warn', channel: 'telegram', action: 'onboarding.menu_send_failed',
             message: 'Contato autorizado, mas o bot nao conseguiu exibir o menu de onboarding',
             context: { contactId: contact.id, phase: 'onboarding_menu', error: error.message }
+          }).catch(() => undefined);
+        });
+        await sendEmailCapturePrompt(chat.id, contact.id).catch(async (error) => {
+          await logsManager.create({
+            level: 'warn',
+            channel: 'telegram',
+            action: 'chat_profile.email_prompt_failed',
+            message: 'Permissao recebida, mas o pedido opcional de email nao foi entregue',
+            context: { contactId: contact.id, errorCode: error.code || 'CHAT_PROFILE_PROMPT_FAILED' }
           }).catch(() => undefined);
         });
       } else if ((started || writeAccessAllowed) && !contact.phone) {
@@ -1153,11 +1223,11 @@ async function send(input) {
 }
 
 async function listChats(query = {}) {
-  const result = await contactsManager.list({ ...query, channel: 'telegram', authorized: true, active: true });
+  const result = await contactsManager.list({ ...query, channel: 'telegram', active: true });
   return {
     ...result,
     items: result.items.map((contact) => {
-      const identity = contact.channels.find((item) => item.channel === 'telegram' && item.authorized);
+      const identity = contact.channels.find((item) => item.channel === 'telegram');
       return { ...contact, chatId: identity?.deliveryAddress || null };
     })
   };
@@ -1168,9 +1238,9 @@ async function sync() {
   let contactsSynced = 0;
   let contactPage;
   do {
-    contactPage = await contactsManager.list({ channel: 'telegram', authorized: true, active: true, page, limit: 100 });
+    contactPage = await contactsManager.list({ channel: 'telegram', active: true, page, limit: 100 });
     for (const contact of contactPage.items) {
-      const identity = contact.channels.find((item) => item.channel === 'telegram' && item.authorized);
+      const identity = contact.channels.find((item) => item.channel === 'telegram');
       if (!identity?.deliveryAddress) continue;
       await conversationsManager.upsertConversation({
         channel: 'telegram', externalId: identity.deliveryAddress, contactId: contact.id,
@@ -1250,6 +1320,29 @@ function normalizeWebhookUrl(value) {
   return url.toString();
 }
 
+function automaticWebhookUrl() {
+  let publicUrl;
+  try {
+    publicUrl = new URL(String(env.publicAppUrl || ''));
+  } catch (_error) {
+    throw new ApiError(409, 'Configure PUBLIC_APP_URL com o dominio HTTPS publico para ativar o webhook automatico do Telegram', null, 'PUBLIC_APP_URL_REQUIRED');
+  }
+  const hostname = publicUrl.hostname.toLowerCase();
+  const localHost = hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '0.0.0.0'
+    || hostname === '::1'
+    || hostname.endsWith('.localhost')
+    || hostname.endsWith('.local');
+  if (publicUrl.protocol !== 'https:' || localHost || publicUrl.username || publicUrl.password) {
+    throw new ApiError(409, 'Configure PUBLIC_APP_URL com o dominio HTTPS publico para ativar o webhook automatico do Telegram', null, 'PUBLIC_APP_URL_REQUIRED');
+  }
+  publicUrl.pathname = env.apiPrefix.replace(/\/$/, '') + '/webhooks/telegram';
+  publicUrl.search = '';
+  publicUrl.hash = '';
+  return normalizeWebhookUrl(publicUrl.toString());
+}
+
 async function registerWebhook(url, actorId) {
   const webhookUrl = normalizeWebhookUrl(url);
   let secret = await settingsManager.getValue('TELEGRAM_WEBHOOK_SECRET');
@@ -1264,4 +1357,21 @@ async function registerWebhook(url, actorId) {
   return { registered: Boolean(result), url: webhookUrl, webhookSecretGenerated };
 }
 
-module.exports = { status, clearIdentityCache, webhook, send, sendFromContract, registerWebhook, refreshWebhookRegistration, normalizeWebhookUrl, listChats, sync, listGroups, createGroup, updateGroup, removeGroup, fetchTelegramProfileAvatar };
+module.exports = {
+  status,
+  clearIdentityCache,
+  webhook,
+  send,
+  sendFromContract,
+  registerWebhook,
+  refreshWebhookRegistration,
+  normalizeWebhookUrl,
+  automaticWebhookUrl,
+  listChats,
+  sync,
+  listGroups,
+  createGroup,
+  updateGroup,
+  removeGroup,
+  fetchTelegramProfileAvatar
+};

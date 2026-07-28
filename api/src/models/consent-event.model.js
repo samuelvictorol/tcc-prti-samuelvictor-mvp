@@ -11,8 +11,18 @@ const consentEventSchema = new mongoose.Schema({
   source: { type: String, required: true },
   termsVersion: { type: String },
   actor: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+  operationIdHash: { type: String, select: false },
   evidenceEncrypted: { type: String, select: false },
   occurredAt: { type: Date, default: Date.now, index: true }
 }, { timestamps: true, versionKey: false });
+
+consentEventSchema.index(
+  { operationIdHash: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { operationIdHash: { $type: 'string' } },
+    name: 'consent_operation_unique'
+  }
+);
 
 module.exports = mongoose.models.ConsentEvent || mongoose.model('ConsentEvent', consentEventSchema);

@@ -151,6 +151,53 @@ test('resposta livre usa Graph v25, persiste outbound e nao renova a janela inbo
   assert.equal(result.conversation.consent.authorized, false);
 });
 
+test('codigo de perfil chega ao provedor sem entrar no historico, socket ou log', async (context) => {
+  restoreAfter(context, [
+    [conversationsManager, 'requireOpenCloudServiceWindow'],
+    [conversationsManager, 'recordOutbound'],
+    [conversationsManager, 'getById'],
+    [contactsManager, 'getById'],
+    [settingsManager, 'getValue'],
+    [logsManager, 'create']
+  ]);
+  conversationsManager.requireOpenCloudServiceWindow = async () => openConversation();
+  conversationsManager.getById = async () => serializedConversation();
+  contactsManager.getById = async () => serializedContact(false);
+  settingsManager.getValue = async (key) => ({
+    WHATSAPP_CLOUD_ACCESS_TOKEN: 'token-ficticio',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
+    WHATSAPP_CLOUD_API_VERSION: 'v25.0'
+  })[key] || null;
+  let historyCalled = false;
+  conversationsManager.recordOutbound = async () => {
+    historyCalled = true;
+    throw new Error('codigo nao deve ser persistido');
+  };
+  const logs = [];
+  logsManager.create = async (entry) => {
+    logs.push(entry);
+    return entry;
+  };
+  let providerBody;
+  global.fetch = async (_url, options) => {
+    providerBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ messages: [{ id: 'wamid.profile-code' }] }) };
+  };
+
+  const codeMessage = 'Seu codigo de acesso e *“123456”*.';
+  const result = await whatsappCloudManager.sendConversationText(
+    '507f1f77bcf86cd799439011',
+    codeMessage,
+    { useCase: 'profile_auth' }
+  );
+
+  assert.equal(providerBody.text.body, codeMessage);
+  assert.equal(historyCalled, false);
+  assert.equal(result.message, null);
+  assert.equal(logs[0].action, 'profile_auth.code_sent');
+  assert.doesNotMatch(JSON.stringify(logs), /123456/);
+});
+
 test('janela fechada bloqueia texto livre antes de chamar a Meta', async (context) => {
   restoreAfter(context, [[conversationsManager, 'requireOpenCloudServiceWindow']]);
   let providerCalled = false;

@@ -14,6 +14,7 @@ const telegramManager = require('./telegram.manager');
 const settingsManager = require('./settings.manager');
 const { env } = require('../config/env');
 const { searchHash } = require('../services/crypto.service');
+const { getRedis } = require('../services/redis.service');
 const {
   normalizeEmail,
   normalizePhone,
@@ -29,14 +30,15 @@ const PROFILE_SCOPE = Object.freeze([
   'profile:consent:revoke',
   'profile:history'
 ]);
-const PROFILE_TEMPLATE = Object.freeze({
-  label: 'Validar Usuário',
-  name: 'verify_code_1',
-  languageCode: 'pt_BR',
-  parameter: 'codigo'
+const PROFILE_LOGIN_COMMAND = '/gerar-codigo';
+const PROFILE_LOGIN_FLOW = Object.freeze({
+  label: 'Código pela conversa oficial',
+  command: PROFILE_LOGIN_COMMAND,
+  description: 'O contato abre o WhatsApp oficial, envia o comando e recebe um código temporário na janela de atendimento.'
 });
-const CODE_REQUEST_MESSAGE = 'Codigo enviado pelos canais de acesso disponiveis.';
+const CODE_REQUEST_MESSAGE = 'Abra o WhatsApp oficial e envie /gerar-codigo para receber o codigo temporario.';
 const INVALID_CODE_MESSAGE = 'Codigo invalido, expirado ou sem tentativas disponiveis';
+const localRequestLocks = new Set();
 
 function normalizedIdentifier(value) {
   const raw = String(value || '').normalize('NFKC').trim();
@@ -212,74 +214,225 @@ async function enforceRequestRate(identifierHash) {
   }
 }
 
-async function requestCode(input, meta = {}) {
-  const identifier = normalizedIdentifier(input.identifier);
-  await enforceRequestRate(identifier.identifierHash);
-  const contact = await uniqueContactForIdentifier(identifier);
-  if (!contact) {
+function challengeCodeExpiry(challenge) {
+  return challenge?.codeExpiresAt || challenge?.expiresAt || null;
+}
+
+function activeCodeWindow(now = new Date()) {
+  return {
+    $or: [
+      { codeExpiresAt: { $gt: now } },
+      { codeExpiresAt: { $exists: false }, expiresAt: { $gt: now } }
+    ]
+  };
+}
+
+async function acquireRequestLock(identifierHash) {
+  const key = `profile:code-request:${identifierHash}`;
+  const token = crypto.randomUUID();
+  const redis = getRedis();
+  if (!redis && env.redisRequired) {
     throw new ApiError(
-      404,
-      'Contato nao encontrado para o identificador informado',
+      503,
+      'Nao foi possivel iniciar a verificacao com seguranca. Tente novamente.',
       null,
-      'PROFILE_CONTACT_NOT_FOUND'
+      'PROFILE_CODE_LOCK_UNAVAILABLE'
     );
   }
-  const challengeId = crypto.randomUUID();
-  const code = secureCode();
+  if (redis) {
+    let acquired;
+    try {
+      acquired = await redis.set(key, token, { NX: true, EX: 15 });
+    } catch (_error) {
+      throw new ApiError(
+        503,
+        'Nao foi possivel iniciar a verificacao com seguranca. Tente novamente.',
+        null,
+        'PROFILE_CODE_LOCK_UNAVAILABLE'
+      );
+    }
+    if (!acquired) {
+      throw new ApiError(429, 'Aguarde antes de solicitar outro codigo', null, 'PROFILE_CODE_RATE_LIMIT');
+    }
+    return async () => {
+      try {
+        await redis.eval(
+          'if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end',
+          { keys: [key], arguments: [token] }
+        );
+      } catch (_error) {
+        // O TTL curto libera o lock mesmo se o Redis oscilar durante o cleanup.
+      }
+    };
+  }
+  if (localRequestLocks.has(key)) {
+    throw new ApiError(429, 'Aguarde antes de solicitar outro codigo', null, 'PROFILE_CODE_RATE_LIMIT');
+  }
+  localRequestLocks.add(key);
+  return async () => { localRequestLocks.delete(key); };
+}
+
+async function profileWhatsappEntryPoint() {
+  const configured = await settingsManager.getValue('WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER');
+  const digits = String(configured || env.whatsappCloudDisplayPhoneNumber || '').replace(/\D/g, '');
+  if (!/^\d{8,15}$/.test(digits)) {
+    throw new ApiError(
+      503,
+      'Configure o numero publico do WhatsApp Cloud antes de habilitar o login pelo chat',
+      null,
+      'PROFILE_WHATSAPP_PUBLIC_NUMBER_REQUIRED'
+    );
+  }
+  const url = new URL('https://wa.me/' + digits);
+  url.searchParams.set('text', PROFILE_LOGIN_COMMAND);
+  return { digits, url: url.toString() };
+}
+
+async function requestCode(input, meta = {}) {
+  const identifier = normalizedIdentifier(input.identifier);
+  const releaseLock = await acquireRequestLock(identifier.identifierHash);
+  try {
+    const now = new Date();
+    const activeChallenge = await ProfileAuthChallenge.findOne({
+      identifierHash: identifier.identifierHash,
+      consumedAt: null,
+      revokedAt: null,
+      $and: [activeCodeWindow(now)]
+    }).select('_id').lean();
+    // Nunca devolvemos o challengeId de outra solicitacao. Quem conhece apenas
+    // o email/telefone nao pode recuperar o desafio e consumir suas tentativas.
+    if (activeChallenge) {
+      throw new ApiError(429, 'Aguarde antes de solicitar outro codigo', null, 'PROFILE_CODE_RATE_LIMIT');
+    }
+    await enforceRequestRate(identifier.identifierHash);
+    const contact = await uniqueContactForIdentifier(identifier);
+    if (!contact) {
+      throw new ApiError(
+        404,
+        'Contato nao encontrado para o identificador informado',
+        null,
+        'PROFILE_CONTACT_NOT_FOUND'
+      );
+    }
+    const whatsappEntryPoint = await profileWhatsappEntryPoint();
+    const challengeId = crypto.randomUUID();
+    const codeExpiresAt = new Date(now.getTime() + env.profileCodeTtlSeconds * 1000);
+    const expiresAt = new Date(
+      now.getTime() + Math.max(env.profileCodeWindowSeconds, env.profileCodeTtlSeconds) * 1000
+    );
+    await ProfileAuthChallenge.create({
+      challengeId,
+      identifierType: identifier.type,
+      identifierHash: identifier.identifierHash,
+      contact: contact._id,
+      maxAttempts: env.profileCodeMaxAttempts,
+      requestIpHash: meta.ip ? searchHash('profile-ip:' + meta.ip) : undefined,
+      userAgent: String(meta.userAgent || '').slice(0, 500),
+      codeExpiresAt,
+      expiresAt
+    });
+
+    return {
+      challengeId,
+      expiresInSeconds: env.profileCodeTtlSeconds,
+      expiresAt: codeExpiresAt.toISOString(),
+      command: PROFILE_LOGIN_COMMAND,
+      whatsappUrl: whatsappEntryPoint.url,
+      message: CODE_REQUEST_MESSAGE,
+      awaitingWhatsapp: true
+    };
+  } finally {
+    await releaseLock();
+  }
+}
+
+async function activatePendingCodeFromWhatsapp(input = {}) {
+  if (!mongoose.isValidObjectId(input.contactId) || !input.conversationId) {
+    return { activated: false, reasonCode: 'PROFILE_CHALLENGE_CONTEXT_INVALID' };
+  }
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + env.profileCodeTtlSeconds * 1000);
+  const challenge = await ProfileAuthChallenge.findOne({
+    contact: input.contactId,
+    consumedAt: null,
+    revokedAt: null,
+    $and: [activeCodeWindow(now)]
+  }).select('+identifierHash +codeHash').sort({ createdAt: -1 });
+  if (!challenge) {
+    return { activated: false, reasonCode: 'PROFILE_CHALLENGE_NOT_FOUND' };
+  }
 
-  await ProfileAuthChallenge.updateMany(
-    { identifierHash: identifier.identifierHash, consumedAt: null, revokedAt: null },
-    { $set: { revokedAt: now } }
+  const code = secureCode();
+  const resendBefore = new Date(now.getTime() - env.profileCodeResendSeconds * 1000);
+  const codeExpiresAt = new Date(now.getTime() + env.profileCodeTtlSeconds * 1000);
+  const cleanupExpiresAt = new Date(
+    now.getTime() + Math.max(env.profileCodeWindowSeconds, env.profileCodeTtlSeconds) * 1000
   );
-  const challenge = await ProfileAuthChallenge.create({
-    challengeId,
-    identifierType: identifier.type,
-    identifierHash: identifier.identifierHash,
-    contact: contact._id,
-    codeHash: codeHash(challengeId, code),
-    maxAttempts: env.profileCodeMaxAttempts,
-    requestIpHash: meta.ip ? searchHash('profile-ip:' + meta.ip) : undefined,
-    userAgent: String(meta.userAgent || '').slice(0, 500),
-    expiresAt
-  });
+  const claimed = await ProfileAuthChallenge.findOneAndUpdate({
+    _id: challenge._id,
+    consumedAt: null,
+    revokedAt: null,
+    $and: [
+      activeCodeWindow(now),
+      {
+        $or: [
+          { activatedAt: null },
+          { activatedAt: { $exists: false } },
+          { activatedAt: { $lte: resendBefore } }
+        ]
+      },
+      {
+        $or: [
+          { activationCount: { $exists: false } },
+          { activationCount: { $lt: env.profileCodeMaxRequests } }
+        ]
+      }
+    ]
+  }, {
+    $set: {
+      codeHash: codeHash(challenge.challengeId, code),
+      codeExpiresAt,
+      activatedAt: now,
+      activationChannel: 'whatsapp_cloud',
+      attempts: 0,
+      deliveries: []
+    },
+    $inc: { activationCount: 1 },
+    $max: { expiresAt: cleanupExpiresAt }
+  }, { new: true });
+  if (!claimed) {
+    return { activated: false, reasonCode: 'PROFILE_CHALLENGE_ALREADY_ACTIVATED' };
+  }
 
+  const contact = await Contact.findById(input.contactId).select(contactsManager.SECRET_SELECT);
+  if (!contact) {
+    await ProfileAuthChallenge.updateOne({ _id: claimed._id }, { $set: { revokedAt: new Date() } });
+    return { activated: false, reasonCode: 'PROFILE_CONTACT_NOT_FOUND' };
+  }
   const destinations = profileAuthDestinations(contact);
+  const ttlMinutes = Math.max(1, Math.ceil(env.profileCodeTtlSeconds / 60));
   const unavailable = async (errorCode) => ({ notAvailable: true, errorCode });
+  const whatsappText = `Seu código de acesso ao Meu perfil é *“${code}”*. Ele expira em ${ttlMinutes} minutos.`;
+  const commonText = `Seu código de acesso ao Meu perfil é “${code}”. Ele expira em ${ttlMinutes} minutos.`;
   const sends = [
     destinations.email
       ? gmailManager.send({
           destination: destinations.email,
           allowUnconsented: true,
           useCase: 'profile_auth',
-          subject: 'Codigo de acesso ao seu perfil',
-          text: `Seu codigo de acesso e ${code}. Ele expira em 10 minutos.`
+          subject: 'Código de acesso ao seu perfil',
+          text: commonText
         })
       : unavailable('EMAIL_DESTINATION_UNAVAILABLE'),
-    destinations.whatsappCloud
-      ? whatsappCloudManager.send({
-          destination: destinations.whatsappCloud,
-          allowUnconsented: true,
-          useCase: 'profile_auth',
-          templateName: PROFILE_TEMPLATE.name,
-          languageCode: PROFILE_TEMPLATE.languageCode,
-          components: [{
-            type: 'body',
-            parameters: [{ type: 'text', text: code }]
-          }, {
-            type: 'button',
-            sub_type: 'url',
-            index: '0',
-            parameters: [{ type: 'text', text: code }]
-          }]
-        })
-      : unavailable('WHATSAPP_DESTINATION_UNAVAILABLE'),
+    whatsappCloudManager.sendConversationText(
+      input.conversationId,
+      whatsappText,
+      { useCase: 'profile_auth' }
+    ),
     destinations.telegram
       ? telegramManager.send({
-          contactId: String(contact._id || contact.id),
+          contactId: String(contact._id),
           useCase: 'profile_auth',
-          text: `Seu codigo de acesso ao perfil e ${code}. Ele expira em 10 minutos.`
+          text: commonText
         })
       : unavailable('TELEGRAM_DESTINATION_UNAVAILABLE')
   ];
@@ -291,23 +444,15 @@ async function requestCode(input, meta = {}) {
   ];
   const delivered = deliveries.some((delivery) => delivery.status === 'sent');
   await ProfileAuthChallenge.updateOne(
-    { _id: challenge._id },
+    { _id: claimed._id },
     { $set: { deliveries, ...(!delivered ? { revokedAt: new Date() } : {}) } }
   );
-  if (!delivered) {
-    throw new ApiError(
-      503,
-      'Nao foi possivel entregar o codigo pelos canais disponiveis',
-      null,
-      'PROFILE_CODE_DELIVERY_FAILED'
-    );
-  }
-
   return {
-    challengeId,
-    expiresInSeconds: env.profileCodeTtlSeconds,
-    expiresAt: expiresAt.toISOString(),
-    message: CODE_REQUEST_MESSAGE
+    activated: delivered,
+    challengeId: claimed.challengeId,
+    deliveries,
+    expiresAt: challengeCodeExpiry(claimed),
+    reasonCode: delivered ? null : 'PROFILE_CODE_DELIVERY_FAILED'
   };
 }
 
@@ -318,7 +463,9 @@ async function verifyCode(input, meta = {}) {
   const unavailable = !challenge
     || challenge.revokedAt
     || challenge.consumedAt
-    || challenge.expiresAt <= now
+    || !challenge.activatedAt
+    || !challenge.codeHash
+    || challengeCodeExpiry(challenge) <= now
     || challenge.attempts >= challenge.maxAttempts;
   if (unavailable) {
     await registerSecurityStrike(meta.ip || 'unknown');
@@ -326,9 +473,22 @@ async function verifyCode(input, meta = {}) {
   }
 
   const valid = safeHashEquals(challenge.codeHash, codeHash(challenge.challengeId, input.code));
+  const generationFilter = {
+    codeHash: challenge.codeHash,
+    activatedAt: challenge.activatedAt,
+    ...(challenge.codeExpiresAt
+      ? { codeExpiresAt: challenge.codeExpiresAt }
+      : { expiresAt: challenge.expiresAt })
+  };
   if (!valid || !challenge.contact) {
     await ProfileAuthChallenge.updateOne(
-      { _id: challenge._id, consumedAt: null, revokedAt: null, attempts: { $lt: challenge.maxAttempts } },
+      {
+        _id: challenge._id,
+        consumedAt: null,
+        revokedAt: null,
+        attempts: { $lt: challenge.maxAttempts },
+        ...generationFilter
+      },
       { $inc: { attempts: 1 } }
     );
     await registerSecurityStrike(meta.ip || 'unknown');
@@ -339,8 +499,9 @@ async function verifyCode(input, meta = {}) {
     _id: challenge._id,
     consumedAt: null,
     revokedAt: null,
-    expiresAt: { $gt: now },
-    attempts: { $lt: challenge.maxAttempts }
+    $and: [activeCodeWindow(now)],
+    attempts: { $lt: challenge.maxAttempts },
+    ...generationFilter
   }, {
     $set: { consumedAt: now },
     $inc: { attempts: 1 }
@@ -647,98 +808,23 @@ async function deliveryHistory(contactId, query = {}) {
 function challengeStatus(challenge, now = new Date()) {
   if (challenge.consumedAt) return 'verified';
   if (challenge.revokedAt) return 'revoked';
-  if (challenge.expiresAt <= now) return 'expired';
+  if (challengeCodeExpiry(challenge) <= now) return 'expired';
   if (challenge.attempts >= challenge.maxAttempts) return 'blocked';
+  if (!challenge.activatedAt) return 'awaiting_whatsapp';
   return 'pending';
 }
 
 async function profileTemplateAvailability() {
-  const checkedAt = new Date().toISOString();
-  const [accessToken, businessAccountId, version] = await Promise.all([
-    settingsManager.getValue('WHATSAPP_CLOUD_ACCESS_TOKEN'),
-    settingsManager.getValue('WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID'),
-    settingsManager.getValue('WHATSAPP_CLOUD_API_VERSION')
-  ]);
-  if (!accessToken || !businessAccountId) {
-    return {
-      found: false,
-      approvalConfirmed: false,
-      status: 'unknown',
-      languages: [],
-      checkedAt,
-      reasonCode: 'WHATSAPP_TEMPLATE_STATUS_NOT_CONFIGURED'
-    };
-  }
-  try {
-    const params = new URLSearchParams({
-      name: PROFILE_TEMPLATE.name,
-      fields: 'id,name,status,language,category',
-      limit: '100'
-    });
-    const response = await fetch(
-      `https://graph.facebook.com/${version || env.whatsappCloudApiVersion}/${encodeURIComponent(businessAccountId)}/message_templates?${params}`,
-      {
-        headers: { authorization: 'Bearer ' + accessToken },
-        signal: AbortSignal.timeout(8_000)
-      }
-    );
-    if (!response.ok) {
-      return {
-        found: false,
-        approvalConfirmed: false,
-        status: 'unknown',
-        languages: [],
-        checkedAt,
-        reasonCode: 'WHATSAPP_TEMPLATE_STATUS_UNAVAILABLE'
-      };
-    }
-    const body = await response.json().catch(() => ({}));
-    const matches = (body.data || []).filter((item) => item.name === PROFILE_TEMPLATE.name);
-    const target = matches.find((item) => item.language === PROFILE_TEMPLATE.languageCode);
-    const languages = matches.map((item) => ({
-      language: item.language || null,
-      status: String(item.status || 'unknown').toLowerCase(),
-      category: item.category || null
-    }));
-    if (!matches.length) {
-      return {
-        found: false,
-        approvalConfirmed: false,
-        status: 'absent',
-        languages,
-        checkedAt,
-        reasonCode: 'WHATSAPP_TEMPLATE_ABSENT'
-      };
-    }
-    if (!target) {
-      return {
-        found: true,
-        approvalConfirmed: false,
-        status: 'language_missing',
-        languages,
-        checkedAt,
-        reasonCode: 'WHATSAPP_TEMPLATE_LANGUAGE_MISSING'
-      };
-    }
-    const status = String(target.status || 'unknown').toLowerCase();
-    return {
-      found: true,
-      approvalConfirmed: status === 'approved',
-      status,
-      languages,
-      checkedAt,
-      reasonCode: status === 'approved' ? null : 'WHATSAPP_TEMPLATE_NOT_APPROVED'
-    };
-  } catch (_error) {
-    return {
-      found: false,
-      approvalConfirmed: false,
-      status: 'unknown',
-      languages: [],
-      checkedAt,
-      reasonCode: 'WHATSAPP_TEMPLATE_STATUS_UNAVAILABLE'
-    };
-  }
+  return {
+    found: true,
+    approvalConfirmed: true,
+    status: 'active',
+    languages: [],
+    checkedAt: new Date().toISOString(),
+    reasonCode: null,
+    command: PROFILE_LOGIN_COMMAND,
+    flow: 'whatsapp_service_window'
+  };
 }
 
 async function loginOverview(query = {}) {
@@ -762,10 +848,13 @@ async function loginOverview(query = {}) {
   return {
     configuration: {
       template: {
-        label: PROFILE_TEMPLATE.label,
-        name: PROFILE_TEMPLATE.name,
-        languageCode: PROFILE_TEMPLATE.languageCode,
-        bodyParameter: '{{codigo}}',
+        label: PROFILE_LOGIN_FLOW.label,
+        name: null,
+        languageCode: null,
+        bodyParameter: null,
+        command: PROFILE_LOGIN_COMMAND,
+        flow: 'whatsapp_service_window',
+        description: PROFILE_LOGIN_FLOW.description,
         editable: false,
         approvalConfirmed: templateAvailability.approvalConfirmed,
         found: templateAvailability.found,
@@ -773,15 +862,14 @@ async function loginOverview(query = {}) {
         languages: templateAvailability.languages,
         checkedAt: templateAvailability.checkedAt,
         statusReasonCode: templateAvailability.reasonCode,
-        prerequisite: 'Crie e aprove este template no painel da Meta antes de habilitar codigos pelo WhatsApp.'
+        prerequisite: 'Configure o numero publico do WhatsApp Cloud. O contato inicia a conversa e o sistema responde dentro da janela de 24 horas.'
       },
       providers: {
         email: { configured: Boolean(gmailStatus.configured) },
         whatsapp_cloud: {
           configured: Boolean(cloudStatus.sendConfigured || cloudStatus.configured),
-          templateApprovalConfirmed: templateAvailability.approvalConfirmed,
-          templateStatus: templateAvailability.status,
-          templateCheckedAt: templateAvailability.checkedAt
+          serviceWindowFlow: true,
+          command: PROFILE_LOGIN_COMMAND
         },
         telegram: { configured: Boolean(telegramStatus.configured) }
       }
@@ -800,7 +888,8 @@ async function loginOverview(query = {}) {
         errorCode: delivery.errorCode || null,
         attemptedAt: delivery.attemptedAt
       })),
-      expiresAt: challenge.expiresAt,
+      expiresAt: challengeCodeExpiry(challenge),
+      activatedAt: challenge.activatedAt || null,
       createdAt: challenge.createdAt,
       consumedAt: challenge.consumedAt
     })), total, page, limit)
@@ -809,9 +898,11 @@ async function loginOverview(query = {}) {
 
 module.exports = {
   PROFILE_SCOPE,
-  PROFILE_TEMPLATE,
+  PROFILE_LOGIN_COMMAND,
+  PROFILE_LOGIN_FLOW,
   normalizedIdentifier,
   requestCode,
+  activatePendingCodeFromWhatsapp,
   verifyCode,
   authenticateProfileAccess,
   getOwnProfile,

@@ -29,7 +29,7 @@ const identifierType = ref('email')
 const emailIdentifier = ref('')
 const phoneIdentifier = ref('')
 const code = ref('')
-const challenge = reactive({ id: '', expiresInSeconds: 600 })
+const challenge = reactive({ id: '', expiresInSeconds: 600, whatsappUrl: '', command: '/gerar-codigo' })
 const editMode = ref(false)
 const editForm = reactive({ displayName: '', email: '', phone: '', telegramUsername: '' })
 const revokeDialog = ref(false)
@@ -104,6 +104,31 @@ function resetIdentifier() {
   phoneIdentifier.value = ''
 }
 
+function useAnotherIdentifier() {
+  window.localStorage.removeItem('notify_profile_pending_challenge')
+  challenge.id = ''
+  challenge.whatsappUrl = ''
+  code.value = ''
+  step.value = 'identifier'
+}
+
+function restorePendingChallenge() {
+  try {
+    const pending = JSON.parse(window.localStorage.getItem('notify_profile_pending_challenge') || 'null')
+    if (!pending?.id || !pending?.expiresAt || new Date(pending.expiresAt).getTime() <= Date.now()) {
+      window.localStorage.removeItem('notify_profile_pending_challenge')
+      return
+    }
+    challenge.id = pending.id
+    challenge.expiresInSeconds = Math.max(1, Math.ceil((new Date(pending.expiresAt).getTime() - Date.now()) / 1000))
+    challenge.whatsappUrl = pending.whatsappUrl || ''
+    challenge.command = pending.command || '/gerar-codigo'
+    step.value = 'code'
+  } catch (_error) {
+    window.localStorage.removeItem('notify_profile_pending_challenge')
+  }
+}
+
 function syncEditForm() {
   Object.assign(editForm, {
     displayName: profile.value?.displayName || '',
@@ -150,6 +175,8 @@ async function loadProfile() {
 
 async function requestCode() {
   loading.value = true
+  const whatsappWindow = window.open('about:blank', '_blank')
+  if (whatsappWindow) whatsappWindow.opener = null
   try {
     const identifier = identifierType.value === 'phone'
       ? phoneIdentifier.value
@@ -159,14 +186,29 @@ async function requestCode() {
     )
     challenge.id = result.challengeId
     challenge.expiresInSeconds = result.expiresInSeconds || 600
+    challenge.whatsappUrl = result.whatsappUrl || ''
+    challenge.command = result.command || '/gerar-codigo'
+    window.localStorage.setItem('notify_profile_pending_challenge', JSON.stringify({
+      id: challenge.id,
+      expiresAt: result.expiresAt,
+      whatsappUrl: challenge.whatsappUrl,
+      command: challenge.command,
+    }))
     code.value = ''
     step.value = 'code'
+    if (challenge.whatsappUrl) {
+      if (whatsappWindow) whatsappWindow.location.replace(challenge.whatsappUrl)
+      else window.location.assign(challenge.whatsappUrl)
+    } else {
+      whatsappWindow?.close()
+    }
     $q.notify({
       type: 'positive',
-      message: 'Código enviado pelos canais disponíveis.',
-      caption: 'Confira seu Gmail e WhatsApp e use o mesmo código de seis dígitos.',
+      message: 'Envie o comando no WhatsApp para gerar o código.',
+      caption: `A conversa oficial foi aberta com ${challenge.command}. Depois, use aqui o mesmo código de seis dígitos.`,
     })
   } catch (error) {
+    whatsappWindow?.close()
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível solicitar o código.') })
   } finally {
     loading.value = false
@@ -178,6 +220,7 @@ async function verifyCode() {
   try {
     const result = await verifyProfileCode(challenge.id, code.value)
     profile.value = result.profile
+    window.localStorage.removeItem('notify_profile_pending_challenge')
     syncEditForm()
     step.value = 'profile'
     await Promise.all([
@@ -277,6 +320,7 @@ function onProfileSessionExpired() {
 onMounted(() => {
   window.addEventListener('notify:profile-session-expired', onProfileSessionExpired)
   if (getProfileToken()) loadProfile()
+  else restorePendingChallenge()
 })
 
 onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired', onProfileSessionExpired))
@@ -304,10 +348,10 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
               <div class="eyebrow">MEU PERFIL</div>
               <h1>Seus dados e permissões, sob seu controle.</h1>
               <p v-if="step === 'identifier'">
-                Escolha como deseja se identificar. O mesmo código temporário será enviado aos canais elegíveis.
+                Escolha como deseja se identificar. Abriremos o WhatsApp oficial para você enviar <strong>/gerar-codigo</strong> e receber o código temporário.
               </p>
               <p v-else>
-                Digite o código de seis números. Ele expira em {{ Math.round(challenge.expiresInSeconds / 60) }} minutos.
+                Envie <strong>{{ challenge.command }}</strong> na conversa aberta e digite aqui o código de seis números. Ele expira em {{ Math.round(challenge.expiresInSeconds / 60) }} minutos.
               </p>
             </q-card-section>
 
@@ -373,6 +417,10 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
             </q-card-section>
 
             <q-card-section v-else>
+              <q-banner rounded class="activation-note q-mb-md">
+                O WhatsApp responde dentro da janela oficial de atendimento. Se a conversa não abriu,
+                <a v-if="challenge.whatsappUrl" :href="challenge.whatsappUrl" target="_blank" rel="noopener noreferrer">abra o WhatsApp novamente</a>.
+              </q-banner>
               <q-form @submit.prevent="verifyCode">
                 <q-input
                   v-model="code"
@@ -387,7 +435,7 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
                   <template #prepend><q-icon name="password" /></template>
                 </q-input>
                 <q-btn type="submit" color="dark" unelevated no-caps size="lg" class="full-width" icon-right="verified_user" label="Validar e entrar" :loading="loading" />
-                <q-btn flat no-caps class="full-width q-mt-sm" label="Usar outro email ou telefone" @click="step = 'identifier'" />
+                <q-btn flat no-caps class="full-width q-mt-sm" label="Usar outro email ou telefone" @click="useAnotherIdentifier" />
               </q-form>
             </q-card-section>
           </q-card>

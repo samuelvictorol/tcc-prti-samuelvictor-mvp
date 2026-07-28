@@ -21,9 +21,6 @@ const columns = [
 
 const template = computed(() => configuration.value.template || {})
 const providers = computed(() => configuration.value.providers || {})
-const bodyParameterExample = '{{código}}'
-const templateBodyExample = '{{código}} é o seu código de verificação. · Botão: Copiar código'
-
 function formatDate(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
@@ -42,6 +39,8 @@ function statusMeta(status) {
     expired: { label: 'Expirado', color: 'grey-7' },
     blocked: { label: 'Bloqueado', color: 'negative' },
     pending_login: { label: 'Aguardando código', color: 'warning' },
+    awaiting_whatsapp: { label: 'Aguardando WhatsApp', color: 'info' },
+    active: { label: 'Ativo', color: 'positive' },
     sent: { label: 'Enviado', color: 'positive' },
     failed: { label: 'Falhou', color: 'negative' },
     not_available: { label: 'Indisponível', color: 'grey-7' },
@@ -54,7 +53,7 @@ function challengeMeta(status) {
 
 function channelMeta(channel) {
   return {
-    email: { label: 'Gmail', icon: 'mail', color: 'deep-purple' },
+    email: { label: 'Gmail', icon: 'mail', color: 'red-7' },
     whatsapp_cloud: { label: 'WhatsApp Cloud', icon: 'cloud_sync', color: 'positive' },
     telegram: { label: 'Telegram', icon: 'send', color: 'light-blue-7' },
   }[channel] || { label: channel || 'Canal', icon: 'notifications', color: 'grey-7' }
@@ -95,27 +94,25 @@ onMounted(() => load())
     <section class="status-grid">
       <q-card flat class="status-card template-card">
         <q-card-section class="status-card__title">
-          <q-avatar color="positive" text-color="white" icon="verified_user" />
-          <div><span>TEMPLATE FIXO DA META</span><strong>{{ template.label || 'Validar Usuário' }}</strong></div>
+          <q-avatar color="positive" text-color="white" icon="forum" />
+          <div><span>FLUXO DE ACESSO</span><strong>{{ template.label || 'Código pela conversa oficial' }}</strong></div>
           <div class="status-card__actions">
             <ContextHelp
-              title="Requisitos do template de autenticação"
-              tooltip="Como configurar o verify_code_1 na Meta"
+              title="Como o código é gerado"
+              tooltip="Entenda o login pela conversa oficial"
             >
-              <p><strong>{{ template.prerequisite || 'Crie e aprove este template na biblioteca do painel da Meta antes de habilitar códigos pelo WhatsApp.' }}</strong></p>
-              <p>Use o nome oficial <code>verify_code_1</code>, idioma <code>pt_BR</code>, entrega <strong>Copiar código</strong> e exatamente 1 parâmetro de código.</p>
-              <p>O envio monta automaticamente BODY e BUTTON (índice 0) com o mesmo código exigido pela Meta.</p>
-              <p class="template-example"><code>{{ templateBodyExample }}</code></p>
-              <p>Este item é somente leitura. A aprovação é consultada na conta Meta configurada e nunca é presumida manualmente.</p>
-              <p v-if="template.checkedAt">Última consulta: {{ formatDate(template.checkedAt) }}.</p>
+              <p><strong>{{ template.prerequisite || 'Configure o número público do WhatsApp Cloud.' }}</strong></p>
+              <p>Ao solicitar acesso em <code>/meu-perfil</code>, o sistema abre o WhatsApp oficial com o comando <code>{{ template.command || '/gerar-codigo' }}</code>.</p>
+              <p>O contato envia o comando, abre a janela oficial de atendimento de 24 horas e recebe uma resposta de texto com um código de seis dígitos.</p>
+              <p>O mesmo código também é enviado ao Gmail e Telegram já vinculados, de forma independente. Nenhum template de autenticação da Meta é necessário para este fluxo.</p>
             </ContextHelp>
             <q-badge :color="statusMeta(template.status).color" :label="statusMeta(template.status).label" />
           </div>
         </q-card-section>
         <q-card-section class="template-details">
-          <div><small>Nome oficial</small><code>{{ template.name || 'verify_code_1' }}</code></div>
-          <div><small>Idioma</small><strong>{{ template.languageCode || 'pt_BR' }}</strong></div>
-          <div><small>Parâmetro BODY</small><code>{{ template.bodyParameter || bodyParameterExample }}</code></div>
+          <div><small>Comando</small><code>{{ template.command || '/gerar-codigo' }}</code></div>
+          <div><small>Canal de início</small><strong>WhatsApp oficial</strong></div>
+          <div><small>Validade</small><strong>10 minutos</strong></div>
         </q-card-section>
       </q-card>
 
@@ -135,7 +132,7 @@ onMounted(() => load())
           <q-badge :color="providers.whatsapp_cloud?.configured ? 'positive' : 'grey-7'" :label="providers.whatsapp_cloud?.configured ? 'Configurado' : 'Não configurado'" />
         </q-card-section>
         <q-card-section class="provider-copy">
-          O envio só fica confirmado quando o template <code>verify_code_1</code>, idioma <code>pt_BR</code>, aparece aprovado na Meta.
+          Responde com texto livre porque o próprio contato abre a conversa e inicia a janela oficial de atendimento.
         </q-card-section>
       </q-card>
 

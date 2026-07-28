@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const Invite = require('../models/invite.model');
+const TemplateSet = require('../models/template-set.model');
 const InviteClick = require('../models/invite-click.model');
 const Contact = require('../models/contact.model');
 const { env } = require('../config/env');
@@ -314,6 +315,15 @@ async function refreshInviteSnapshots(invite) {
 }
 
 async function remove(id) {
+  const linkedSet = await TemplateSet.findOne({ invite: id }).select('_id name').lean();
+  if (linkedSet) {
+    throw new ApiError(
+      409,
+      'Convite vinculado a um conjunto de templates nao pode ser removido',
+      { inviteId: String(id), templateSetId: String(linkedSet._id), templateSetName: linkedSet.name },
+      'INVITE_IN_USE_BY_TEMPLATE_SET'
+    );
+  }
   const result = await Invite.deleteOne({ _id: id });
   if (!result.deletedCount) throw new ApiError(404, 'Convite nao encontrado');
   await InviteClick.deleteMany({ invite: id });

@@ -5,6 +5,7 @@ const { CHANNELS } = require('../enums/channels');
 const contactsManager = require('./contacts.manager');
 const groupsManager = require('./groups.manager');
 const templatesManager = require('./templates.manager');
+const templateSetsManager = require('./template-sets.manager');
 const logsManager = require('./logs.manager');
 const telegramManager = require('./telegram.manager');
 const gmailManager = require('./gmail.manager');
@@ -333,6 +334,8 @@ async function create(input, actorId) {
   }
   let template = null;
   const templates = {};
+  let templateSet = null;
+  let resolvedTemplateIds = input.templateIds;
   if (input.templateId) {
     template = await templatesManager.getById(input.templateId);
     if (template.active === false) {
@@ -352,13 +355,22 @@ async function create(input, actorId) {
   if (input.kind === 'global') {
     if (input.channel !== 'global') throw new ApiError(422, 'Notificacao global exige channel=global');
     if (input.templateId) throw new ApiError(422, 'Use templateIds por canal no disparo global', null, 'GLOBAL_TEMPLATE_MAP_REQUIRED');
-    const selectedEntries = Object.entries(input.templateIds || {})
+    if (input.templateSetId && Object.values(input.templateIds || {}).some(Boolean)) {
+      throw new ApiError(422, 'Use um conjunto ou a selecao manual por canal, nunca ambos', null, 'GLOBAL_TEMPLATE_SELECTOR_CONFLICT');
+    }
+    if (input.templateSetId) {
+      const resolved = await templateSetsManager.resolveForNotification(input.templateSetId);
+      templateSet = resolved.templateSet;
+      resolvedTemplateIds = resolved.templateIds;
+      Object.assign(templates, resolved.templates);
+    }
+    const selectedEntries = Object.entries(resolvedTemplateIds || {})
       .filter(([channel, id]) => NOTIFICATION_DELIVERY_CHANNELS.includes(channel) && id);
     if (!selectedEntries.length) {
       throw new ApiError(422, 'Selecione ao menos um canal com template', null, 'GLOBAL_TEMPLATE_REQUIRED');
     }
     for (const [channel, templateId] of selectedEntries) {
-      const selected = await templatesManager.getById(templateId);
+      const selected = templates[channel] || await templatesManager.getById(templateId);
       if (selected.active === false) {
         throw new ApiError(422, 'Template inativo nao pode ser usado em notificacoes', { templateId: String(templateId), channel }, 'TEMPLATE_INACTIVE');
       }
@@ -373,7 +385,7 @@ async function create(input, actorId) {
   } else if (input.channel === 'global') {
     throw new ApiError(422, 'Canal global aceita somente o modo global por templates', null, 'GLOBAL_TEMPLATE_REQUIRED');
   }
-  const deliveryChannelCount = notificationChannels(input.channel, input.kind, input.templateIds).length;
+  const deliveryChannelCount = notificationChannels(input.channel, input.kind, resolvedTemplateIds).length;
   const recipientLimit = Math.min(
     MAX_NOTIFICATION_RECIPIENTS,
     Math.floor(MAX_NOTIFICATION_DELIVERIES / Math.max(1, deliveryChannelCount))
@@ -395,7 +407,7 @@ async function create(input, actorId) {
   }
   const deliveries = await buildDeliveries(contactIds, input.channel, template, {
     kind: input.kind,
-    templateIds: input.templateIds,
+    templateIds: resolvedTemplateIds,
     templates: input.kind === 'global' ? templates : undefined
   });
   const queuedCount = deliveries.filter((delivery) => delivery.status === DELIVERY_STATUS.QUEUED).length;
@@ -405,7 +417,8 @@ async function create(input, actorId) {
       kind: input.kind,
       channel: input.channel,
       template: input.templateId,
-      templates: input.kind === 'global' ? input.templateIds : undefined,
+      templates: input.kind === 'global' ? resolvedTemplateIds : undefined,
+      templateSet: templateSet?._id,
       content: input.content,
       recipientContacts: input.contactIds,
       recipientGroups: input.groupIds,
@@ -438,7 +451,12 @@ async function create(input, actorId) {
       channel: input.channel,
       action: queuedCount ? 'notification.queued' : 'notification.skipped',
       message: queuedCount ? 'Notificacao enfileirada' : 'Notificacao sem canais elegiveis',
-      context: { notificationId: String(notification._id), queued: queuedCount, skipped: skippedCount },
+      context: {
+        notificationId: String(notification._id),
+        templateSetId: templateSet ? String(templateSet._id) : null,
+        queued: queuedCount,
+        skipped: skippedCount
+      },
       actor: actorId
     });
     return { ...serializeNotification(notification, { includeDeliveries: false }), queuedCount };

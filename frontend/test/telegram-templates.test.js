@@ -17,6 +17,8 @@ describe('builder amigável de templates Telegram', () => {
     expect(page).not.toContain('variantsJson')
     expect(page).not.toContain('payloadJson')
     expect(page).toContain("v-if=\"form.channel === 'email' && form.format === 'html'\"")
+    expect(page).toContain('telegramMediaPreview.kind === \'photo\'')
+    expect(page).toContain('.preview-frame :deep(img)')
   })
 
   it('cria os quatro formatos sem payload manual', () => {

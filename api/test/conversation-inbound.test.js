@@ -28,7 +28,9 @@ test('Telegram cria contato, conversa e aviso administrativo somente no primeiro
     socketService.emit = originals.emit;
   });
 
-  settingsManager.getValue = async () => 'webhook-secret';
+  settingsManager.getValue = async (key) => (
+    key === 'TELEGRAM_WEBHOOK_SECRET' ? 'webhook-secret' : null
+  );
   contactsManager.findByChannelAddress = async () => null;
   let contactInput;
   contactsManager.upsertFromChannel = async (input) => {
@@ -59,7 +61,8 @@ test('Telegram cria contato, conversa e aviso administrativo somente no primeiro
     }
   }, 'webhook-secret');
 
-  assert.equal(contactInput.authorize, true);
+  assert.equal(contactInput.authorize, false);
+  assert.equal(contactInput.consentStatus, undefined);
   assert.equal(contactInput.avatarUrl, 'https://cdn.example/ana.jpg');
   assert.equal(conversationInput.contactId, '507f1f77bcf86cd799439011');
   assert.equal(conversationInput.body, 'Oi');

@@ -8,6 +8,7 @@ const adminNotificationsManager = require('./admin-notifications.manager');
 const webhookEventsManager = require('./whatsapp-cloud-webhook-events.manager');
 const ConversationBackup = require('../models/conversation-backup.model');
 const backupStorage = require('../services/conversation-backup-storage.service');
+const chatProfileFlow = require('../services/chat-profile-flow.service');
 const { decrypt, timingSafeEqual } = require('../services/crypto.service');
 const { env } = require('../config/env');
 const { emit } = require('../services/socket.service');
@@ -29,6 +30,16 @@ const DEFAULT_CLOUD_MESSAGE_LABELS = Object.freeze({
   video: '[Video]'
 });
 const BACKUP_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
+
+function configuredProfileUrl() {
+  try {
+    const base = new URL(env.publicAppUrl);
+    if (!['http:', 'https:'].includes(base.protocol)) return null;
+    return new URL('/meu-perfil', base.origin).toString();
+  } catch (_error) {
+    return null;
+  }
+}
 
 function unwrapCredential(value) {
   let normalized = String(value || '').trim();
@@ -347,6 +358,7 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
   const address = messageAddress;
   if (!address) return resultSummary;
   const inboundText = String(message.text?.body || '');
+  const profileCodeRequested = inboundText.normalize('NFKC').trim().toLowerCase() === '/gerar-codigo';
   const strictPermissionGranted = await settingsManager.isWhatsappPermissionCommand(inboundText);
   const markerCandidate = inboundText.normalize('NFKC').trim().split(/\s+/).at(-1);
   const hasValidAttributionMarker = !strictPermissionGranted
@@ -384,7 +396,7 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
   }
   const { contact } = result;
   const sentAt = cloudMessageSentAt(message);
-  await conversationsManager.recordInbound({
+  const recordedInbound = await conversationsManager.recordInbound({
     channel: 'whatsapp_cloud',
     externalId: address,
     contactId: contact.id,
@@ -428,6 +440,91 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
     } : {}),
     sentAt: sentAt.toISOString()
   });
+  if (profileCodeRequested && recordedInbound?.conversation?.id) {
+    const profileManager = require('./profile.manager');
+    const activation = await profileManager.activatePendingCodeFromWhatsapp({
+      contactId: contact.id,
+      conversationId: recordedInbound.conversation.id
+    });
+    if (!activation.activated && activation.reasonCode === 'PROFILE_CHALLENGE_NOT_FOUND') {
+      const profileUrl = configuredProfileUrl() || '/meu-perfil';
+      await sendConversationText(
+        recordedInbound.conversation.id,
+        `Não há uma solicitação de acesso pendente. Abra ${profileUrl} e solicite um novo código.`,
+        { useCase: 'profile_auth_help' }
+      ).catch(async (error) => {
+        await logsManager.create({
+          level: 'warn',
+          channel: 'whatsapp_cloud',
+          action: 'profile_auth.guidance_failed',
+          message: 'O comando de acesso foi recebido, mas a orientação não pôde ser enviada',
+          context: { contactId: contact.id, errorCode: error.code || 'PROFILE_GUIDANCE_FAILED' }
+        }).catch(() => undefined);
+      });
+    }
+    await logsManager.create({
+      level: activation.activated ? 'info' : 'warn',
+      channel: 'whatsapp_cloud',
+      action: activation.activated ? 'profile_auth.code_activated' : 'profile_auth.activation_skipped',
+      message: activation.activated
+        ? 'Código temporário do Meu perfil ativado pela conversa do WhatsApp'
+        : 'Comando de acesso recebido sem desafio pendente elegível',
+      context: {
+        contactId: contact.id,
+        challengeId: activation.challengeId || null,
+        reasonCode: activation.reasonCode || null
+      }
+    }).catch(() => undefined);
+  }
+
+  const conversationId = recordedInbound?.conversation?.id;
+  if (!profileCodeRequested && conversationId && inboundText) {
+    try {
+      const chatResult = await chatProfileFlow.handleInbound({
+        contactId: contact.id,
+        channel: 'whatsapp_cloud',
+        text: inboundText,
+        profileUrl: configuredProfileUrl()
+      });
+      if (chatResult.handled) {
+        await sendConversationText(conversationId, chatResult.text, { useCase: 'chat_profile' });
+        await logsManager.create({
+          channel: 'whatsapp_cloud',
+          action: `chat_profile.${chatResult.kind}`,
+          message: 'Comando de perfil processado na conversa do WhatsApp',
+          context: { contactId: contact.id, kind: chatResult.kind }
+        }).catch(() => undefined);
+      }
+    } catch (error) {
+      await logsManager.create({
+        level: 'warn',
+        channel: 'whatsapp_cloud',
+        action: 'chat_profile.processing_failed',
+        message: 'Nao foi possivel processar a atualizacao de perfil recebida pelo WhatsApp',
+        context: { contactId: contact.id, errorCode: error.code || 'CHAT_PROFILE_FAILED' }
+      }).catch(() => undefined);
+    }
+  }
+
+  if (permissionGranted && conversationId) {
+    await chatProfileFlow.beginEmailCapture(contact.id, 'whatsapp_cloud');
+    try {
+      await sendConversationText(
+        conversationId,
+        chatProfileFlow.emailCapturePrompt(),
+        { useCase: 'chat_profile_email_prompt' }
+      );
+    } catch (error) {
+      await chatProfileFlow.clearEmailCapture(contact.id, 'whatsapp_cloud');
+      await logsManager.create({
+        level: 'warn',
+        channel: 'whatsapp_cloud',
+        action: 'chat_profile.email_prompt_failed',
+        message: 'Permissao recebida, mas o pedido opcional de email nao foi entregue',
+        context: { contactId: contact.id, errorCode: error.code || 'CHAT_PROFILE_PROMPT_FAILED' }
+      }).catch(() => undefined);
+    }
+  }
   return resultSummary;
 }
 
@@ -932,26 +1029,37 @@ async function sendConversationText(id, text, options = {}) {
     type: 'text',
     text: { body: normalizedText, preview_url: false }
   }, { phoneNumberId: contactPhoneNumberId(resolvedContact) });
-  const recorded = await conversationsManager.recordOutbound({
-    channel: 'whatsapp_cloud',
-    externalId: destination,
-    contactId: contactId || undefined,
-    providerMessageId: sent.providerMessageId,
-    body: normalizedText,
-    type: 'text',
-    sentAt: new Date(),
-    metadata: {
-      provider: 'meta_whatsapp_cloud',
-      phoneNumberId: sent.phoneNumberId,
-      useCase: options.useCase || 'customer_service'
-    }
-  });
+  // Codigos de autenticacao devem chegar ao provedor, mas nunca podem integrar
+  // o historico administrativo nem os eventos de socket. recordOutbound
+  // serializa o corpo descriptografado e emite conversation:message.
+  const recorded = options.useCase === 'profile_auth'
+    ? null
+    : await conversationsManager.recordOutbound({
+        channel: 'whatsapp_cloud',
+        externalId: destination,
+        contactId: contactId || undefined,
+        providerMessageId: sent.providerMessageId,
+        body: normalizedText,
+        type: 'text',
+        sentAt: new Date(),
+        metadata: {
+          provider: 'meta_whatsapp_cloud',
+          phoneNumberId: sent.phoneNumberId,
+          useCase: options.useCase || 'customer_service'
+        }
+      });
   await logsManager.create({
     channel: 'whatsapp_cloud',
-    action: options.useCase === 'consent_request' ? 'consent.request_sent' : 'chat.message_sent',
+    action: options.useCase === 'consent_request'
+      ? 'consent.request_sent'
+      : options.useCase === 'profile_auth'
+        ? 'profile_auth.code_sent'
+        : 'chat.message_sent',
     message: options.useCase === 'consent_request'
       ? 'Solicitacao de permissao enviada no chat WhatsApp Cloud'
-      : 'Resposta enviada no chat WhatsApp Cloud',
+      : options.useCase === 'profile_auth'
+        ? 'Codigo temporario entregue pelo WhatsApp Cloud sem persistir seu conteudo'
+        : 'Resposta enviada no chat WhatsApp Cloud',
     context: {
       contactId,
       conversationId: String(openConversation.conversation._id),
@@ -962,7 +1070,7 @@ async function sendConversationText(id, text, options = {}) {
   return {
     providerMessageId: sent.providerMessageId,
     conversation: await cloudConversationWithContact(id),
-    message: recorded.message
+    message: recorded?.message || null
   };
 }
 

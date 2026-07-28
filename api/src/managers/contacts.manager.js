@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const Contact = require('../models/contact.model');
 const ContactGroup = require('../models/contact-group.model');
 const ConsentEvent = require('../models/consent-event.model');
@@ -319,18 +320,25 @@ function encryptedIdentity(input) {
 
 async function auditConsent(contactId, channel, status, context = {}) {
   if (!DECIDED_CONSENT_STATUSES.includes(status)) return null;
-  return ConsentEvent.create({
-    contact: contactId,
-    contactReferenceHash: searchHash(String(contactId)),
-    channel,
-    status,
-    legalBasis: context.legalBasis || 'consent',
-    purpose: context.purpose || 'notification_delivery',
-    source: context.source || 'contact_manager',
-    termsVersion: context.termsVersion,
-    actor: context.actorId,
-    evidenceEncrypted: context.evidence ? encrypt(context.evidence) : undefined
-  });
+  const operationId = context.operationId || context.evidence?.operationId;
+  try {
+    return await ConsentEvent.create({
+      contact: contactId,
+      contactReferenceHash: searchHash(String(contactId)),
+      channel,
+      status,
+      legalBasis: context.legalBasis || 'consent',
+      purpose: context.purpose || 'notification_delivery',
+      source: context.source || 'contact_manager',
+      termsVersion: context.termsVersion,
+      actor: context.actorId,
+      operationIdHash: operationId ? searchHash(`consent-operation:${operationId}`) : undefined,
+      evidenceEncrypted: context.evidence ? encrypt(context.evidence) : undefined
+    });
+  } catch (error) {
+    if (operationId && error?.code === 11000) return null;
+    throw error;
+  }
 }
 
 function assignBasicFields(target, input, creating = false) {
@@ -1263,6 +1271,150 @@ async function getDestination(contactId, channel, options = {}) {
   return { address, addressHash: identity.addressHash, contact: serialize(contact) };
 }
 
+function validChatEmail(value) {
+  const normalized = normalizeEmail(value);
+  if (!normalized || normalized.length > 254 || /\s/.test(normalized)) return null;
+  const separator = normalized.lastIndexOf('@');
+  if (separator <= 0 || separator === normalized.length - 1) return null;
+  const local = normalized.slice(0, separator);
+  const domain = normalized.slice(separator + 1);
+  if (local.length > 64 || !domain.includes('.') || domain.startsWith('.') || domain.endsWith('.')) return null;
+  return normalized;
+}
+
+async function setEmailFromChat(id, value, context = {}) {
+  const email = validChatEmail(value);
+  if (!email) throw new ApiError(422, 'Email invalido', null, 'INVALID_EMAIL');
+  const contact = await getRawById(id);
+  const emailHash = searchHash(email);
+  const owner = await Contact.findOne({
+    _id: { $ne: contact._id },
+    deletedAt: null,
+    $or: [
+      { emailHash },
+      { channels: { $elemMatch: { channel: 'email', addressHash: emailHash } } }
+    ]
+  }).select('_id');
+  if (owner) {
+    // Digitar um endereco em um chat autenticado pelo provedor nao comprova a
+    // posse da caixa de email. O merge fica bloqueado ate o usuario validar o
+    // codigo no Meu perfil, evitando que um contato tome o cadastro de outro.
+    throw new ApiError(
+      409,
+      'Email ja pertence a outro perfil e exige verificacao de titularidade',
+      null,
+      'EMAIL_OWNERSHIP_VERIFICATION_REQUIRED'
+    );
+  }
+
+  contact.emailEncrypted = encrypt(email);
+  contact.emailHash = emailHash;
+  const emailIdentities = contact.channels.filter((identity) => identity.channel === 'email');
+  const retainedIdentity = emailIdentities.find((identity) => (
+    identity.authorized && identity.consentStatus === 'granted'
+  )) || emailIdentities[0];
+  let revocationAudit = null;
+  if (retainedIdentity) {
+    const addressChanged = retainedIdentity.addressHash !== emailHash;
+    const metadata = safeDecrypt(retainedIdentity.metadataEncrypted, true) || {};
+    const pendingAudit = metadata.pendingConsentAudit;
+    if (addressChanged && (retainedIdentity.authorized || retainedIdentity.consentStatus === 'granted')) {
+      revocationAudit = {
+        source: 'chat_profile_email_change',
+        purpose: 'notification_delivery',
+        operationId: crypto.randomUUID(),
+        evidence: {
+          channel: context.channel || null,
+          replacementRequiresConsent: true
+        }
+      };
+      revocationAudit.evidence.operationId = revocationAudit.operationId;
+    } else if (!addressChanged && pendingAudit?.kind === 'email_replacement_revocation') {
+      revocationAudit = {
+        source: 'chat_profile_email_change',
+        purpose: 'notification_delivery',
+        operationId: pendingAudit.operationId,
+        evidence: {
+          channel: pendingAudit.channel || context.channel || null,
+          replacementRequiresConsent: true,
+          operationId: pendingAudit.operationId
+        }
+      };
+    }
+    retainedIdentity.addressEncrypted = encrypt(email);
+    retainedIdentity.addressHash = emailHash;
+    retainedIdentity.interactedAt = new Date();
+    if (addressChanged) {
+      retainedIdentity.authorized = false;
+      retainedIdentity.consentStatus = 'unknown';
+      retainedIdentity.source = 'chat_profile';
+      retainedIdentity.consentedAt = undefined;
+      retainedIdentity.consentSource = undefined;
+      retainedIdentity.consentCommand = undefined;
+      retainedIdentity.consentChangedAt = undefined;
+      retainedIdentity.consentChangedBy = undefined;
+    }
+    retainedIdentity.metadataEncrypted = encrypt({
+      ...metadata,
+      lastProfileUpdateSource: 'chat',
+      lastProfileUpdateChannel: context.channel || null,
+      ...(revocationAudit ? {
+        pendingConsentAudit: {
+          kind: 'email_replacement_revocation',
+          channel: revocationAudit.evidence.channel,
+          operationId: revocationAudit.operationId,
+          createdAt: pendingAudit?.createdAt || new Date().toISOString()
+        }
+      } : {})
+    });
+    contact.channels = [
+      ...contact.channels.filter((identity) => identity.channel !== 'email'),
+      retainedIdentity
+    ];
+  } else {
+    contact.channels.push(encryptedIdentity({
+      channel: 'email',
+      address: email,
+      authorized: false,
+      consentStatus: 'unknown',
+      source: 'chat_profile',
+      interactedAt: new Date(),
+      metadata: {
+        lastProfileUpdateSource: 'chat',
+        lastProfileUpdateChannel: context.channel || null
+      }
+    }));
+  }
+
+  try {
+    await contact.save();
+  } catch (error) {
+    const duplicate = duplicateContactError(error);
+    if (duplicate) throw duplicate;
+    throw error;
+  }
+  // Revogacoes sao persistidas antes da auditoria (fail-closed). Assim, uma
+  // falha de validacao/indice nunca deixa um evento dizendo que o endereco
+  // antigo foi revogado enquanto ele ainda permanece autorizado no contato.
+  if (revocationAudit) {
+    await auditConsent(contact._id, 'email', 'revoked', revocationAudit);
+    const metadata = safeDecrypt(retainedIdentity.metadataEncrypted, true) || {};
+    const pendingConsentAudit = metadata.pendingConsentAudit;
+    delete metadata.pendingConsentAudit;
+    retainedIdentity.metadataEncrypted = encrypt(metadata);
+    try {
+      await contact.save();
+    } catch (error) {
+      retainedIdentity.metadataEncrypted = encrypt({
+        ...metadata,
+        pendingConsentAudit
+      });
+      throw error;
+    }
+  }
+  return serialize(contact);
+}
+
 async function ensureEmailIdentity(id) {
   const contact = await getRawById(id);
   const email = normalizeEmail(safeDecrypt(contact.emailEncrypted));
@@ -1431,6 +1583,7 @@ module.exports = {
   setChannelConsent,
   grantWhatsappConsentFromCommand,
   ensureEmailIdentity,
+  setEmailFromChat,
   repairLegacyWhatsappPhones,
   updateChannelAvatar,
   serialize,

@@ -30,6 +30,13 @@ const REQUIRED = Object.freeze({
 const SENSITIVE_PREVIEW = '••••••••••••';
 
 const DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT = 'Para ativar suas notificações, responda com {command}.';
+const RESERVED_CHAT_COMMANDS = new Set([
+  '/gerar-codigo',
+  '/meu-perfil',
+  '/cancelar',
+  '/stop',
+  '/start'
+]);
 
 function unwrapConfiguredValue(value) {
   let normalized = String(value ?? '').trim();
@@ -45,8 +52,7 @@ function unwrapConfiguredValue(value) {
 
 const CHANNEL_REVEAL_FIELDS = Object.freeze({
   telegram: Object.freeze({
-    botToken: 'TELEGRAM_BOT_TOKEN',
-    webhookSecret: 'TELEGRAM_WEBHOOK_SECRET'
+    botToken: 'TELEGRAM_BOT_TOKEN'
   }),
   whatsappCloud: Object.freeze({
     accessToken: 'WHATSAPP_CLOUD_ACCESS_TOKEN',
@@ -102,6 +108,40 @@ function assertWritableValue(key, value, config) {
   }
 }
 
+function assertPermissionCommand(value) {
+  const normalized = normalizeWhatsappPermissionText(value);
+  const reserved = RESERVED_CHAT_COMMANDS.has(normalized)
+    || normalized.startsWith('/start@')
+    || normalized.startsWith('/stop@');
+  if (reserved) {
+    throw new ApiError(
+      422,
+      'Escolha um comando diferente dos comandos reservados de perfil e autenticacao',
+      { command: normalized },
+      'PERMISSION_COMMAND_RESERVED'
+    );
+  }
+  return normalized;
+}
+
+async function validatePermissionCommandChange(key, value) {
+  if (!['START_NOTIFY_WHATSAPP_PERMISSION', 'START_VERIFY_TELEGRAM_PERMISSION'].includes(key)) return;
+  const normalized = assertPermissionCommand(value);
+  const otherKey = key === 'START_NOTIFY_WHATSAPP_PERMISSION'
+    ? 'START_VERIFY_TELEGRAM_PERMISSION'
+    : 'START_NOTIFY_WHATSAPP_PERMISSION';
+  const fallback = otherKey === 'START_NOTIFY_WHATSAPP_PERMISSION' ? '/notify-me' : '/verify-me';
+  const other = normalizeWhatsappPermissionText(await getValue(otherKey) || fallback);
+  if (normalized === other) {
+    throw new ApiError(
+      422,
+      'Os comandos de permissao do WhatsApp e Telegram devem ser diferentes',
+      { command: normalized },
+      'PERMISSION_COMMAND_COLLISION'
+    );
+  }
+}
+
 function revealFields(channel) {
   const fields = CHANNEL_REVEAL_FIELDS[channel];
   if (!fields) {
@@ -129,6 +169,9 @@ async function setValue(key, value, actorId, options = {}) {
   const [normalized, config] = definition(key);
   if (config.internal && !options.internal) throw new ApiError(403, 'Configuracao reservada');
   assertWritableValue(normalized, value, config);
+  if (!options.skipPermissionValidation) {
+    await validatePermissionCommandChange(normalized, value);
+  }
   await Setting.updateOne({ key: normalized }, {
     $set: {
       valueEncrypted: encrypt(String(value)),
@@ -231,8 +274,35 @@ async function setBulk(input, actorId) {
     assertWritableValue(normalized, value, config);
     pending.push({ key: normalized, value });
   }
+  const pendingCommands = Object.fromEntries(
+    pending
+      .filter((item) => ['START_NOTIFY_WHATSAPP_PERMISSION', 'START_VERIFY_TELEGRAM_PERMISSION'].includes(item.key))
+      .map((item) => [item.key, item.value])
+  );
+  if (Object.keys(pendingCommands).length) {
+    const [storedWhatsapp, storedTelegram] = await Promise.all([
+      getValue('START_NOTIFY_WHATSAPP_PERMISSION'),
+      getValue('START_VERIFY_TELEGRAM_PERMISSION')
+    ]);
+    const whatsappCommand = assertPermissionCommand(
+      pendingCommands.START_NOTIFY_WHATSAPP_PERMISSION || storedWhatsapp || '/notify-me'
+    );
+    const telegramCommand = assertPermissionCommand(
+      pendingCommands.START_VERIFY_TELEGRAM_PERMISSION || storedTelegram || '/verify-me'
+    );
+    if (whatsappCommand === telegramCommand) {
+      throw new ApiError(
+        422,
+        'Os comandos de permissao do WhatsApp e Telegram devem ser diferentes',
+        { command: whatsappCommand },
+        'PERMISSION_COMMAND_COLLISION'
+      );
+    }
+  }
   const updated = [];
-  for (const item of pending) updated.push(await setValue(item.key, item.value, actorId));
+  for (const item of pending) {
+    updated.push(await setValue(item.key, item.value, actorId, { skipPermissionValidation: true }));
+  }
   return { updated: updated.map((item) => item.key), configuration: await getStructured() };
 }
 
@@ -298,8 +368,8 @@ function normalizeWhatsappPermissionText(value) {
 }
 
 async function getWhatsappPermissionCommand() {
-  const configured = await module.exports.getValue('START_NOTIFY_WHATSAPP_PERMISSION');
-  return String(configured || process.env.START_NOTIFY_WHATSAPP_PERMISSION || '/notify-me').trim();
+  const commands = await getValidatedPermissionCommands();
+  return commands.whatsapp;
 }
 
 async function isWhatsappPermissionCommand(value) {
@@ -317,8 +387,30 @@ async function getWhatsappConsentRequestText() {
 }
 
 async function getTelegramPermissionCommand() {
-  const configured = await module.exports.getValue('START_VERIFY_TELEGRAM_PERMISSION');
-  return String(configured || process.env.START_VERIFY_TELEGRAM_PERMISSION || '/verify-me').trim();
+  const commands = await getValidatedPermissionCommands();
+  return commands.telegram;
+}
+
+async function getValidatedPermissionCommands() {
+  const [configuredWhatsapp, configuredTelegram] = await Promise.all([
+    module.exports.getValue('START_NOTIFY_WHATSAPP_PERMISSION'),
+    module.exports.getValue('START_VERIFY_TELEGRAM_PERMISSION')
+  ]);
+  const whatsapp = assertPermissionCommand(
+    configuredWhatsapp || process.env.START_NOTIFY_WHATSAPP_PERMISSION || '/notify-me'
+  );
+  const telegram = assertPermissionCommand(
+    configuredTelegram || process.env.START_VERIFY_TELEGRAM_PERMISSION || '/verify-me'
+  );
+  if (whatsapp === telegram) {
+    throw new ApiError(
+      503,
+      'Os comandos de permissao do WhatsApp e Telegram devem ser diferentes',
+      { command: whatsapp },
+      'PERMISSION_COMMAND_COLLISION'
+    );
+  }
+  return { whatsapp, telegram };
 }
 
 async function isTelegramPermissionCommand(value) {
@@ -330,6 +422,6 @@ module.exports = {
   DEFINITIONS, getValue, setValue, remove, list, setBulk, getStructured, channelConfigured, statuses,
   getWhatsappPermissionCommand, isWhatsappPermissionCommand, getTelegramPermissionCommand,
   getWhatsappConsentRequestText, isTelegramPermissionCommand, normalizeWhatsappPermissionText, CHANNEL_REVEAL_FIELDS,
-  DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT,
+  DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT, RESERVED_CHAT_COMMANDS, getValidatedPermissionCommands,
   SENSITIVE_PREVIEW, maskedPreview, isMaskedSentinel, revealChannel
 };

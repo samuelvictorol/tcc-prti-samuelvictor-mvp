@@ -36,8 +36,8 @@ As páginas não armazenam credenciais de provedor. Elas chamam serviços HTTP, 
 | `/templates` | templates por canal e builders amigáveis |
 | `/notifications` | campanhas por template, contatos/grupos e histórico de entregas |
 | `/telegram` | conversas conhecidas, grupos e mensagens realtime |
-| `/chats` | inbox oficial do WhatsApp Cloud, janela de 24 horas e respostas em tempo real |
-| `/whatsapp-cloud` | eventos do webhook, contatos e teste de template oficial |
+| `/chats` | redirecionamento de compatibilidade para a aba Conversas do WhatsApp Cloud |
+| `/whatsapp-cloud` | disparos, conversas oficiais em tempo real, eventos do webhook, contatos e templates |
 | `/email` | teste/envio Gmail e preview sanitizado |
 | `/invites` | CRUD, slug automático, ícone, links, cores e URL pública |
 | `/terms` | documentos legais versionados |

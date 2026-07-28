@@ -49,7 +49,17 @@ async function update(req, res) {
   const data = await settingsManager.setValue(key, req.validated.body.value, req.admin.id, { sensitive: req.validated.body.sensitive });
   if (String(key).toUpperCase() !== 'TELEGRAM_BOT_TOKEN') return res.json({ success: true, data });
   telegramManager.clearIdentityCache();
-  res.json({ success: true, data: { ...data, telegram: await telegramManager.status({ probe: true, force: true }) } });
+  const webhook = await telegramManager.refreshWebhookRegistration();
+  res.json({
+    success: true,
+    data: {
+      ...data,
+      telegram: {
+        ...await telegramManager.status({ probe: true, force: true }),
+        webhook
+      }
+    }
+  });
 }
 
 async function updateBulk(req, res) {
@@ -57,6 +67,9 @@ async function updateBulk(req, res) {
   const tokenUpdated = data.updated.includes('TELEGRAM_BOT_TOKEN');
   if (tokenUpdated) telegramManager.clearIdentityCache();
   data.configuration = await enrichTelegram(data.configuration, { probe: tokenUpdated, force: tokenUpdated });
+  if (tokenUpdated) {
+    data.configuration.telegram.webhook = await telegramManager.refreshWebhookRegistration();
+  }
   res.json({ success: true, data });
 }
 

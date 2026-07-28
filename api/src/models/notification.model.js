@@ -25,6 +25,7 @@ const notificationSchema = new mongoose.Schema({
   channel: { type: String, enum: Object.values(CHANNELS), required: true },
   template: { type: mongoose.Schema.Types.ObjectId, ref: 'Template' },
   templates: { type: notificationTemplatesSchema },
+  templateSet: { type: mongoose.Schema.Types.ObjectId, ref: 'TemplateSet', index: true },
   content: { type: mongoose.Schema.Types.Mixed },
   recipientContacts: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Contact' }],
   recipientGroups: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ContactGroup' }],

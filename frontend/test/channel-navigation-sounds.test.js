@@ -1,0 +1,58 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  playAppSound,
+  resetAppSoundsForTests,
+  soundFile,
+} from '../src/services/sounds.js'
+
+function source(relativePath) {
+  return readFileSync(fileURLToPath(new URL(`../src/${relativePath}`, import.meta.url)), 'utf8')
+}
+
+afterEach(() => {
+  resetAppSoundsForTests()
+  vi.unstubAllGlobals()
+})
+
+describe('canais e alertas sonoros', () => {
+  it('mantém a ordem visual WhatsApp, Telegram e Gmail sem menu Chats', () => {
+    const layout = source('layouts/MainLayout.vue')
+    const whatsapp = layout.indexOf("label: 'WhatsApp Cloud'")
+    const telegram = layout.indexOf("label: 'Telegram'")
+    const gmail = layout.indexOf("label: 'Gmail'")
+
+    expect(whatsapp).toBeGreaterThan(-1)
+    expect(whatsapp).toBeLessThan(telegram)
+    expect(telegram).toBeLessThan(gmail)
+    expect(layout).not.toContain("label: 'Chats'")
+    expect(layout).toContain("playAppSound('notify')")
+    expect(layout).toContain('nav-item--telegram')
+    expect(layout).toContain('nav-item--gmail')
+  })
+
+  it('mapeia os três arquivos públicos e ignora falhas de reprodução', async () => {
+    const play = vi.fn().mockRejectedValue(Object.assign(new Error('blocked'), { name: 'NotSupportedError' }))
+    vi.stubGlobal('Audio', vi.fn(() => ({ play, currentTime: 0, preload: '', volume: 1 })))
+
+    expect(soundFile('notify')).toBe('/notify.mp3')
+    expect(soundFile('whatsapp')).toBe('/whatsapp.mp3')
+    expect(soundFile('telegram')).toBe('/telegram.mp3')
+    await expect(playAppSound('notify')).resolves.toBe(false)
+  })
+
+  it('toca sons de chat somente nos respectivos fluxos em tempo real', () => {
+    expect(source('pages/ChatsPage.vue')).toContain("playAppSound('whatsapp')")
+    expect(source('pages/TelegramPage.vue')).toContain("playAppSound('telegram')")
+    expect(source('pages/TelegramPage.vue')).toContain("tab.value === 'chats'")
+  })
+
+  it('mantém conversas Telegram sem opt-in visíveis, mas bloqueia o composer', () => {
+    const telegram = source('pages/TelegramPage.vue')
+
+    expect(telegram).toContain('!chatIsAuthorized(selected)')
+    expect(telegram).toContain(':disable="!chatIsAuthorized(selected)"')
+    expect(telegram).toContain('ainda não autorizou notificações pelo Telegram')
+  })
+})

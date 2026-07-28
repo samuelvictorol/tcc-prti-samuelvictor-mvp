@@ -1,9 +1,15 @@
 const sanitizeHtml = require('sanitize-html');
 const Template = require('../models/template.model');
+const TemplateSet = require('../models/template-set.model');
+const Notification = require('../models/notification.model');
 const ApiError = require('../utils/api-error');
 const { parsePagination, pageResult } = require('../utils/pagination');
 const { normalizeOfficialTemplateDefinition } = require('../utils/whatsapp-cloud-templates');
-const { listSystemTemplateDefinitions, isSystemTemplate } = require('../utils/system-templates');
+const {
+  listSystemTemplateDefinitions,
+  RETIRED_SYSTEM_TEMPLATE_KEYS,
+  isSystemTemplate
+} = require('../utils/system-templates');
 const { telegramTemplateDefinition } = require('../dtos/templates.dto');
 const { telegramDefinitionFromTemplate, telegramTemplateBody, extractVariables } = require('../utils/telegram-templates');
 
@@ -125,8 +131,66 @@ async function markSystemTemplate(existing, definition) {
   return true;
 }
 
+function templateSetReferenceFilter(id) {
+  return {
+    $or: [
+      { 'templates.whatsapp_cloud': id },
+      { 'templates.telegram': id },
+      { 'templates.email': id }
+    ]
+  };
+}
+
+function notificationTemplateReferenceFilter(id) {
+  return {
+    $or: [
+      { template: id },
+      { 'templates.whatsapp_cloud': id },
+      { 'templates.telegram': id },
+      { 'templates.email': id }
+    ]
+  };
+}
+
+async function findLinkedTemplateSet(id) {
+  return TemplateSet.findOne(templateSetReferenceFilter(id)).select('_id name').lean();
+}
+
+async function retireSystemTemplates() {
+  if (!RETIRED_SYSTEM_TEMPLATE_KEYS.length) return { deletedCount: 0, retainedCount: 0 };
+  const retiredTemplates = await Template.find({
+    systemManaged: true,
+    systemKey: { $in: RETIRED_SYSTEM_TEMPLATE_KEYS }
+  }).select('_id systemKey active').lean();
+  let deletedCount = 0;
+  let retainedCount = 0;
+
+  for (const template of retiredTemplates) {
+    const [linkedSet, linkedNotification] = await Promise.all([
+      TemplateSet.exists(templateSetReferenceFilter(template._id)),
+      Notification.exists(notificationTemplateReferenceFilter(template._id))
+    ]);
+    if (linkedSet || linkedNotification) {
+      await Template.updateOne({ _id: template._id }, { $set: { active: false } });
+      retainedCount += 1;
+      continue;
+    }
+    const removed = await Template.deleteOne({ _id: template._id });
+    deletedCount += Number(removed.deletedCount || 0);
+  }
+
+  return { deletedCount, retainedCount };
+}
+
 async function ensureSystemTemplates() {
-  const summary = { created: 0, protected: 0, existing: 0 };
+  const retired = await retireSystemTemplates();
+  const summary = {
+    created: 0,
+    protected: 0,
+    existing: 0,
+    retired: Number(retired.deletedCount || 0),
+    retiredRetained: Number(retired.retainedCount || 0)
+  };
   for (const definition of listSystemTemplateDefinitions()) {
     const filter = systemTemplateFilter(definition);
     let existing = await Template.findOne(filter).lean();
@@ -195,6 +259,25 @@ async function list(query = {}) {
 async function update(id, input, actorId) {
   const existing = await getById(id);
   assertSystemIdentityUnchanged(existing, input);
+  const protectedChanges = [];
+  if (input.channel !== undefined && input.channel !== existing.channel) protectedChanges.push('channel');
+  if (input.active === false && existing.active !== false) protectedChanges.push('active');
+  if (protectedChanges.length) {
+    const linkedSet = await findLinkedTemplateSet(id);
+    if (linkedSet) {
+      throw new ApiError(
+        409,
+        'Template vinculado a um conjunto nao pode mudar de canal nem ser desativado',
+        {
+          templateId: String(id),
+          templateSetId: String(linkedSet._id),
+          templateSetName: linkedSet.name,
+          fields: protectedChanges
+        },
+        'TEMPLATE_IN_USE_BY_SET'
+      );
+    }
+  }
   const merged = { ...existing, ...input };
   if (input.whatsappCloudPreset && input.whatsappCloudPreset !== existing.whatsappCloudPreset && input.body === undefined) {
     merged.body = undefined;
@@ -219,6 +302,15 @@ async function remove(id) {
       'SYSTEM_TEMPLATE_DELETE_FORBIDDEN'
     );
   }
+  const linkedSet = await findLinkedTemplateSet(id);
+  if (linkedSet) {
+    throw new ApiError(
+      409,
+      'Template vinculado a um conjunto nao pode ser removido',
+      { templateId: String(id), templateSetId: String(linkedSet._id), templateSetName: linkedSet.name },
+      'TEMPLATE_IN_USE_BY_SET'
+    );
+  }
   const result = await Template.deleteOne({ _id: id });
   if (!result.deletedCount) throw new ApiError(404, 'Template nao encontrado');
   return { id: String(id), removed: true };
@@ -233,6 +325,7 @@ module.exports = {
   normalizeTemplateInput: normalize,
   validateTemplateInput: validateTemplate,
   ensureSystemTemplates,
+  retireSystemTemplates,
   serializeTemplate: serialize,
   isSystemTemplate
 };

@@ -9,7 +9,11 @@ const {
 const {
   isPrivateAddress,
   parsePublicHttpsUrl,
+  resolvePublicHost,
   sniffMedia,
+  assertMediaType,
+  downloadRequestError,
+  pinnedLookup,
   downloadTelegramMedia
 } = require('../src/services/safe-media.service');
 const settingsManager = require('../src/managers/settings.manager');
@@ -156,6 +160,50 @@ test('detecção de mídia confere assinatura real do arquivo', () => {
     mimeType: 'video/mp4', extension: 'mp4'
   });
   assert.equal(sniffMedia(Buffer.from('<html>não é imagem</html>')), null);
+  assert.doesNotThrow(() => assertMediaType(
+    'photo',
+    'image/jpg',
+    { mimeType: 'image/jpeg', extension: 'jpg' }
+  ));
+  assert.doesNotThrow(() => assertMediaType(
+    'video',
+    'binary/octet-stream',
+    { mimeType: 'video/mp4', extension: 'mp4' }
+  ));
+});
+
+test('download de mídia prefere IPv4 público e traduz falhas de rede sem ocultar a correção', async (context) => {
+  const originalLookup = dns.lookup;
+  context.after(() => { dns.lookup = originalLookup; });
+  dns.lookup = async () => [
+    { address: '2606:4700:4700::1111', family: 6 },
+    { address: '1.1.1.1', family: 4 }
+  ];
+
+  assert.deepEqual(await resolvePublicHost('media.example.test'), {
+    address: '1.1.1.1',
+    family: 4
+  });
+  const unreachable = downloadRequestError(Object.assign(new Error('network'), { code: 'ENETUNREACH' }));
+  assert.equal(unreachable.code, 'MEDIA_HOST_UNREACHABLE');
+  assert.match(unreachable.message, /link e publico e direto/i);
+
+  const lookup = pinnedLookup({ address: '1.1.1.1', family: 4 });
+  await new Promise((resolve, reject) => {
+    lookup('media.example.test', { all: true }, (error, addresses) => {
+      if (error) return reject(error);
+      assert.deepEqual(addresses, [{ address: '1.1.1.1', family: 4 }]);
+      resolve();
+    });
+  });
+  await new Promise((resolve, reject) => {
+    lookup('media.example.test', {}, (error, address, family) => {
+      if (error) return reject(error);
+      assert.equal(address, '1.1.1.1');
+      assert.equal(family, 4);
+      resolve();
+    });
+  });
 });
 
 test('send usa payload.telegram, ignora destination divergente e callback navega editando o menu', async (context) => {

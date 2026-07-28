@@ -52,9 +52,9 @@ test('configuracao normal fornece previews sem devolver segredos completos', asy
   assert.doesNotMatch(JSON.stringify(items), /telegram-token-super-secreto|webhook-secret-super-secreto/);
 
   const revealed = await settingsManager.revealChannel('telegram');
-  assert.deepEqual(Object.keys(revealed.values).sort(), ['botToken', 'webhookSecret']);
+  assert.deepEqual(Object.keys(revealed.values), ['botToken']);
   assert.equal(revealed.values.botToken, '123456:telegram-token-super-secreto');
-  assert.equal(revealed.values.webhookSecret, 'webhook-secret-super-secreto');
+  assert.equal(revealed.values.webhookSecret, undefined);
 });
 
 test('revelacao rejeita canal fora da allowlist e a rota exige autenticacao', async () => {
@@ -135,6 +135,51 @@ test('setValue e setBulk rejeitam sentinela mascarada sem escrever parcialmente'
     (error) => error.statusCode === 422 && error.code === 'MASKED_SECRET_NOT_ALLOWED'
   );
   assert.equal(writes, 0);
+});
+
+test('comandos de permissao nao podem usar rotas reservadas nem colidir entre canais', async (context) => {
+  const originals = { findOne: Setting.findOne, updateOne: Setting.updateOne };
+  context.after(() => {
+    Setting.findOne = originals.findOne;
+    Setting.updateOne = originals.updateOne;
+  });
+  Setting.findOne = () => queryResult(null);
+  let writes = 0;
+  Setting.updateOne = async () => { writes += 1; return { acknowledged: true }; };
+
+  await assert.rejects(
+    settingsManager.setValue(
+      'START_NOTIFY_WHATSAPP_PERMISSION',
+      '/gerar-codigo',
+      '507f1f77bcf86cd799439011'
+    ),
+    (error) => error.statusCode === 422 && error.code === 'PERMISSION_COMMAND_RESERVED'
+  );
+  await assert.rejects(
+    settingsManager.setBulk({
+      whatsappPermission: { command: '/mesmo-comando' },
+      telegramPermission: { command: '/MESMO-COMANDO' }
+    }, '507f1f77bcf86cd799439011'),
+    (error) => error.statusCode === 422 && error.code === 'PERMISSION_COMMAND_COLLISION'
+  );
+  assert.equal(writes, 0);
+});
+
+test('comando reservado vindo do ambiente tambem falha fechado nos getters', async (context) => {
+  const originalGetValue = settingsManager.getValue;
+  const previousWhatsapp = process.env.START_NOTIFY_WHATSAPP_PERMISSION;
+  context.after(() => {
+    settingsManager.getValue = originalGetValue;
+    if (previousWhatsapp === undefined) delete process.env.START_NOTIFY_WHATSAPP_PERMISSION;
+    else process.env.START_NOTIFY_WHATSAPP_PERMISSION = previousWhatsapp;
+  });
+  settingsManager.getValue = async () => null;
+  process.env.START_NOTIFY_WHATSAPP_PERMISSION = '/gerar-codigo';
+
+  await assert.rejects(
+    settingsManager.getWhatsappPermissionCommand(),
+    (error) => error.statusCode === 422 && error.code === 'PERMISSION_COMMAND_RESERVED'
+  );
 });
 
 test('rota autenticada de revelacao aplica limite dedicado', async (context) => {

@@ -10,10 +10,7 @@ import {
   channelCredentialFields,
   channelCredentialPreviews,
   channelSettingsPayload,
-  generateSecureWebhookSecret,
-  isMaskedSecret,
   mergeRevealedChannelValues,
-  normalizeTelegramWebhookUrl,
 } from '../services/channels.js'
 import { asList, errorMessage, http, paginationOf, unwrap } from '../services/http.js'
 import { connectSocket, getSocket } from '../services/socket.js'
@@ -33,7 +30,6 @@ const $q = useQuasar()
 const app = useAppStore()
 const loading = ref(true)
 const savingChannel = reactive({ telegram: false, whatsappCloud: false, email: false })
-const registeringWebhook = ref(false)
 const savingWhatsappPermission = ref(false)
 const savingTelegramPermission = ref(false)
 const revealingCredentials = reactive({ telegram: false, whatsappCloud: false, email: false })
@@ -74,13 +70,6 @@ const telegramTokenConfigured = computed(() => Boolean(
   || app.isChannelEnabled('telegram'),
 ))
 
-const telegramWebhookSecretConfigured = computed(() => Boolean(
-  settings.telegram.webhookSecretConfigured
-  || isMaskedSecret(settings.telegram.webhookSecret),
-))
-
-const telegramWebhookSecretIsMasked = computed(() => isMaskedSecret(settings.telegram.webhookSecret))
-
 const telegramBot = computed(() => telegramBotIdentity({
   bot: settings.telegram.bot || app.channelStatus('telegram')?.bot,
 }))
@@ -95,6 +84,21 @@ const whatsappCloudCallbackUrl = computed(() => {
   return `${publicOrigin}/api/webhooks/whatsapp-cloud`
 })
 
+const telegramCallbackUrl = computed(() => {
+  const origin = typeof window !== 'undefined' ? window.location.origin.replace(/\/$/, '') : ''
+  const publicOrigin = origin.startsWith('https://') ? origin : 'https://seudominio.com'
+  return `${publicOrigin}/api/webhooks/telegram`
+})
+
+async function copyTelegramCallbackUrl() {
+  try {
+    await copyToClipboard(telegramCallbackUrl.value)
+    $q.notify({ type: 'positive', message: 'URL de callback do Telegram copiada.' })
+  } catch {
+    $q.notify({ type: 'warning', message: 'Não foi possível copiar. Selecione a URL manualmente.' })
+  }
+}
+
 async function copyWhatsappCloudCallbackUrl() {
   try {
     await copyToClipboard(whatsappCloudCallbackUrl.value)
@@ -102,60 +106,6 @@ async function copyWhatsappCloudCallbackUrl() {
   } catch {
     $q.notify({ type: 'warning', message: 'Não foi possível copiar. Selecione a URL manualmente.' })
   }
-}
-
-function generateTelegramWebhookSecret({ notify = true } = {}) {
-  try {
-    settings.telegram.webhookSecret = generateSecureWebhookSecret()
-    if (notify) {
-      $q.notify({
-        type: 'positive',
-        message: 'Novo webhook secret gerado com segurança.',
-        caption: 'Salve o Telegram ou registre o webhook para ativar este novo valor.',
-      })
-    }
-    return settings.telegram.webhookSecret
-  } catch (error) {
-    $q.notify({ type: 'negative', message: error.message || 'Não foi possível gerar um segredo seguro neste navegador.' })
-    return ''
-  }
-}
-
-async function copyTelegramWebhookSecretValue(value, { generated = false } = {}) {
-  try {
-    await copyToClipboard(value)
-    $q.notify({
-      type: 'positive',
-      message: generated ? 'Novo webhook secret gerado e copiado.' : 'Webhook secret copiado.',
-      caption: generated ? 'O segredo anterior não foi recuperado. Salve ou registre o webhook para ativar o novo valor.' : undefined,
-    })
-  } catch {
-    $q.notify({ type: 'warning', message: 'Não foi possível copiar o webhook secret.' })
-  }
-}
-
-function generateAndCopyTelegramWebhookSecret() {
-  const value = generateTelegramWebhookSecret({ notify: false })
-  if (value) copyTelegramWebhookSecretValue(value, { generated: true })
-}
-
-function copyTelegramWebhookSecret() {
-  const value = String(settings.telegram.webhookSecret || '').trim()
-  if (value && !isMaskedSecret(value)) {
-    copyTelegramWebhookSecretValue(value)
-    return
-  }
-
-  if (!telegramWebhookSecretConfigured.value) {
-    generateAndCopyTelegramWebhookSecret()
-    return
-  }
-
-  $q.notify({
-    type: 'info',
-    message: 'Exiba as credenciais do Telegram antes de copiar o segredo salvo.',
-    caption: 'Use o único botão de visibilidade no início desta seção.',
-  })
 }
 
 function applySettings(value = {}) {
@@ -174,11 +124,14 @@ function applySettings(value = {}) {
       : (source[channel] || {})
     const previews = channelCredentialPreviews(channel, channelSource)
     Object.assign(savedCredentialPreviews[channel], previews)
+    // Disable input masks before replacing revealed values with protected
+    // previews. Otherwise Quasar can strip the bullets from a masked phone
+    // number and write the remaining visible digits back into the model.
+    channelCredentialsVisible[channel] = false
     for (const key of Object.keys(revealedCredentialBaselines[channel])) {
       delete revealedCredentialBaselines[channel][key]
     }
     for (const field of channelCredentialFields[channel]) settings[channel][field] = previews[field] || ''
-    channelCredentialsVisible[channel] = false
   }
   settings.whatsappPermission.command = whatsappPermissionCommandFromSettings(value)
   settings.whatsappPermission.requestText = source.whatsappPermission?.requestText
@@ -196,10 +149,10 @@ function channelHasSavedCredentials(channel) {
 }
 
 function hideChannelCredentials(channel) {
+  channelCredentialsVisible[channel] = false
   for (const field of channelCredentialFields[channel] || []) {
     settings[channel][field] = savedCredentialPreviews[channel]?.[field] || ''
   }
-  channelCredentialsVisible[channel] = false
   for (const key of Object.keys(revealedCredentialBaselines[channel])) {
     delete revealedCredentialBaselines[channel][key]
   }
@@ -345,54 +298,26 @@ async function saveChannel(channel, { quiet = false } = {}) {
     const result = await app.saveSettings(payload)
     applySettings(result)
     if (channel === 'telegram' && !telegramBot.value) await refreshTelegramIdentity()
-    if (!quiet) $q.notify({ type: 'positive', message: `${channelNames[channel]} salvo sem alterar os outros canais.` })
+    if (!quiet) {
+      const telegramWebhook = channel === 'telegram'
+        ? (result.configuration || result.settings || result)?.telegram?.webhook
+        : null
+      $q.notify({
+        type: telegramWebhook && telegramWebhook.refreshed === false ? 'warning' : 'positive',
+        message: `${channelNames[channel]} salvo sem alterar os outros canais.`,
+        caption: channel === 'telegram'
+          ? (telegramWebhook?.refreshed
+              ? 'Webhook configurado automaticamente.'
+              : 'Para registrar o webhook, configure PUBLIC_APP_URL com o domínio HTTPS público da aplicação.')
+          : undefined,
+      })
+    }
     return true
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, `Não foi possível salvar ${channelNames[channel]}.`) })
     return false
   } finally {
     savingChannel[channel] = false
-  }
-}
-
-async function registerTelegramWebhook() {
-  if (!settings.telegram.webhookUrl?.trim()) {
-    $q.notify({ type: 'warning', message: 'Informe a URL pública HTTPS do webhook.' })
-    return
-  }
-  let url
-  try {
-    url = normalizeTelegramWebhookUrl(settings.telegram.webhookUrl)
-  } catch (error) {
-    $q.notify({ type: 'warning', message: error.message || 'Informe uma URL HTTPS válida.' })
-    return
-  }
-  registeringWebhook.value = true
-  try {
-    const pendingCredentials = channelSettingsPayload(
-      'telegram',
-      settings.telegram,
-      channelCredentialsVisible.telegram ? revealedCredentialBaselines.telegram : {},
-    )
-    if (pendingCredentials && !(await saveChannel('telegram', { quiet: true }))) return
-    if (!telegramTokenConfigured.value) {
-      $q.notify({ type: 'warning', message: 'Salve ou informe o token do bot antes de registrar o webhook.' })
-      return
-    }
-    const result = unwrap(await http.post('/telegram/webhook/register', { url })) || {}
-    settings.telegram.webhookUrl = url
-    $q.notify({
-      type: 'positive',
-      message: 'Webhook do Telegram registrado.',
-      caption: result.webhookSecretGenerated
-        ? 'Um segredo de webhook foi gerado e armazenado automaticamente.'
-        : 'O token do bot e o webhook continuam independentes dos outros canais.',
-    })
-    await app.fetchStatus(true)
-  } catch (error) {
-    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível registrar o webhook.') })
-  } finally {
-    registeringWebhook.value = false
   }
 }
 
@@ -539,52 +464,29 @@ onBeforeUnmount(() => {
               hint="O token sozinho já permite testar envios manuais"
             />
             <q-input
-              v-model="settings.telegram.webhookSecret"
-              outlined
-              :type="channelCredentialsVisible.telegram ? 'text' : 'password'"
-              :readonly="credentialFieldIsMasked('telegram', 'webhookSecret')"
-              :label="telegramWebhookSecretIsMasked ? 'Webhook secret configurado' : 'Novo webhook secret (opcional)'"
-              autocomplete="new-password"
-            >
-              <template #append>
-                <q-btn flat round dense color="primary" icon="key" aria-label="Gerar novo webhook secret" @click="generateTelegramWebhookSecret()">
-                  <q-tooltip>Gerar novo segredo seguro</q-tooltip>
-                </q-btn>
-                <q-btn flat round dense color="primary" icon="content_copy" aria-label="Copiar webhook secret" @click="copyTelegramWebhookSecret">
-                  <q-tooltip>Copiar webhook secret</q-tooltip>
-                </q-btn>
-                <ContextHelp
-                  title="Webhook secret do Telegram"
-                  tooltip="Entenda como o segredo é protegido"
-                  :text="[
-                    'Se ficar vazio ao registrar, a API gera um segredo seguro.',
-                    'Um segredo já salvo aparece somente como máscara. O botão de visibilidade da seção faz uma consulta autenticada e o oculta novamente sem alterar o valor salvo.',
-                  ]"
-                />
-              </template>
-            </q-input>
-            <q-input
-              v-model="settings.telegram.webhookUrl"
+              :model-value="telegramCallbackUrl"
               class="full-span"
               outlined
-              type="url"
-              label="URL pública do webhook (opcional para enviar)"
-              placeholder="https://seu-id.ngrok-free.app"
+              readonly
+              label="URL de callback do webhook"
             >
               <template #append>
                 <ContextHelp
-                  title="URL do webhook do Telegram"
-                  tooltip="Entenda como a URL é completada"
-                  text="Se você colar apenas a URL base do ngrok, a rota /api/webhooks/telegram será acrescentada."
+                  title="Callback automático do Telegram"
+                  tooltip="Entenda a configuração automática"
+                  :text="[
+                    'Ao salvar um token de bot válido, a API gera um segredo interno e registra este callback automaticamente no Telegram.',
+                    'Em produção, PUBLIC_APP_URL deve apontar para o domínio HTTPS público exibido aqui. O segredo nunca é mostrado ou copiado pelo painel.',
+                  ]"
                 />
+                <q-btn flat round dense color="primary" icon="content_copy" aria-label="Copiar URL de callback do Telegram" @click="copyTelegramCallbackUrl" />
               </template>
             </q-input>
             <div class="full-span channel-actions">
               <q-btn outline color="primary" no-caps icon="save" label="Salvar Telegram" :loading="savingChannel.telegram" @click="saveChannel('telegram')" />
-              <q-btn color="primary" unelevated no-caps icon="webhook" label="Salvar e registrar webhook" :loading="registeringWebhook" @click="registerTelegramWebhook" />
               <q-btn flat color="primary" no-caps icon="send" label="Teste manual" to="/telegram" :disable="!app.isChannelEnabled('telegram')" />
             </div>
-            <div class="full-span channel-hint"><q-icon name="info" /> O webhook recebe /start e respostas; ele não é obrigatório para enviar a contatos que já possuem chat_id autorizado.</div>
+            <div class="full-span channel-hint"><q-icon name="verified_user" /> O webhook é registrado automaticamente; o segredo permanece protegido no servidor.</div>
           </div>
         </q-expansion-item>
         <q-separator />
@@ -652,7 +554,7 @@ onBeforeUnmount(() => {
               outlined
               :readonly="credentialFieldIsMasked('whatsappCloud', 'displayPhoneNumber')"
               label="Número público do WhatsApp (com DDI)"
-              :mask="credentialFieldIsMasked('whatsappCloud', 'displayPhoneNumber') ? undefined : '+## (##) #####-####'"
+              :mask="credentialFieldIsMasked('whatsappCloud', 'displayPhoneNumber') ? undefined : '+###############'"
               unmasked-value
               placeholder="+55 (11) 93123-4567"
             >
@@ -771,7 +673,7 @@ onBeforeUnmount(() => {
             :text="[
               'Mensagens recebidas pelo webhook oficial cadastram ou atualizam o contato e abrem a janela móvel de atendimento por 24 horas.',
               'Quando o contato envia este comando exato, a permissão de notificações pela API oficial é concedida e auditada.',
-              'O botão Solicitar autorização, dentro de Chats, usa o texto configurado abaixo e só funciona enquanto a janela de atendimento estiver aberta.',
+              'O botão Solicitar autorização, na aba Conversas do WhatsApp Cloud, usa o texto configurado abaixo e só funciona enquanto a janela de atendimento estiver aberta.',
             ]"
           />
         </div>

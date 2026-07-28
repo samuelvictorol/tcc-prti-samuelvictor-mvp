@@ -15,4 +15,28 @@ describe('contratos HTTP do frontend', () => {
   it('prioriza a mensagem estruturada da API', () => {
     expect(errorMessage({ response: { data: { message: 'Falha validada' } } })).toBe('Falha validada')
   })
+
+  it('inclui os motivos de validação do envelope padronizado', () => {
+    const error = {
+      response: {
+        data: {
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Dados invalidos',
+            details: {
+              formErrors: ['Revise o formulário'],
+              fieldErrors: {
+                body: ['Informe o numero publico do WhatsApp com DDI (8 a 15 digitos)'],
+              },
+            },
+          },
+        },
+      },
+    }
+
+    expect(errorMessage(error)).toBe(
+      'Dados invalidos: Revise o formulário Informe o numero publico do WhatsApp com DDI (8 a 15 digitos)',
+    )
+  })
 })

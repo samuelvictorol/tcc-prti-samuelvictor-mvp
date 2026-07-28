@@ -44,7 +44,12 @@ export const CUSTOM_WHATSAPP_CLOUD_TEMPLATE = Object.freeze({
 })
 
 export const SYSTEM_WHATSAPP_TEMPLATE_NAMES = Object.freeze([
-  'verify_code_1',
+  'jaspers_market_plain_text_v1',
+  'jaspers_market_order_confirmation_v1',
+  '3p_direct_integration_test_template',
+])
+
+export const META_TEST_NUMBER_TEMPLATE_NAMES = Object.freeze([
   'jaspers_market_plain_text_v1',
   'jaspers_market_order_confirmation_v1',
 ])
@@ -53,6 +58,15 @@ export function isSystemTemplateRecord(template = {}) {
   if (template.systemManaged === true || template.deletable === false) return true
   return normalizedTemplateChannel(template.channel || template.type) === 'whatsapp_cloud'
     && SYSTEM_WHATSAPP_TEMPLATE_NAMES.includes(String(template.externalTemplateName || '').trim())
+}
+
+export function templateFormatLabel(template = {}) {
+  const externalName = String(template.externalTemplateName || '').trim()
+  if (externalName === '3p_direct_integration_test_template') return 'OFICIAL META PROD NUMBER'
+  if (META_TEST_NUMBER_TEMPLATE_NAMES.includes(externalName)) return 'OFICIAL META TEST NUMBER'
+  return (template.templateType || template.format || 'text') === 'approved_template'
+    ? 'OFICIAL META'
+    : String(template.templateType || template.format || 'text').toUpperCase()
 }
 
 function normalizedTemplateChannel(value = '') {
@@ -216,13 +230,23 @@ export function renderWhatsAppCloudPreview(value) {
 </script>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import DOMPurify from 'dompurify'
 import { useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import TelegramTemplateBuilder from '../components/TelegramTemplateBuilder.vue'
-import { errorMessage, fetchAll, http } from '../services/http.js'
+import { asList, errorMessage, fetchAll, http, paginationOf, unwrap } from '../services/http.js'
+import {
+  TEMPLATE_SET_CHANNELS,
+  templateSetChannels,
+  templateSetContains,
+  templateSetId,
+  templateSetLinkResultSummary,
+  templateSetPayload,
+  templateSetTemplateIds,
+  templateSetWithTemplate,
+} from '../services/template-sets.js'
 import {
   createTelegramDefinition,
   normalizeTelegramDefinition,
@@ -240,12 +264,49 @@ const tab = ref('all')
 const search = ref('')
 const editingId = ref(null)
 const templates = ref([])
+const invites = ref([])
+const templateSets = ref([])
+const allTemplateSets = ref([])
+const templateSetLoading = ref(false)
+const templateSetSaving = ref(false)
+const templateSetDialog = ref(false)
+const templateSetEditingId = ref(null)
+const templateSetSearch = ref('')
+const templateSetInviteFilter = ref(null)
+const templateSetPagination = ref({
+  page: 1,
+  rowsPerPage: 10,
+  rowsNumber: 0,
+  sortBy: 'updatedAt',
+  descending: true,
+})
+const linkSetDialog = ref(false)
+const linkSetSaving = ref(false)
+const linkSetTemplate = ref(null)
+const linkSetIds = ref([])
 
 const channelOptions = [
   { label: 'Telegram', value: 'telegram', icon: 'send_to_mobile' },
   { label: 'WhatsApp Cloud', value: 'whatsapp_cloud', icon: 'cloud_sync' },
   { label: 'Email', value: 'email', icon: 'mail' },
 ]
+
+const templateSetChannelOptions = channelOptions.map((channel) => ({
+  ...channel,
+  label: channel.value === 'email' ? 'Gmail' : channel.label,
+}))
+
+const emptyTemplateSetForm = () => ({
+  name: '',
+  description: '',
+  inviteId: null,
+  templateIds: {
+    whatsapp_cloud: null,
+    telegram: null,
+    email: null,
+  },
+})
+const templateSetForm = reactive(emptyTemplateSetForm())
 
 const cloudPresetOptions = [...WHATSAPP_CLOUD_PRESETS, CUSTOM_WHATSAPP_CLOUD_TEMPLATE].map((preset) => ({
   label: preset.label,
@@ -283,6 +344,42 @@ const columns = [
   { name: 'actions', label: '', field: 'actions', align: 'right' },
 ]
 
+const templateSetColumns = [
+  { name: 'name', label: 'Conjunto', field: 'name', align: 'left' },
+  { name: 'invite', label: 'Convite associado', field: 'inviteId', align: 'left' },
+  { name: 'channels', label: 'Templates por canal', field: 'templates', align: 'left' },
+  { name: 'updatedAt', label: 'Atualizado', field: 'updatedAt', align: 'left' },
+  { name: 'actions', label: '', field: 'actions', align: 'right' },
+]
+
+const inviteOptions = computed(() => invites.value.map((invite) => ({
+  label: invite.title || invite.name || invite.slug || 'Convite sem título',
+  caption: invite.slug ? `/${invite.slug}` : '',
+  value: recordId(invite),
+})))
+
+const templatesByChannel = computed(() => Object.fromEntries(TEMPLATE_SET_CHANNELS.map((channel) => [
+  channel,
+  templates.value
+    .filter((template) => template.active !== false && normalizedChannel(template.channel || template.type) === channel)
+    .map((template) => ({
+      label: template.name || template.title || 'Template sem nome',
+      caption: template.description || template.subject || '',
+      value: recordId(template),
+    })),
+])))
+
+const selectedLinkSetChannel = computed(() => normalizedChannel(
+  linkSetTemplate.value?.channel || linkSetTemplate.value?.type,
+))
+
+const eligibleLinkSets = computed(() => allTemplateSets.value.filter((set) => {
+  const channel = selectedLinkSetChannel.value
+  return TEMPLATE_SET_CHANNELS.includes(channel)
+    && (!templateSetTemplateIds(set)[channel]
+      || templateSetContains(set, channel, recordId(linkSetTemplate.value)))
+}))
+
 const filteredTemplates = computed(() => {
   const needle = search.value.toLowerCase().trim()
   return templates.value.filter((template) => {
@@ -314,6 +411,23 @@ const safePreview = computed(() => {
   return `<p>${escaped.innerHTML.replace(/\n/g, '<br>')}</p>`
 })
 
+const telegramMediaPreview = computed(() => {
+  if (form.channel !== 'telegram') return null
+  const definition = normalizeTelegramDefinition(form.telegramDefinition)
+  if (!['photo', 'video'].includes(definition.kind)) return null
+  try {
+    const url = new URL(String(definition.mediaUrl || ''))
+    if (url.protocol !== 'https:' || url.username || url.password) return null
+    return { kind: definition.kind, url: url.toString() }
+  } catch {
+    return null
+  }
+})
+const telegramMediaPreviewFailed = ref(false)
+watch(() => telegramMediaPreview.value?.url, () => {
+  telegramMediaPreviewFailed.value = false
+})
+
 function recordId(record) {
   return record?.id || record?._id
 }
@@ -340,6 +454,19 @@ function formatDate(value) {
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
 }
 
+function inviteLabel(value) {
+  const id = typeof value === 'object' ? recordId(value) : value
+  if (!id) return 'Sem convite'
+  const invite = invites.value.find((item) => String(recordId(item)) === String(id))
+  return invite?.title || invite?.name || invite?.slug || 'Convite não encontrado'
+}
+
+function templateSetTemplateName(set, channel) {
+  const id = templateSetTemplateIds(set)[channel]
+  const template = templates.value.find((item) => String(recordId(item)) === String(id))
+  return template?.name || template?.title || 'Template não encontrado'
+}
+
 async function loadTemplates() {
   loading.value = true
   try {
@@ -349,6 +476,196 @@ async function loadTemplates() {
   } finally {
     loading.value = false
   }
+}
+
+async function loadTemplateSets(request = {}) {
+  templateSetLoading.value = true
+  const requestedPagination = request.pagination || templateSetPagination.value
+  try {
+    const payload = unwrap(await http.get('/template-sets', {
+      params: {
+        page: requestedPagination.page,
+        limit: requestedPagination.rowsPerPage,
+        search: templateSetSearch.value.trim() || undefined,
+        inviteId: templateSetInviteFilter.value || undefined,
+      },
+    }))
+    templateSets.value = asList(payload, 'templateSets')
+    templateSetPagination.value = {
+      ...requestedPagination,
+      ...paginationOf(payload, {
+        page: requestedPagination.page,
+        rowsPerPage: requestedPagination.rowsPerPage,
+        rowsNumber: templateSets.value.length,
+      }),
+    }
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível carregar os conjuntos.') })
+  } finally {
+    templateSetLoading.value = false
+  }
+}
+
+async function loadAllTemplateSets() {
+  allTemplateSets.value = await fetchAll('/template-sets', {
+    preferredKey: 'templateSets',
+    limit: 100,
+  })
+}
+
+async function loadPageData() {
+  loading.value = true
+  try {
+    const [templateItems, inviteItems] = await Promise.all([
+      fetchAll('/templates', { preferredKey: 'templates' }),
+      fetchAll('/invites', { preferredKey: 'invites' }),
+    ])
+    templates.value = templateItems
+    invites.value = inviteItems
+    await loadTemplateSets()
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível carregar a biblioteca de templates.') })
+  } finally {
+    loading.value = false
+  }
+}
+
+function reloadTemplateSets() {
+  templateSetPagination.value.page = 1
+  loadTemplateSets()
+}
+
+let templateSetSearchTimer
+watch(templateSetSearch, () => {
+  clearTimeout(templateSetSearchTimer)
+  templateSetSearchTimer = setTimeout(reloadTemplateSets, 300)
+})
+watch(templateSetInviteFilter, reloadTemplateSets)
+
+function openCreateTemplateSet() {
+  templateSetEditingId.value = null
+  Object.assign(templateSetForm, emptyTemplateSetForm())
+  templateSetDialog.value = true
+}
+
+function openEditTemplateSet(set) {
+  templateSetEditingId.value = templateSetId(set)
+  Object.assign(templateSetForm, emptyTemplateSetForm(), {
+    name: set.name || '',
+    description: set.description || '',
+    inviteId: typeof set.inviteId === 'object' ? recordId(set.inviteId) : set.inviteId || recordId(set.invite),
+    templateIds: templateSetTemplateIds(set),
+  })
+  templateSetDialog.value = true
+}
+
+async function saveTemplateSet() {
+  if (!templateSetForm.name.trim()) {
+    $q.notify({ type: 'warning', message: 'Informe o nome do conjunto.' })
+    return
+  }
+  if (!TEMPLATE_SET_CHANNELS.some((channel) => Boolean(templateSetForm.templateIds[channel]))) {
+    $q.notify({ type: 'warning', message: 'Vincule ao menos um template ao conjunto.' })
+    return
+  }
+  templateSetSaving.value = true
+  try {
+    const payload = templateSetPayload(templateSetForm)
+    if (templateSetEditingId.value) {
+      await http.put(`/template-sets/${templateSetEditingId.value}`, payload)
+    } else {
+      await http.post('/template-sets', payload)
+    }
+    templateSetDialog.value = false
+    $q.notify({ type: 'positive', message: 'Conjunto salvo com sucesso.' })
+    await Promise.all([loadTemplateSets(), loadAllTemplateSets()])
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível salvar o conjunto.') })
+  } finally {
+    templateSetSaving.value = false
+  }
+}
+
+function removeTemplateSet(set) {
+  $q.dialog({
+    title: 'Remover conjunto?',
+    message: `O conjunto “${set.name}” deixará de estar disponível para novos disparos. Os templates vinculados não serão removidos.`,
+    cancel: { flat: true, label: 'Cancelar' },
+    ok: { color: 'negative', label: 'Remover conjunto' },
+  }).onOk(async () => {
+    try {
+      await http.delete(`/template-sets/${templateSetId(set)}`)
+      if (templateSets.value.length === 1 && templateSetPagination.value.page > 1) {
+        templateSetPagination.value.page -= 1
+      }
+      $q.notify({ type: 'positive', message: 'Conjunto removido.' })
+      await Promise.all([loadTemplateSets(), loadAllTemplateSets()])
+    } catch (error) {
+      $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível remover o conjunto.') })
+    }
+  })
+}
+
+async function openLinkSetDialog(template) {
+  linkSetTemplate.value = template
+  try {
+    await loadAllTemplateSets()
+    linkSetIds.value = allTemplateSets.value
+      .filter((set) => templateSetContains(set, normalizedChannel(template.channel || template.type), recordId(template)))
+      .map(templateSetId)
+    linkSetDialog.value = true
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível carregar os conjuntos disponíveis.') })
+  }
+}
+
+async function saveTemplateSetLinks() {
+  const template = linkSetTemplate.value
+  const channel = selectedLinkSetChannel.value
+  if (!template || !TEMPLATE_SET_CHANNELS.includes(channel)) return
+  const currentSetIds = new Set(allTemplateSets.value
+    .filter((set) => templateSetContains(set, channel, recordId(template)))
+    .map((set) => String(templateSetId(set))))
+  const selectedSetIds = new Set(linkSetIds.value.map(String))
+  const setsToLink = eligibleLinkSets.value.filter((set) => (
+    selectedSetIds.has(String(templateSetId(set)))
+    && !currentSetIds.has(String(templateSetId(set)))
+  ))
+  if (!setsToLink.length) {
+    linkSetDialog.value = false
+    $q.notify({ type: 'info', message: 'O template já está vinculado aos conjuntos selecionados.' })
+    return
+  }
+  linkSetSaving.value = true
+  const results = await Promise.allSettled(setsToLink.map((set) => http.put(
+      `/template-sets/${templateSetId(set)}`,
+      templateSetWithTemplate(set, channel, recordId(template)),
+    )))
+  const summary = templateSetLinkResultSummary(results)
+  await Promise.allSettled([loadTemplateSets(), loadAllTemplateSets()])
+  linkSetSaving.value = false
+
+  if (!summary.failed) {
+    linkSetDialog.value = false
+    $q.notify({ type: 'positive', message: `Template vinculado a ${summary.succeeded} conjunto(s).` })
+    return
+  }
+  if (summary.succeeded) {
+    linkSetDialog.value = false
+    $q.notify({
+      type: 'warning',
+      message: `Vínculo parcial: ${summary.succeeded} concluído(s) e ${summary.failed} com falha.`,
+      caption: errorMessage(summary.firstError, 'Reabra o vínculo para tentar novamente nos conjuntos restantes.'),
+      timeout: 7000,
+    })
+    return
+  }
+  $q.notify({
+    type: 'negative',
+    message: `Nenhum vínculo foi concluído (${summary.failed} falha(s)).`,
+    caption: errorMessage(summary.firstError, 'Revise os conjuntos e tente novamente.'),
+    timeout: 7000,
+  })
 }
 
 function openCreate(channel = tab.value) {
@@ -605,7 +922,7 @@ function remove(template) {
   })
 }
 
-onMounted(loadTemplates)
+onMounted(loadPageData)
 </script>
 
 <template>
@@ -621,6 +938,115 @@ onMounted(loadTemplates)
       </template>
     </PageHeader>
 
+    <q-card flat class="glass-card section-card template-sets-panel q-mb-lg">
+      <div class="template-sets-heading">
+        <div>
+          <div class="text-overline text-primary">Campanhas multicanal</div>
+          <h2 class="section-title">Conjuntos de templates</h2>
+          <p class="section-copy">Agrupe de um a três templates, um por canal, e associe opcionalmente o conjunto a um convite.</p>
+        </div>
+        <q-btn color="primary" unelevated no-caps icon="add" label="Novo conjunto" @click="openCreateTemplateSet" />
+      </div>
+
+      <div class="template-set-filters">
+        <q-input
+          v-model="templateSetSearch"
+          dense
+          outlined
+          clearable
+          debounce="0"
+          placeholder="Buscar conjunto ou convite"
+        >
+          <template #prepend><q-icon name="search" /></template>
+        </q-input>
+        <q-select
+          v-model="templateSetInviteFilter"
+          dense
+          outlined
+          clearable
+          emit-value
+          map-options
+          :options="inviteOptions"
+          label="Filtrar por convite"
+        />
+      </div>
+
+      <EmptyState
+        v-if="!templateSetLoading && !templateSets.length"
+        icon="library_add"
+        title="Nenhum conjunto neste filtro"
+        description="Crie uma seleção reutilizável com os canais necessários para cada campanha."
+      >
+        <q-btn color="primary" unelevated no-caps label="Criar conjunto" @click="openCreateTemplateSet" />
+      </EmptyState>
+      <q-table
+        v-else
+        v-model:pagination="templateSetPagination"
+        flat
+        :rows="templateSets"
+        :columns="templateSetColumns"
+        :row-key="templateSetId"
+        :loading="templateSetLoading"
+        :rows-per-page-options="[5, 10, 25]"
+        @request="loadTemplateSets"
+      >
+        <template #body-cell-name="props">
+          <q-td :props="props">
+            <div class="template-set-name">
+              <span class="template-set-icon"><q-icon name="hub" /></span>
+              <div>
+                <strong>{{ props.row.name }}</strong>
+                <span>{{ props.row.description || `${templateSetChannels(props.row).length} canal(is) vinculado(s)` }}</span>
+              </div>
+            </div>
+          </q-td>
+        </template>
+        <template #body-cell-invite="props">
+          <q-td :props="props">
+            <q-chip
+              dense
+              :outline="!props.row.inviteId"
+              :color="props.row.inviteId ? 'primary' : 'grey-5'"
+              :text-color="props.row.inviteId ? 'white' : 'grey-8'"
+              icon="link"
+            >
+              {{ inviteLabel(props.row.inviteId || props.row.invite) }}
+            </q-chip>
+          </q-td>
+        </template>
+        <template #body-cell-channels="props">
+          <q-td :props="props">
+            <div class="template-set-channel-list">
+              <q-chip
+                v-for="channel in templateSetChannels(props.row)"
+                :key="channel"
+                dense
+                outline
+                color="primary"
+                :icon="channelOptions.find((item) => item.value === channel)?.icon"
+              >
+                {{ templateSetTemplateName(props.row, channel) }}
+                <q-tooltip>{{ channelLabel(channel) }}</q-tooltip>
+              </q-chip>
+            </div>
+          </q-td>
+        </template>
+        <template #body-cell-updatedAt="props">
+          <q-td :props="props">{{ formatDate(props.row.updatedAt) }}</q-td>
+        </template>
+        <template #body-cell-actions="props">
+          <q-td :props="props">
+            <q-btn flat round dense icon="edit" aria-label="Editar conjunto" @click="openEditTemplateSet(props.row)">
+              <q-tooltip>Editar conjunto</q-tooltip>
+            </q-btn>
+            <q-btn flat round dense color="negative" icon="delete" aria-label="Remover conjunto" @click="removeTemplateSet(props.row)">
+              <q-tooltip>Remover conjunto sem apagar os templates</q-tooltip>
+            </q-btn>
+          </q-td>
+        </template>
+      </q-table>
+    </q-card>
+
     <q-card flat class="glass-card section-card">
       <div class="toolbar-row">
         <q-tabs v-model="tab" dense no-caps outside-arrows mobile-arrows active-color="primary" indicator-color="transparent">
@@ -631,6 +1057,14 @@ onMounted(loadTemplates)
           <template #prepend><q-icon name="search" /></template>
         </q-input>
       </div>
+
+      <q-banner rounded class="bg-blue-1 text-blue-10 q-mb-md">
+        <template #avatar><q-icon name="info" color="primary" /></template>
+        <strong>Templates oficiais dependem do número remetente.</strong>
+        Os itens <strong>OFICIAL META TEST NUMBER</strong> pertencem ao fluxo com o número de teste.
+        O item <strong>OFICIAL META PROD NUMBER</strong> valida o modo de teste com um número de produção.
+        Antes do envio, confirme que o modelo com o mesmo nome e idioma está disponível e aprovado na conta do WhatsApp Business que atende o número correspondente.
+      </q-banner>
 
       <EmptyState v-if="!loading && !filteredTemplates.length" icon="note_add" title="Nenhum template neste filtro" description="Crie uma mensagem reutilizável para começar.">
         <q-btn color="primary" unelevated no-caps label="Criar template" @click="openCreate()" />
@@ -655,12 +1089,24 @@ onMounted(loadTemplates)
         <template #body-cell-channel="props"><q-td :props="props"><q-badge outline color="primary" :label="channelLabel(props.row.channel || props.row.type)" /></q-td></template>
         <template #body-cell-format="props">
           <q-td :props="props">
-            {{ (props.row.templateType || props.row.format || 'text') === 'approved_template' ? 'OFICIAL META' : (props.row.templateType || props.row.format || 'text').toUpperCase() }}
+            {{ templateFormatLabel(props.row) }}
           </q-td>
         </template>
         <template #body-cell-updatedAt="props"><q-td :props="props">{{ formatDate(props.row.updatedAt) }}</q-td></template>
         <template #body-cell-actions="props">
           <q-td :props="props">
+            <q-btn
+              v-if="TEMPLATE_SET_CHANNELS.includes(normalizedChannel(props.row.channel || props.row.type))"
+              flat
+              round
+              dense
+              color="primary"
+              icon="playlist_add"
+              aria-label="Vincular template a conjuntos"
+              @click="openLinkSetDialog(props.row)"
+            >
+              <q-tooltip>Vincular este template a um ou mais conjuntos</q-tooltip>
+            </q-btn>
             <q-btn
               v-if="normalizedChannel(props.row.channel || props.row.type) !== 'global'"
               flat
@@ -681,6 +1127,143 @@ onMounted(loadTemplates)
         </template>
       </q-table>
     </q-card>
+
+    <q-dialog v-model="templateSetDialog" persistent :maximized="$q.screen.lt.sm">
+      <q-card class="template-set-dialog">
+        <q-card-section class="template-set-dialog__header">
+          <div>
+            <div class="text-overline text-primary">Seleção reutilizável</div>
+            <h2>{{ templateSetEditingId ? 'Editar conjunto' : 'Novo conjunto' }}</h2>
+            <p>Escolha ao menos um canal. O mesmo template pode participar de vários conjuntos.</p>
+          </div>
+          <q-btn flat round dense icon="close" aria-label="Fechar" :disable="templateSetSaving" @click="templateSetDialog = false" />
+        </q-card-section>
+        <q-separator />
+        <q-form @submit.prevent="saveTemplateSet">
+          <q-card-section class="template-set-dialog__content scroll">
+            <div class="template-set-form">
+              <q-input
+                v-model.trim="templateSetForm.name"
+                outlined
+                label="Nome do conjunto *"
+                :rules="[(value) => Boolean(value) || 'Informe o nome']"
+              />
+              <q-select
+                v-model="templateSetForm.inviteId"
+                outlined
+                clearable
+                emit-value
+                map-options
+                :options="inviteOptions"
+                label="Convite associado (opcional)"
+              >
+                <template #option="scope">
+                  <q-item v-bind="scope.itemProps">
+                    <q-item-section>
+                      <q-item-label>{{ scope.opt.label }}</q-item-label>
+                      <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
+                    </q-item-section>
+                  </q-item>
+                </template>
+              </q-select>
+              <q-input
+                v-model="templateSetForm.description"
+                outlined
+                type="textarea"
+                autogrow
+                maxlength="2000"
+                counter
+                label="Descrição"
+                class="full-span"
+              />
+            </div>
+
+            <div class="template-set-channel-grid">
+              <article v-for="channel in templateSetChannelOptions" :key="channel.value" class="template-set-channel-card">
+                <header>
+                  <span><q-icon :name="channel.icon" /></span>
+                  <div>
+                    <strong>{{ channel.label }}</strong>
+                    <small>Um template deste canal</small>
+                  </div>
+                </header>
+                <q-select
+                  v-model="templateSetForm.templateIds[channel.value]"
+                  outlined
+                  clearable
+                  emit-value
+                  map-options
+                  :options="templatesByChannel[channel.value]"
+                  :label="`Template ${channel.label} (opcional)`"
+                  :disable="!templatesByChannel[channel.value]?.length"
+                >
+                  <template #option="scope">
+                    <q-item v-bind="scope.itemProps">
+                      <q-item-section>
+                        <q-item-label>{{ scope.opt.label }}</q-item-label>
+                        <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                  </template>
+                </q-select>
+              </article>
+            </div>
+          </q-card-section>
+          <q-separator />
+          <q-card-actions align="right" class="template-set-dialog__actions">
+            <q-btn flat no-caps label="Cancelar" :disable="templateSetSaving" @click="templateSetDialog = false" />
+            <q-btn color="primary" unelevated no-caps icon="save" label="Salvar conjunto" type="submit" :loading="templateSetSaving" />
+          </q-card-actions>
+        </q-form>
+      </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="linkSetDialog" :maximized="$q.screen.lt.sm">
+      <q-card class="template-link-dialog">
+        <q-card-section class="template-set-dialog__header">
+          <div>
+            <div class="text-overline text-primary">Vincular a conjuntos</div>
+            <h2>{{ linkSetTemplate?.name || linkSetTemplate?.title }}</h2>
+            <p>Selecione outros conjuntos que ainda não possuem um template de {{ channelLabel(selectedLinkSetChannel) }}.</p>
+          </div>
+          <q-btn flat round dense icon="close" aria-label="Fechar" :disable="linkSetSaving" @click="linkSetDialog = false" />
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="template-link-dialog__content scroll">
+          <EmptyState
+            v-if="!eligibleLinkSets.length"
+            icon="playlist_add_check"
+            title="Nenhum conjunto disponível"
+            description="Crie um conjunto ou libere o canal desejado editando um conjunto existente."
+          />
+          <q-list v-else bordered separator class="rounded-borders">
+            <q-item v-for="set in eligibleLinkSets" :key="templateSetId(set)" tag="label" clickable>
+              <q-item-section avatar>
+                <q-checkbox
+                  v-model="linkSetIds"
+                  :val="templateSetId(set)"
+                  :disable="templateSetContains(set, selectedLinkSetChannel, recordId(linkSetTemplate))"
+                />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>{{ set.name }}</q-item-label>
+                <q-item-label caption>
+                  {{ inviteLabel(set.inviteId || set.invite) }} · {{ templateSetChannels(set).length }} canal(is)
+                </q-item-label>
+              </q-item-section>
+              <q-item-section v-if="templateSetContains(set, selectedLinkSetChannel, recordId(linkSetTemplate))" side>
+                <q-badge color="positive" label="Já vinculado" />
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-card-section>
+        <q-separator />
+        <q-card-actions align="right" class="template-set-dialog__actions">
+          <q-btn flat no-caps label="Cancelar" :disable="linkSetSaving" @click="linkSetDialog = false" />
+          <q-btn color="primary" unelevated no-caps icon="playlist_add" label="Vincular selecionados" :loading="linkSetSaving" @click="saveTemplateSetLinks" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
 
     <q-dialog v-model="dialog" persistent :maximized="$q.screen.lt.md">
       <q-card class="template-dialog">
@@ -1010,6 +1593,25 @@ onMounted(loadTemplates)
                     <span>{{ isCustomCloudTemplate ? form.metadata.approvedName || 'nome_exato_na_meta' : selectedCloudPreset.templateName }}</span>
                   </div>
                 </div>
+                <div v-if="telegramMediaPreview && !telegramMediaPreviewFailed" class="preview-media">
+                  <img
+                    v-if="telegramMediaPreview.kind === 'photo'"
+                    :src="telegramMediaPreview.url"
+                    alt="Prévia da imagem do template Telegram"
+                    referrerpolicy="no-referrer"
+                    @error="telegramMediaPreviewFailed = true"
+                  />
+                  <video
+                    v-else
+                    :src="telegramMediaPreview.url"
+                    controls
+                    preload="metadata"
+                    @error="telegramMediaPreviewFailed = true"
+                  />
+                </div>
+                <q-banner v-else-if="telegramMediaPreviewFailed" dense rounded class="preview-media-error">
+                  O navegador não conseguiu carregar esta mídia. O servidor validará novamente o link durante o envio.
+                </q-banner>
                 <div class="preview-frame" v-html="safePreview" />
               </div>
               <div class="preview-warning" :class="{ 'cloud-preview-note': form.channel === 'whatsapp_cloud' }">
@@ -1034,6 +1636,161 @@ onMounted(loadTemplates)
 <style scoped>
 .search-field {
   width: min(310px, 100%);
+}
+
+.template-sets-panel {
+  overflow: hidden;
+}
+
+.template-sets-heading,
+.template-set-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.template-sets-heading {
+  margin-bottom: 18px;
+}
+
+.template-sets-heading h2,
+.template-set-dialog__header h2 {
+  margin: 0;
+}
+
+.template-sets-heading p,
+.template-set-dialog__header p {
+  margin: 4px 0 0;
+  color: #637875;
+}
+
+.template-set-filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 0.65fr);
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.template-set-name {
+  display: grid;
+  min-width: 240px;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+}
+
+.template-set-name > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.template-set-name strong,
+.template-set-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-set-name span {
+  max-width: 420px;
+  color: #667a77;
+  font-size: 0.76rem;
+}
+
+.template-set-icon,
+.template-set-channel-card header > span {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 13px;
+  background: rgba(130, 248, 230, 0.22);
+  color: #137d6c;
+}
+
+.template-set-channel-list {
+  display: flex;
+  min-width: 280px;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.template-set-dialog,
+.template-link-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(920px, calc(100vw - 40px));
+  max-width: 920px;
+  max-height: min(820px, calc(100dvh - 32px));
+  overflow: hidden;
+  border-radius: 22px;
+  background: #f9fffd;
+}
+
+.template-link-dialog {
+  width: min(680px, calc(100vw - 40px));
+}
+
+.template-set-dialog__header,
+.template-set-dialog__actions {
+  flex: 0 0 auto;
+  padding: 18px 22px;
+}
+
+.template-set-dialog > .q-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.template-set-dialog__content,
+.template-link-dialog__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 20px 22px;
+}
+
+.template-set-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.template-set-form .full-span {
+  grid-column: 1 / -1;
+}
+
+.template-set-channel-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.template-set-channel-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(11, 92, 79, 0.13);
+  border-radius: 16px;
+  background: #fff;
+}
+
+.template-set-channel-card header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 13px;
+}
+
+.template-set-channel-card header > div {
+  display: grid;
+}
+
+.template-set-channel-card small {
+  color: #6b7d7a;
 }
 
 .template-name {
@@ -1505,6 +2262,45 @@ onMounted(loadTemplates)
 .preview-frame {
   border: 0;
   border-radius: 0;
+  overflow-wrap: anywhere;
+}
+
+.preview-frame :deep(img),
+.preview-frame :deep(video) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 10px auto;
+  border-radius: 10px;
+}
+
+.preview-frame :deep(table) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.preview-media {
+  padding: 12px;
+  border-bottom: 1px solid rgba(3, 21, 21, 0.08);
+  background: #f5fbfa;
+}
+
+.preview-media img,
+.preview-media video {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  border-radius: 12px;
+  background: #e7f1ef;
+  object-fit: contain;
+}
+
+.preview-media-error {
+  margin: 12px;
+  background: rgba(242, 169, 59, 0.12);
+  color: #73551f;
+  font-size: 0.76rem;
 }
 
 .preview-warning {
@@ -1529,6 +2325,10 @@ onMounted(loadTemplates)
 }
 
 @media (max-width: 850px) {
+  .template-set-channel-grid {
+    grid-template-columns: 1fr;
+  }
+
   .template-dialog {
     width: 100% !important;
     max-width: 100% !important;
@@ -1548,6 +2348,33 @@ onMounted(loadTemplates)
 }
 
 @media (max-width: 600px) {
+  .template-sets-heading,
+  .template-set-dialog__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .template-set-filters,
+  .template-set-form {
+    grid-template-columns: 1fr;
+  }
+
+  .template-set-form .full-span {
+    grid-column: auto;
+  }
+
+  .template-set-dialog,
+  .template-link-dialog {
+    width: 100%;
+    max-width: 100%;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .template-set-dialog__actions {
+    padding-bottom: max(14px, env(safe-area-inset-bottom));
+  }
+
   .template-name {
     min-width: 210px;
     grid-template-columns: 42px minmax(0, 1fr);

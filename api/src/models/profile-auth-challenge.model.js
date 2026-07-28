@@ -12,12 +12,19 @@ const profileAuthChallengeSchema = new mongoose.Schema({
   identifierType: { type: String, enum: ['email', 'phone'], required: true },
   identifierHash: { type: String, required: true, select: false, index: true },
   contact: { type: mongoose.Schema.Types.ObjectId, ref: 'Contact', index: true },
-  codeHash: { type: String, required: true, select: false },
+  codeHash: { type: String, select: false },
+  activatedAt: { type: Date },
+  activationChannel: { type: String, enum: ['whatsapp_cloud'] },
+  activationCount: { type: Number, default: 0, min: 0 },
   attempts: { type: Number, default: 0 },
   maxAttempts: { type: Number, required: true },
   deliveries: { type: [deliveryAttemptSchema], default: [] },
   requestIpHash: { type: String, select: false },
   userAgent: { type: String, maxlength: 500 },
+  // Validade real do codigo. `expiresAt` permanece como a data de limpeza do
+  // documento para que o historico necessario ao rate limit sobreviva por toda
+  // a janela configurada.
+  codeExpiresAt: { type: Date },
   expiresAt: { type: Date, required: true },
   consumedAt: { type: Date },
   revokedAt: { type: Date }

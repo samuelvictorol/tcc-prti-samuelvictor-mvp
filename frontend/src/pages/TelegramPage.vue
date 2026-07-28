@@ -8,6 +8,7 @@ import ContextHelp from '../components/ContextHelp.vue'
 import { asList, errorMessage, fetchAll, http, unwrap } from '../services/http.js'
 import { connectSocket, getSocket } from '../services/socket.js'
 import { telegramBotIdentity } from '../services/telegram.js'
+import { playAppSound } from '../services/sounds.js'
 import {
   channelIdentity,
   deliveryStatusColor,
@@ -176,6 +177,14 @@ function chatSubtitle(chat) {
   const rawUsername = chat.telegramUsername || chat.username
   const username = rawUsername ? `@${String(rawUsername).replace(/^@/, '')}` : ''
   return username || chat.type || (chat.contactId || telegramIdentity(chat)?.authorized ? 'Conversa autorizada' : 'Aguardando autorização')
+}
+
+function chatContact(chat) {
+  return contacts.value.find((contact) => String(recordId(contact)) === String(chat?.contactId)) || null
+}
+
+function chatIsAuthorized(chat) {
+  return Boolean(telegramIdentity(chatContact(chat) || chat)?.authorized)
 }
 
 function replaceChats(items) {
@@ -379,6 +388,7 @@ function onConversationMessage(payload) {
   if (!conversation || conversation.channel !== 'telegram') return
   const index = chats.value.findIndex((chat) => String(recordId(chat)) === String(conversation.id))
   chats.value = [conversation, ...chats.value.filter((_chat, itemIndex) => itemIndex !== index)]
+  if (tab.value === 'chats' && messageItem?.direction === 'inbound') void playAppSound('telegram')
   if (messageItem && String(recordId(selected.value)) === String(conversation.id)) {
     addRealtimeMessage({ ...messageItem, text: messageItem.body || '', sentAt: messageItem.sentAt || messageItem.createdAt })
     http.patch(`/conversations/${conversation.id}/read`).catch(() => undefined)
@@ -562,6 +572,13 @@ async function showAllDeliveryIssues() {
 
 async function send() {
   if (!selected.value) return
+  if (!chatIsAuthorized(selected.value)) {
+    $q.notify({
+      type: 'warning',
+      message: 'Este contato iniciou a conversa, mas ainda não autorizou notificações pelo Telegram.',
+    })
+    return
+  }
   if (sendMode.value === 'quick' && !message.value.trim()) {
     $q.notify({ type: 'warning', message: 'Escreva uma mensagem.' })
     return
@@ -695,7 +712,7 @@ onBeforeUnmount(() => {
     <PageHeader
       eyebrow="Canal conectado"
       title="Telegram"
-      description="Atenda quem iniciou o bot, gerencie grupos vinculados e envie mensagens para chat IDs autorizados."
+      description="Acompanhe todas as pessoas que iniciaram o bot, gerencie grupos e envie notificações para chat IDs autorizados."
       icon="send_to_mobile"
     >
       <template #actions>
@@ -725,9 +742,9 @@ onBeforeUnmount(() => {
     </div>
 
     <q-card flat class="glass-card section-card">
-      <q-tabs v-model="tab" no-caps inline-label active-color="primary" indicator-color="transparent" class="q-mb-lg">
+      <q-tabs v-model="tab" no-caps inline-label active-color="info" indicator-color="transparent" class="q-mb-lg">
         <q-tab name="broadcast" icon="campaign" label="Disparos em massa" />
-        <q-tab name="chats" icon="forum" label="Conversas autorizadas" />
+        <q-tab name="chats" icon="forum" label="Conversas" />
         <q-tab name="groups" icon="groups" label="Grupos vinculados" />
       </q-tabs>
 
@@ -886,7 +903,7 @@ onBeforeUnmount(() => {
                 <template #prepend><q-icon name="search" /></template>
               </q-input>
               <div v-if="loading" class="q-pa-md"><q-skeleton v-for="n in 5" :key="n" type="QItem" /></div>
-              <EmptyState v-else-if="!filteredChats.length" icon="mark_chat_unread" title="Nenhuma conversa autorizada" description="Compartilhe o link do bot para receber novos /start." />
+              <EmptyState v-else-if="!filteredChats.length" icon="mark_chat_unread" title="Nenhuma conversa iniciada" description="Quando uma pessoa iniciar o bot, a conversa aparecerá aqui mesmo antes da autorização de notificações." />
               <q-list v-else separator class="chat-list">
                 <q-item v-for="chat in filteredChats" :key="recordId(chat)" clickable :active="recordId(selected) === recordId(chat)" active-class="chat-active" @click="selectChat(chat)">
                   <q-item-section avatar><q-avatar class="avatar-fallback"><img v-if="chat.avatarUrl || chat.imageUrl" :src="chat.avatarUrl || chat.imageUrl" :alt="`Foto de ${chatTitle(chat)}`" /><span v-else>{{ chatTitle(chat).slice(0, 1).toUpperCase() }}</span></q-avatar></q-item-section>
@@ -895,7 +912,14 @@ onBeforeUnmount(() => {
                     <q-item-label caption>{{ chat.lastMessage?.preview || chat.lastMessage || chatSubtitle(chat) }}</q-item-label>
                     <q-item-label v-if="chat.lastMessage" caption class="chat-identity">{{ chatSubtitle(chat) }}</q-item-label>
                   </q-item-section>
-                  <q-item-section side><span class="status-dot status-dot--online" title="Autorizado" /></q-item-section>
+                  <q-item-section side>
+                    <q-icon
+                      :name="chatIsAuthorized(chat) ? 'notifications_active' : 'notifications_off'"
+                      :color="chatIsAuthorized(chat) ? 'info' : 'grey-6'"
+                    >
+                      <q-tooltip>{{ chatIsAuthorized(chat) ? 'Notificações autorizadas' : 'Conversa iniciada; notificações ainda não autorizadas' }}</q-tooltip>
+                    </q-icon>
+                  </q-item-section>
                 </q-item>
               </q-list>
             </section>
@@ -940,10 +964,13 @@ onBeforeUnmount(() => {
                     </div>
                   </div>
                 </div>
-                <q-btn-toggle v-model="sendMode" spread no-caps unelevated toggle-color="primary" color="white" text-color="dark" :options="[{ label: 'Mensagem rápida', value: 'quick' }, { label: 'Usar template', value: 'template' }]" class="q-my-lg" />
-                <q-input v-if="sendMode === 'quick'" v-model="message" outlined type="textarea" autogrow label="Mensagem" />
-                <q-select v-else v-model="templateId" outlined emit-value map-options :options="templateOptions" label="Template do Telegram" />
-                <div class="row justify-end q-mt-lg"><q-btn color="dark" unelevated no-caps icon-right="send" label="Enviar ao Telegram" :loading="sending" @click="send" /></div>
+                <q-banner v-if="!chatIsAuthorized(selected)" rounded class="bg-blue-1 text-blue-10 q-mt-lg">
+                  A conversa pode ser acompanhada, mas o envio fica disponível somente depois que o contato autorizar notificações pelo bot.
+                </q-banner>
+                <q-btn-toggle v-model="sendMode" spread no-caps unelevated toggle-color="primary" color="white" text-color="dark" :disable="!chatIsAuthorized(selected)" :options="[{ label: 'Mensagem rápida', value: 'quick' }, { label: 'Usar template', value: 'template' }]" class="q-my-lg" />
+                <q-input v-if="sendMode === 'quick'" v-model="message" outlined type="textarea" autogrow label="Mensagem" :disable="!chatIsAuthorized(selected)" />
+                <q-select v-else v-model="templateId" outlined emit-value map-options :options="templateOptions" label="Template do Telegram" :disable="!chatIsAuthorized(selected)" />
+                <div class="row justify-end q-mt-lg"><q-btn color="dark" unelevated no-caps icon-right="send" label="Enviar ao Telegram" :loading="sending" :disable="!chatIsAuthorized(selected)" @click="send" /></div>
               </template>
             </section>
           </div>

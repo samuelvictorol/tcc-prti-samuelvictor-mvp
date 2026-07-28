@@ -20,7 +20,14 @@ describe('visibilidade das credenciais no Início', () => {
   })
 
   it('restaura previews ao ocultar e usa apenas telefone fictício no exemplo tocado', () => {
+    const visibilityBeforePreview = source.indexOf('channelCredentialsVisible[channel] = false')
+    const previewAssignment = source.indexOf("settings[channel][field] = previews[field] || ''")
+
+    expect(visibilityBeforePreview).toBeGreaterThan(-1)
+    expect(visibilityBeforePreview).toBeLessThan(previewAssignment)
     expect(source).toContain('settings[channel][field] = savedCredentialPreviews[channel]?.[field]')
     expect(source.match(/\+55 \(11\) 93123-4567/g)).toHaveLength(1)
+    expect(source).toContain("'+###############'")
+    expect(source).not.toContain("'+## (##) #####-####'")
   })
 })

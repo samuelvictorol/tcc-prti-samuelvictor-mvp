@@ -15,6 +15,7 @@ const createNotificationSchema = z.object({
     channel: notificationChannel,
     templateId: objectId.nullish(),
     templateIds: notificationTemplateIds.optional(),
+    templateSetId: objectId.nullish(),
     content: z.record(z.unknown()).nullish(),
     contactIds: z.array(objectId).max(10000).default([]),
     groupIds: z.array(objectId).max(1000).default([]),
@@ -23,8 +24,8 @@ const createNotificationSchema = z.object({
     if (!body.contactIds.length && !body.groupIds.length) context.addIssue({ code: z.ZodIssueCode.custom, message: 'Informe ao menos um destinatario' });
     const globalTemplateIds = Object.values(body.templateIds || {}).filter(Boolean);
     if (body.kind === 'template' && !body.templateId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'templateId obrigatorio' });
-    if (body.kind === 'global' && !globalTemplateIds.length) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['templateIds'], message: 'Selecione ao menos um canal com template' });
+    if (body.kind === 'global' && !globalTemplateIds.length && !body.templateSetId) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['templateIds'], message: 'Selecione templates por canal ou um conjunto de templates' });
     }
     if (body.kind === 'quick' && !body.content) context.addIssue({ code: z.ZodIssueCode.custom, message: 'content obrigatorio' });
     if (body.kind === 'quick' && body.channel === CHANNELS.GLOBAL) {
@@ -35,6 +36,12 @@ const createNotificationSchema = z.object({
     }
     if (body.kind !== 'global' && body.templateIds !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['templateIds'], message: 'templateIds e exclusivo do disparo global' });
+    }
+    if (body.kind !== 'global' && body.templateSetId) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['templateSetId'], message: 'templateSetId e exclusivo do disparo global' });
+    }
+    if (body.kind === 'global' && body.templateSetId && globalTemplateIds.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['templateSetId'], message: 'Use templateSetId ou templateIds, nunca os dois' });
     }
     if (body.kind === 'global' && body.templateId) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['templateId'], message: 'Use templateIds por canal no disparo global' });

@@ -16,6 +16,7 @@ module.exports = {
   RefreshToken: require('./refresh-token.model'),
   Setting: require('./setting.model'),
   Template: require('./template.model'),
+  TemplateSet: require('./template-set.model'),
   Term: require('./term.model'),
   WhatsappCloudWebhookEvent: require('./whatsapp-cloud-webhook-event.model')
 };

@@ -6,6 +6,7 @@ import {
   SYSTEM_WHATSAPP_TEMPLATE_NAMES,
   buildCustomWhatsAppCloudDefinition,
   isSystemTemplateRecord,
+  templateFormatLabel,
 } from '../src/pages/TemplatesPage.vue'
 
 const page = readFileSync(new URL('../src/pages/TemplatesPage.vue', import.meta.url), 'utf8')
@@ -13,14 +14,26 @@ const page = readFileSync(new URL('../src/pages/TemplatesPage.vue', import.meta.
 describe('templates fixos do sistema', () => {
   it('reconhece os tres nomes oficiais e permite excluir os demais', () => {
     expect(SYSTEM_WHATSAPP_TEMPLATE_NAMES).toEqual([
-      'verify_code_1',
       'jaspers_market_plain_text_v1',
       'jaspers_market_order_confirmation_v1',
+      '3p_direct_integration_test_template',
     ])
-    expect(isSystemTemplateRecord({ channel: 'whatsapp_cloud', externalTemplateName: 'verify_code_1' })).toBe(true)
+    expect(isSystemTemplateRecord({ channel: 'whatsapp_cloud', externalTemplateName: 'verify_code_1' })).toBe(false)
     expect(isSystemTemplateRecord({ channel: 'telegram', externalTemplateName: 'verify_code_1' })).toBe(false)
     expect(isSystemTemplateRecord({ channel: 'whatsapp_cloud', externalTemplateName: 'campanha_v2' })).toBe(false)
     expect(isSystemTemplateRecord({ systemManaged: true })).toBe(true)
+  })
+
+  it('diferencia templates oficiais do numero de teste e do numero de producao', () => {
+    expect(templateFormatLabel({
+      templateType: 'approved_template',
+      externalTemplateName: 'verify_code_1',
+    })).toBe('OFICIAL META')
+    expect(templateFormatLabel({
+      templateType: 'approved_template',
+      externalTemplateName: '3p_direct_integration_test_template',
+    })).toBe('OFICIAL META PROD NUMBER')
+    expect(page).toContain('o modelo com o mesmo nome e idioma está disponível e aprovado')
   })
 
   it('oculta a exclusao dos fixos e mostra o cadeado', () => {

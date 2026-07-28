@@ -15,6 +15,7 @@ const conversationsManager = require('../src/managers/conversations.manager');
 const { channelSendSchema } = require('../src/dtos/channels.dto');
 const { createTemplateSchema } = require('../src/dtos/templates.dto');
 const { buildCustomTemplateMessage, normalizeBuilder } = require('../src/utils/whatsapp-cloud-templates');
+const { env } = require('../src/config/env');
 
 function restoreAfter(context, overrides) {
   const originals = overrides.map(([target, key]) => [target, key, target[key]]);
@@ -29,7 +30,11 @@ function stubWebhookPersistence(context) {
     [webhookEventsManager, 'claimEvent'],
     [webhookEventsManager, 'markProcessed'],
     [webhookEventsManager, 'markFailed'],
-    [conversationsManager, 'recordInbound']
+    [conversationsManager, 'recordInbound'],
+    [conversationsManager, 'recordOutbound'],
+    [conversationsManager, 'getById'],
+    [conversationsManager, 'requireOpenCloudServiceWindow'],
+    [contactsManager, 'getById']
   ]);
   webhookEventsManager.persistPayload = async (payload) => {
     const descriptors = webhookEventsManager.extractEvents(payload);
@@ -57,6 +62,29 @@ function stubWebhookPersistence(context) {
   conversationsManager.recordInbound = async (input) => ({
     conversation: { id: '507f1f77bcf86cd799439177', channel: input.channel },
     message: { id: '507f1f77bcf86cd799439178', body: input.body }
+  });
+  conversationsManager.recordOutbound = async (input) => ({
+    conversation: { id: '507f1f77bcf86cd799439177', channel: input.channel },
+    message: { id: '507f1f77bcf86cd799439179', body: input.body }
+  });
+  conversationsManager.getById = async (id) => ({
+    id,
+    channel: 'whatsapp_cloud',
+    contactId: '507f1f77bcf86cd799439011',
+    serviceWindow: { open: true, expiresAt: new Date(Date.now() + 60_000).toISOString() }
+  });
+  conversationsManager.requireOpenCloudServiceWindow = async (id) => ({
+    conversation: {
+      _id: id,
+      contact: '507f1f77bcf86cd799439011'
+    },
+    externalId: '551131234567',
+    serviceWindow: { open: true, expiresAt: new Date(Date.now() + 60_000) }
+  });
+  contactsManager.getById = async (id) => ({
+    id,
+    displayName: 'Samuel',
+    channels: [{ channel: 'whatsapp_cloud', metadata: {} }]
   });
 }
 
@@ -778,6 +806,77 @@ test('webhook Cloud salva novo usuario como unknown sem o comando de permissao',
   assert.equal(upsertInput.source, 'whatsapp_cloud_webhook');
   assert.equal(adminNotifications, 1);
   assert.deepEqual(actions, ['contact.auto_created', 'message.received']);
+});
+
+test('/meu-perfil no WhatsApp responde com resumo privado e link publico', async (context) => {
+  stubWebhookPersistence(context);
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [settingsManager, 'isWhatsappPermissionCommand'],
+    [contactsManager, 'findByChannelAddress'],
+    [contactsManager, 'findByChannelOrPhone'],
+    [contactsManager, 'upsertFromChannel'],
+    [logsManager, 'create'],
+    [adminNotificationsManager, 'create'],
+    [global, 'fetch'],
+    [env, 'publicAppUrl']
+  ]);
+  const appSecret = 'cloud-secret';
+  env.publicAppUrl = 'https://notify.example';
+  settingsManager.getValue = async (key) => ({
+    WHATSAPP_CLOUD_APP_SECRET: appSecret,
+    WHATSAPP_CLOUD_ACCESS_TOKEN: 'test-access-token',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
+    WHATSAPP_CLOUD_API_VERSION: 'v25.0'
+  })[key] || null;
+  settingsManager.isWhatsappPermissionCommand = async () => false;
+  contactsManager.findByChannelAddress = async () => null;
+  contactsManager.findByChannelOrPhone = async () => null;
+  contactsManager.upsertFromChannel = async () => ({
+    id: '507f1f77bcf86cd799439011',
+    displayName: 'Samuel',
+    upsertState: { created: false, identityAdded: false }
+  });
+  contactsManager.getById = async () => ({
+    id: '507f1f77bcf86cd799439011',
+    displayName: 'Samuel',
+    email: 'samuel@example.test',
+    phone: '5511999999999',
+    telegramUsername: 'samuel_teste',
+    channels: [{ channel: 'whatsapp_cloud', authorized: true, consentStatus: 'granted', metadata: {} }]
+  });
+  logsManager.create = async (entry) => entry;
+  adminNotificationsManager.create = async () => ({});
+  const providerPayloads = [];
+  global.fetch = async (_url, options) => {
+    providerPayloads.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      json: async () => ({ messages: [{ id: 'wamid.profile-response' }] })
+    };
+  };
+  const payload = {
+    entry: [{ changes: [{ value: {
+      contacts: [{ wa_id: '551131234567', profile: { name: 'Samuel' } }],
+      messages: [{
+        id: 'wamid.profile-command',
+        from: '551131234567',
+        type: 'text',
+        text: { body: '/meu-perfil' }
+      }]
+    } }] }]
+  };
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256=' + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+  const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
+
+  assert.equal(result.receivedMessages, 1);
+  const response = providerPayloads.find((item) => /Seus dados no Notify Flow/.test(item.text?.body || ''));
+  assert.ok(response);
+  assert.match(response.text.body, /samuel@example\.test/);
+  assert.match(response.text.body, /https:\/\/notify\.example\/meu-perfil/);
+  assert.doesNotMatch(response.text.body, /507f1f77bcf86cd799439011/);
 });
 
 test('webhook Cloud contact-only nao cadastra contato nem concede opt-in', async (context) => {

@@ -1,5 +1,5 @@
 export const channelCredentialFields = Object.freeze({
-  telegram: ['botToken', 'webhookSecret'],
+  telegram: ['botToken'],
   whatsappCloud: ['accessToken', 'phoneNumberId', 'displayPhoneNumber', 'businessAccountId', 'verifyToken', 'appSecret', 'apiVersion'],
   email: ['user', 'from', 'fromName', 'appPassword'],
 })
@@ -7,7 +7,7 @@ export const channelCredentialFields = Object.freeze({
 export function isMaskedSecret(value) {
   if (typeof value !== 'string') return false
   const normalized = value.trim()
-  return normalized.includes('••••') || /^\*{4,}$/.test(normalized)
+  return /[•*]{4,}/u.test(normalized)
 }
 
 export function generateSecureWebhookSecret(cryptoApi = globalThis.crypto, byteLength = 32) {

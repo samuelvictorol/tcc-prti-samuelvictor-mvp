@@ -352,10 +352,12 @@ export function sanitizeWebhookPayload(value, key = '') {
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
+import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ContactDialog from '../components/ContactDialog.vue'
 import ContextHelp from '../components/ContextHelp.vue'
+import ChatsPage from './ChatsPage.vue'
 import { errorMessage, fetchAll, http, unwrap } from '../services/http.js'
 import { connectSocket, getSocket } from '../services/socket.js'
 import {
@@ -365,6 +367,9 @@ import {
 } from '../services/contact-identities.js'
 
 const $q = useQuasar()
+const route = useRoute()
+const router = useRouter()
+const activeTab = ref(route.query.tab === 'broadcast' ? 'broadcast' : 'conversations')
 const loading = ref(false)
 const sending = ref(false)
 const contactDialog = ref(false)
@@ -398,6 +403,16 @@ let issueRequestSequence = 0
 let webhookContactRequestSequence = 0
 let webhookEventRequestSequence = 0
 let webhookEventDetailsRequestSequence = 0
+
+function selectCloudTab(value) {
+  activeTab.value = value
+  if (String(route.query.tab || '') === value) return
+  void router.replace({ query: { ...route.query, tab: value } })
+}
+
+watch(() => route.query.tab, (value) => {
+  activeTab.value = value === 'broadcast' ? 'broadcast' : 'conversations'
+})
 
 const form = reactive({
   recipientMode: 'contact',
@@ -914,15 +929,37 @@ onBeforeUnmount(() => {
     <PageHeader
       eyebrow="Meta Cloud API"
       title="WhatsApp oficial"
-      description="Envie templates aprovados pela fila, acompanhe elegibilidade e gerencie contatos recebidos pelo webhook."
+      :description="activeTab === 'conversations'
+        ? 'Atenda conversas iniciadas pelos clientes e acompanhe a janela oficial de 24 horas em tempo real.'
+        : 'Envie templates aprovados pela fila, acompanhe elegibilidade e gerencie contatos recebidos pelo webhook.'"
       icon="cloud_sync"
     >
       <template #actions>
-        <q-btn outline color="primary" no-caps icon="person_add" label="Cadastrar contato" @click="openCreateContact" />
-        <q-btn outline color="primary" no-caps icon="refresh" label="Atualizar" :loading="loading" @click="loadData" />
+        <template v-if="activeTab === 'broadcast'">
+          <q-btn outline color="positive" no-caps icon="person_add" label="Cadastrar contato" @click="openCreateContact" />
+          <q-btn outline color="positive" no-caps icon="refresh" label="Atualizar" :loading="loading" @click="loadData" />
+        </template>
       </template>
     </PageHeader>
 
+    <q-card flat class="glass-card cloud-tabs-card q-mb-lg">
+      <q-tabs
+        :model-value="activeTab"
+        no-caps
+        inline-label
+        active-color="positive"
+        indicator-color="positive"
+        align="left"
+        @update:model-value="selectCloudTab"
+      >
+        <q-tab name="broadcast" icon="campaign" label="Disparos em massa" />
+        <q-tab name="conversations" icon="forum" label="Conversas" />
+      </q-tabs>
+    </q-card>
+
+    <ChatsPage v-if="activeTab === 'conversations'" embedded />
+
+    <div v-show="activeTab === 'broadcast'" class="cloud-broadcast-panel">
     <div class="cloud-help-strip q-mb-lg" aria-label="Ajuda das políticas do WhatsApp oficial">
       <span><q-icon name="verified" /> Regras do canal</span>
       <ContextHelp
@@ -1451,10 +1488,30 @@ onBeforeUnmount(() => {
         <q-card-actions align="right" class="issue-dialog__footer"><q-btn v-if="selectedIssue?.contact" v-close-popup outline color="primary" no-caps icon="manage_accounts" label="Editar permissão" @click="openEditContact(selectedIssue.contact)" /><q-btn v-close-popup flat no-caps label="Fechar" /></q-card-actions>
       </q-card>
     </q-dialog>
+    </div>
   </q-page>
 </template>
 
 <style scoped>
+.cloud-tabs-card {
+  padding: 5px;
+  border: 1px solid rgba(18, 140, 106, 0.13);
+  background: rgba(250, 255, 253, 0.8);
+}
+
+.cloud-tabs-card :deep(.q-tab) {
+  min-height: 48px;
+  border-radius: 12px;
+}
+
+.cloud-tabs-card :deep(.q-tab--active) {
+  background: rgba(71, 211, 162, 0.14);
+}
+
+.cloud-broadcast-panel {
+  min-width: 0;
+}
+
 .cloud-help-strip {
   display: flex;
   width: fit-content;

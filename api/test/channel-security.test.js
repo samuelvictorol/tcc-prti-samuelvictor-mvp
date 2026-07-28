@@ -79,7 +79,7 @@ test('WhatsApp Cloud rejeita texto livre e payload cru no envio direto', async (
   assert.equal(fetchCalled, false);
 });
 
-test('Telegram libera retry do mesmo update apos falha e aceita write_access_allowed', async (context) => {
+test('Telegram libera retry e identifica write_access_allowed sem conceder notificacoes', async (context) => {
   const originals = {
     getValue: settingsManager.getValue,
     findContact: contactsManager.findByChannelAddress,
@@ -104,7 +104,9 @@ test('Telegram libera retry do mesmo update apos falha e aceita write_access_all
     groupsManager.findByExternalId = originals.findGroup;
     conversationsManager.recordInbound = originals.recordInbound;
   });
-  settingsManager.getValue = async () => 'webhook-secret';
+  settingsManager.getValue = async (key) => (
+    key === 'TELEGRAM_WEBHOOK_SECRET' ? 'webhook-secret' : null
+  );
   contactsManager.findByChannelAddress = async () => ({ channels: [{ channel: 'telegram', consentStatus: 'revoked' }] });
   let attempts = 0;
   let lastInput;
@@ -136,7 +138,8 @@ test('Telegram libera retry do mesmo update apos falha e aceita write_access_all
   const result = await telegramManager.webhook(update, 'webhook-secret');
   assert.equal(result.received, true);
   assert.equal(attempts, 2);
-  assert.equal(lastInput.authorize, true);
+  assert.equal(lastInput.authorize, false);
+  assert.equal(lastInput.consentStatus, undefined);
   assert.equal(lastInput.source, 'telegram_write_access_allowed');
   assert.deepEqual(socketEvents.map((item) => item.event), ['telegram:message', 'telegram:chats', 'telegram:webhook']);
   const messageEvent = socketEvents.find((item) => item.event === 'telegram:message').payload;
@@ -292,11 +295,13 @@ test('salvar token enriquece a configuracao com getMe sem bloquear o salvamento'
   const originals = {
     setBulk: settingsManager.setBulk,
     status: telegramManager.status,
+    refreshWebhookRegistration: telegramManager.refreshWebhookRegistration,
     clear: telegramManager.clearIdentityCache
   };
   context.after(() => {
     settingsManager.setBulk = originals.setBulk;
     telegramManager.status = originals.status;
+    telegramManager.refreshWebhookRegistration = originals.refreshWebhookRegistration;
     telegramManager.clearIdentityCache = originals.clear;
   });
   settingsManager.setBulk = async () => ({
@@ -306,6 +311,10 @@ test('salvar token enriquece a configuracao com getMe sem bloquear o salvamento'
   let cacheCleared = false;
   let statusOptions;
   telegramManager.clearIdentityCache = () => { cacheCleared = true; };
+  telegramManager.refreshWebhookRegistration = async () => ({
+    refreshed: true,
+    url: 'https://notify.example.com/api/webhooks/telegram'
+  });
   telegramManager.status = async (options) => {
     statusOptions = options;
     return {
@@ -323,5 +332,19 @@ test('salvar token enriquece a configuracao com getMe sem bloquear o salvamento'
   assert.equal(cacheCleared, true);
   assert.deepEqual(statusOptions, { probe: true, force: true });
   assert.equal(response.data.configuration.telegram.bot.username, 'notify_bot');
+  assert.equal(response.data.configuration.telegram.webhook.refreshed, true);
   assert.doesNotMatch(JSON.stringify(response), /segredo/);
+});
+
+test('URL automatica do Telegram deriva exclusivamente do PUBLIC_APP_URL publico', () => {
+  const previous = require('../src/config/env').env.publicAppUrl;
+  require('../src/config/env').env.publicAppUrl = 'https://notify.example.com/painel?origem=teste';
+  try {
+    assert.equal(
+      telegramManager.automaticWebhookUrl(),
+      'https://notify.example.com/api/webhooks/telegram'
+    );
+  } finally {
+    require('../src/config/env').env.publicAppUrl = previous;
+  }
 });
