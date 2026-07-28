@@ -81,7 +81,7 @@ profileHttp.interceptors.request.use((config) => {
 profileHttp.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && !/\/(request-code|verify-code)$/.test(error.config?.url || '')) {
+    if (error.response?.status === 401 && !/\/(request-login|exchange-link)$/.test(error.config?.url || '')) {
       clearProfileSession(true)
     }
     return Promise.reject(error)
@@ -92,12 +92,15 @@ function data(response) {
   return response?.data?.data ?? response?.data ?? response
 }
 
-export async function requestProfileCode(identifier) {
-  return data(await profileHttp.post('/my-profile/request-code', { identifier }))
+export async function requestProfileLogin(identifier, identifierType = 'phone') {
+  return data(await profileHttp.post('/my-profile/request-login', {
+    identifier,
+    identifierType,
+  }))
 }
 
-export async function verifyProfileCode(challengeId, code) {
-  const result = data(await profileHttp.post('/my-profile/verify-code', { challengeId, code }))
+export async function exchangeProfileLink(token) {
+  const result = data(await profileHttp.post('/my-profile/exchange-link', { token }))
   if (result?.accessToken) setProfileToken(result.accessToken, result.expiresAt)
   return result
 }

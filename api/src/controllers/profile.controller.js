@@ -4,13 +4,13 @@ function requestMeta(req) {
   return { ip: req.ip, userAgent: req.get('user-agent') };
 }
 
-async function requestCode(req, res) {
-  const data = await profileManager.requestCode(req.validated.body, requestMeta(req));
+async function requestLogin(req, res) {
+  const data = await profileManager.requestLogin(req.validated.body, requestMeta(req));
   res.status(202).json({ success: true, data });
 }
 
-async function verifyCode(req, res) {
-  const data = await profileManager.verifyCode(req.validated.body, requestMeta(req));
+async function exchangeLink(req, res) {
+  const data = await profileManager.exchangeProfileLink(req.validated.body, requestMeta(req));
   res.json({ success: true, data });
 }
 
@@ -43,8 +43,8 @@ async function loginOverview(req, res) {
 }
 
 module.exports = {
-  requestCode,
-  verifyCode,
+  requestLogin,
+  exchangeLink,
   me,
   update,
   revokeConsent,

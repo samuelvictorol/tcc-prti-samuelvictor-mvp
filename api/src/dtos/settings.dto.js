@@ -50,11 +50,35 @@ const whatsappConsentRequestText = optionalField(
   )
 );
 
+function hasDisallowedControlCharacters(value) {
+  return [...String(value || '')].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint <= 8
+      || codePoint === 11
+      || codePoint === 12
+      || (codePoint >= 14 && codePoint <= 31)
+      || codePoint === 127;
+  });
+}
+
+const telegramMessage = optionalField(
+  z.string().trim().min(1).max(3000).refine(
+    (value) => !hasDisallowedControlCharacters(value),
+    'A mensagem nao pode conter caracteres de controle'
+  )
+);
+
 const bulkSettingsSchema = z.object({
   body: z.object({
     telegram: z.object({
       botToken: optionalField(z.string().max(500)),
-      webhookSecret: optionalField(z.string().max(256))
+      webhookSecret: optionalField(z.string().max(256)),
+      messages: z.object({
+        onboarding: telegramMessage,
+        phoneShare: telegramMessage,
+        profile: telegramMessage,
+        help: telegramMessage
+      }).optional()
     }).optional(),
     whatsappCloud: z.object({
       accessToken: optionalField(z.string().max(4000)),

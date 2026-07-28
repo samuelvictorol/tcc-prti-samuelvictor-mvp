@@ -1,9 +1,12 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 
 import {
   dispatchDeliveryCount,
+  formatWhatsappPublicNumber,
   humanizeWebhookKey,
   isOfficialCloudTemplateAvailable,
   isCloudContactEligible,
@@ -16,6 +19,7 @@ import {
   sanitizeWebhookPayload,
   selectedGroupEligibility,
   templateParameterDefinitions,
+  whatsappConnectionIdentity,
   webhookEventFieldOptionsFrom,
   webhookEventPresentation,
   webhookEventSummary,
@@ -36,6 +40,35 @@ const deniedContact = {
 }
 
 describe('disparo oficial WhatsApp Cloud', () => {
+  it('formata e apresenta os identificadores não secretos do número oficial', () => {
+    expect(formatWhatsappPublicNumber('5511931234567')).toBe('+55 (11) 9 3123-4567')
+    expect(formatWhatsappPublicNumber('+55 (11) 3123-4567')).toBe('+55 (11) 3123-4567')
+    expect(whatsappConnectionIdentity({
+      status: {
+        sendConfigured: true,
+        phoneNumberId: '1000000000000001',
+        displayPhoneNumber: '5511931234567',
+        businessAccountId: '2000000000000001',
+      },
+    })).toEqual({
+      configured: true,
+      phoneNumberId: '1000000000000001',
+      displayPhoneNumber: '5511931234567',
+      formattedPhoneNumber: '+55 (11) 9 3123-4567',
+      businessAccountId: '2000000000000001',
+    })
+  })
+
+  it('mantém o banner responsivo e os ícones das linhas com dimensões estáveis', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/WhatsappCloudPage.vue', import.meta.url)), 'utf8')
+
+    expect(source).toContain('data-testid="whatsapp-cloud-identity"')
+    expect(source).toContain('WhatsApp Business Account ID')
+    expect(source).toContain('class="table-row-icon"')
+    expect(source).toContain('width: 38px !important')
+    expect(source).toContain('@media (max-width: 650px)')
+  })
+
   it('mantem o webhook independente das credenciais de envio', () => {
     expect(isCloudSendConfigured({ webhookConfigured: true, sendConfigured: false })).toBe(false)
     expect(isCloudSendConfigured({ webhookConfigured: false, sendConfigured: true })).toBe(true)

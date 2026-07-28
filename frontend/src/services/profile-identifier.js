@@ -5,8 +5,14 @@ function digitsOnly(value) {
   return String(value ?? '').replace(/\D/g, '')
 }
 
+function brazilianNationalDigits(value) {
+  const digits = digitsOnly(value)
+  if (/^55\d{10,11}$/.test(digits)) return digits.slice(2)
+  return digits
+}
+
 export function formatBrazilianProfilePhone(value) {
-  const digits = digitsOnly(value).slice(0, 11)
+  const digits = brazilianNationalDigits(value).slice(0, 11)
   if (!digits) return ''
   if (digits.length < 3) return `(${digits}`
 
@@ -35,11 +41,15 @@ function inferMode(value) {
   const raw = String(value ?? '')
   if (!raw) return 'auto'
   const digits = digitsOnly(raw)
-  if (digits.length > 11) return 'email'
+  if (digits.length > 11 && !/^55\d{10,11}$/.test(digits)) return 'email'
 
   const compact = raw.replace(/\s/g, '')
   const canonicalPhone = formatBrazilianProfilePhone(digits).replace(/\s/g, '')
-  return compact === digits || compact === canonicalPhone ? 'phone' : 'email'
+  return compact === digits
+    || compact === canonicalPhone
+    || /^55\d{10,11}$/.test(digits)
+    ? 'phone'
+    : 'email'
 }
 
 function rawValueAfterPhoneEdit(value, previousValue) {
@@ -93,7 +103,7 @@ export function updateProfileIdentifierInput(value, previousMode = 'auto', previ
 export function profileIdentifierRule(value, mode = inferMode(value)) {
   const raw = String(value ?? '').trim()
   if (mode === 'phone') {
-    return [10, 11].includes(digitsOnly(raw).length)
+    return [10, 11].includes(brazilianNationalDigits(raw).length)
       || 'Digite um telefone com DDD, por exemplo (11) 93123-4567'
   }
   if (mode === 'email') {
@@ -105,6 +115,8 @@ export function profileIdentifierRule(value, mode = inferMode(value)) {
 export function normalizeProfileIdentifierForRequest(value, mode = inferMode(value)) {
   const raw = String(value ?? '').trim()
   if (mode !== 'phone') return raw
-  const nationalNumber = digitsOnly(raw)
+  const rawDigits = digitsOnly(raw)
+  if (/^55\d{10,11}$/.test(rawDigits)) return rawDigits
+  const nationalNumber = brazilianNationalDigits(raw)
   return `${BRAZIL_COUNTRY_CODE}${nationalNumber}`
 }

@@ -708,7 +708,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <q-page class="page-container">
+  <q-page class="page-container telegram-channel-page">
     <PageHeader
       eyebrow="Canal conectado"
       title="Telegram"
@@ -716,13 +716,13 @@ onBeforeUnmount(() => {
       icon="send_to_mobile"
     >
       <template #actions>
-        <q-btn outline color="primary" no-caps icon="sync" label="Sincronizar" :loading="syncing" @click="sync" />
-        <q-btn color="primary" unelevated no-caps icon="add_link" label="Vincular grupo" @click="openGroup()" />
+        <q-btn outline color="info" no-caps icon="sync" label="Sincronizar" :loading="syncing" @click="sync" />
+        <q-btn color="info" unelevated no-caps icon="add_link" label="Vincular grupo" @click="openGroup()" />
       </template>
     </PageHeader>
 
     <div class="bot-identity q-mb-lg">
-      <q-avatar color="primary" text-color="white" icon="smart_toy" size="46px" />
+      <q-avatar color="info" text-color="white" icon="smart_toy" size="46px" />
       <div class="bot-identity__copy">
         <span>Bot conectado</span>
         <strong>{{ bot?.displayName || 'Telegram Bot' }}</strong>
@@ -754,7 +754,7 @@ onBeforeUnmount(() => {
             <section class="bulk-composer">
               <div class="section-title-row">
                 <div><h2 class="section-title">Novo disparo do Telegram</h2><p class="section-copy">Selecione contatos ou grupos da base. A fila deduplica destinos e preserva o lote quando uma entrega falha.</p></div>
-                <q-badge outline color="primary" label="ENVIO PELA FILA" />
+                <q-badge outline color="info" label="ENVIO PELA FILA" />
               </div>
 
               <q-btn-toggle
@@ -762,7 +762,7 @@ onBeforeUnmount(() => {
                 spread
                 no-caps
                 unelevated
-                toggle-color="primary"
+                toggle-color="info"
                 color="white"
                 text-color="dark"
                 :options="[{ label: 'Mensagem rápida', value: 'quick' }, { label: 'Usar template', value: 'template' }]"
@@ -813,12 +813,12 @@ onBeforeUnmount(() => {
                   <div v-for="item in bulkEligibility.ineligible.slice(0, 8)" :key="item.contactId" class="bulk-ineligible-row">
                     <q-icon name="warning" color="warning" />
                     <div><strong>{{ item.contact?.displayName || item.contactId }}</strong><span>{{ item.reason }}</span></div>
-                    <q-btn v-if="item.contact" flat color="primary" no-caps icon="manage_accounts" label="Editar permissão" @click="openBulkContact(item.contact)" />
+                    <q-btn v-if="item.contact" flat color="info" no-caps icon="manage_accounts" label="Editar permissão" @click="openBulkContact(item.contact)" />
                   </div>
                 </div>
               </section>
 
-              <div class="bulk-send-actions q-mt-lg"><q-btn color="dark" unelevated no-caps icon-right="send" label="Enviar pela fila" :loading="bulkSending" @click="sendBulk" /></div>
+              <div class="bulk-send-actions q-mt-lg"><q-btn color="info" unelevated no-caps icon-right="send" label="Enviar pela fila" :loading="bulkSending" @click="sendBulk" /></div>
             </section>
 
             <aside class="bulk-summary">
@@ -834,7 +834,7 @@ onBeforeUnmount(() => {
                   <div><strong>{{ lastDispatchSkipped }}</strong><span>ignorados</span></div>
                   <div><strong>{{ lastDispatchFailed }}</strong><span>falhas</span></div>
                 </div>
-                <q-btn v-if="lastDispatchHasIssues && lastDispatchId" outline color="primary" no-caps icon="manage_search" label="Ver detalhes" :loading="issuesLoading && issueNotificationId === lastDispatchId" @click="showDispatchIssues" />
+                <q-btn v-if="lastDispatchHasIssues && lastDispatchId" outline color="info" no-caps icon="manage_search" label="Ver detalhes" :loading="issuesLoading && issueNotificationId === lastDispatchId" @click="showDispatchIssues" />
               </div>
             </aside>
           </div>
@@ -862,7 +862,7 @@ onBeforeUnmount(() => {
           <section ref="issuesSection" class="bulk-log-section q-mt-xl">
             <div class="section-title-row">
               <div><h3 class="section-title">Ignorados e falhas</h3><p class="section-copy">{{ issueNotificationId ? 'Exibindo o disparo selecionado.' : 'Permissões ausentes e erros ficam registrados sem travar os demais envios.' }}</p></div>
-              <div class="row items-center q-gutter-sm"><q-badge color="warning" text-color="dark" :label="`${issuePagination.rowsNumber} ocorrência(s)`" /><q-btn v-if="issueNotificationId" flat color="primary" no-caps icon="history" label="Todo o histórico" @click="showAllDeliveryIssues" /></div>
+              <div class="row items-center q-gutter-sm"><q-badge color="warning" text-color="dark" :label="`${issuePagination.rowsNumber} ocorrência(s)`" /><q-btn v-if="issueNotificationId" flat color="info" no-caps icon="history" label="Todo o histórico" @click="showAllDeliveryIssues" /></div>
             </div>
             <q-table
               flat
@@ -878,7 +878,7 @@ onBeforeUnmount(() => {
               <template #body-cell-status="props"><q-td :props="props"><q-badge :color="deliveryStatusColor(props.row.status)" :label="props.row.status" /></q-td></template>
               <template #body-cell-reason="props"><q-td :props="props" class="bulk-issue-reason">{{ props.row.errorMessage }}</q-td></template>
               <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt) }}</q-td></template>
-              <template #body-cell-actions="props"><q-td :props="props"><q-btn v-if="props.row.contact" flat dense color="primary" no-caps icon="manage_accounts" label="Editar permissão" @click="openBulkContact(props.row.contact)" /></q-td></template>
+              <template #body-cell-actions="props"><q-td :props="props"><q-btn v-if="props.row.contact" flat dense color="info" no-caps icon="manage_accounts" label="Editar permissão" @click="openBulkContact(props.row.contact)" /></q-td></template>
               <template #no-data><div class="full-width text-center q-pa-lg text-muted">Nenhuma entrega ignorada ou com falha.</div></template>
             </q-table>
           </section>
@@ -945,7 +945,7 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
                 <div class="row justify-end q-gutter-sm q-mt-sm">
-                  <q-btn flat color="primary" no-caps icon="manage_accounts" :label="selected.contactId ? 'Editar contato' : 'Salvar como contato'" @click="openContact" />
+                  <q-btn flat color="info" no-caps icon="manage_accounts" :label="selected.contactId ? 'Editar contato' : 'Salvar como contato'" @click="openContact" />
                   <q-btn flat color="negative" no-caps icon="delete_sweep" label="Remover conversa" @click="removeConversation(selected)" />
                 </div>
                 <div ref="messagesPanel" class="telegram-message-stream" aria-live="polite">
@@ -967,10 +967,10 @@ onBeforeUnmount(() => {
                 <q-banner v-if="!chatIsAuthorized(selected)" rounded class="bg-blue-1 text-blue-10 q-mt-lg">
                   A conversa pode ser acompanhada, mas o envio fica disponível somente depois que o contato autorizar notificações pelo bot.
                 </q-banner>
-                <q-btn-toggle v-model="sendMode" spread no-caps unelevated toggle-color="primary" color="white" text-color="dark" :disable="!chatIsAuthorized(selected)" :options="[{ label: 'Mensagem rápida', value: 'quick' }, { label: 'Usar template', value: 'template' }]" class="q-my-lg" />
+                <q-btn-toggle v-model="sendMode" spread no-caps unelevated toggle-color="info" color="white" text-color="dark" :disable="!chatIsAuthorized(selected)" :options="[{ label: 'Mensagem rápida', value: 'quick' }, { label: 'Usar template', value: 'template' }]" class="q-my-lg" />
                 <q-input v-if="sendMode === 'quick'" v-model="message" outlined type="textarea" autogrow label="Mensagem" :disable="!chatIsAuthorized(selected)" />
                 <q-select v-else v-model="templateId" outlined emit-value map-options :options="templateOptions" label="Template do Telegram" :disable="!chatIsAuthorized(selected)" />
-                <div class="row justify-end q-mt-lg"><q-btn color="dark" unelevated no-caps icon-right="send" label="Enviar ao Telegram" :loading="sending" :disable="!chatIsAuthorized(selected)" @click="send" /></div>
+                <div class="row justify-end q-mt-lg"><q-btn color="info" unelevated no-caps icon-right="send" label="Enviar ao Telegram" :loading="sending" :disable="!chatIsAuthorized(selected)" @click="send" /></div>
               </template>
             </section>
           </div>
@@ -978,13 +978,13 @@ onBeforeUnmount(() => {
 
         <q-tab-panel name="groups" class="q-pa-none">
           <EmptyState v-if="!loading && !groups.length" icon="group_add" title="Nenhum grupo vinculado" description="Adicione o bot ao grupo e salve o chat_id para habilitar disparos.">
-            <q-btn color="primary" unelevated no-caps label="Vincular grupo" @click="openGroup()" />
+            <q-btn color="info" unelevated no-caps label="Vincular grupo" @click="openGroup()" />
           </EmptyState>
           <q-table v-else flat :rows="groups" :columns="groupColumns" row-key="id" :loading="loading">
             <template #body-cell-name="props"><q-td :props="props"><strong>{{ props.row.name || props.row.title }}</strong><div class="text-caption text-muted">{{ props.row.description || 'Grupo do Telegram' }}</div></q-td></template>
             <template #body-cell-chatId="props"><q-td :props="props"><code>{{ props.row.externalId || props.row.chatId || props.row.chat_id }}</code></q-td></template>
             <template #body-cell-inviteLink="props"><q-td :props="props"><a v-if="props.row.inviteLink || props.row.invite_link" :href="props.row.inviteLink || props.row.invite_link" target="_blank" rel="noopener">Abrir convite</a><span v-else>—</span></q-td></template>
-            <template #body-cell-actions="props"><q-td :props="props"><q-btn flat round dense color="primary" icon="send" aria-label="Enviar ao grupo" @click="openGroupSend(props.row)" /><q-btn flat round dense icon="edit" aria-label="Editar grupo" @click="openGroup(props.row)" /><q-btn flat round dense color="negative" icon="delete" aria-label="Remover grupo" @click="removeGroup(props.row)" /></q-td></template>
+            <template #body-cell-actions="props"><q-td :props="props"><q-btn flat round dense color="info" icon="send" aria-label="Enviar ao grupo" @click="openGroupSend(props.row)" /><q-btn flat round dense color="info" icon="edit" aria-label="Editar grupo" @click="openGroup(props.row)" /><q-btn flat round dense color="negative" icon="delete" aria-label="Remover grupo" @click="removeGroup(props.row)" /></q-td></template>
           </q-table>
         </q-tab-panel>
       </q-tab-panels>
@@ -1002,7 +1002,7 @@ onBeforeUnmount(() => {
             <q-input v-model="groupForm.description" outlined type="textarea" label="Descrição" class="full-span" />
           </q-card-section>
           <q-separator />
-          <q-card-actions align="right" class="q-pa-md"><q-btn v-close-popup flat no-caps label="Cancelar" /><q-btn type="submit" color="primary" unelevated no-caps label="Salvar" :loading="savingGroup" /></q-card-actions>
+          <q-card-actions align="right" class="q-pa-md"><q-btn v-close-popup flat no-caps label="Cancelar" /><q-btn type="submit" color="info" unelevated no-caps label="Salvar" :loading="savingGroup" /></q-card-actions>
         </q-form>
       </q-card>
     </q-dialog>
@@ -1011,12 +1011,12 @@ onBeforeUnmount(() => {
         <q-card-section class="row items-center"><div><div class="text-h6 text-weight-bold">Enviar ao grupo</div><div class="text-caption text-muted">{{ selectedGroup?.name || selectedGroup?.title }}</div></div><q-space /><q-btn v-close-popup flat round dense icon="close" /></q-card-section>
         <q-separator />
         <q-card-section class="q-pa-lg dialog-scroll-body">
-          <q-btn-toggle v-model="sendMode" spread no-caps unelevated toggle-color="primary" color="white" text-color="dark" :options="[{label:'Mensagem rápida',value:'quick'},{label:'Template',value:'template'}]" class="q-mb-lg" />
+          <q-btn-toggle v-model="sendMode" spread no-caps unelevated toggle-color="info" color="white" text-color="dark" :options="[{label:'Mensagem rápida',value:'quick'},{label:'Template',value:'template'}]" class="q-mb-lg" />
           <q-input v-if="sendMode === 'quick'" v-model="message" outlined type="textarea" autogrow label="Mensagem" />
           <q-select v-else v-model="templateId" outlined emit-value map-options :options="templateOptions" label="Template do Telegram" />
         </q-card-section>
         <q-separator />
-        <q-card-actions align="right" class="q-pa-md"><q-btn v-close-popup flat no-caps label="Cancelar" /><q-btn color="primary" unelevated no-caps icon="send" label="Enviar" :loading="sending" @click="sendGroup" /></q-card-actions>
+        <q-card-actions align="right" class="q-pa-md"><q-btn v-close-popup flat no-caps label="Cancelar" /><q-btn color="info" unelevated no-caps icon="send" label="Enviar" :loading="sending" @click="sendGroup" /></q-card-actions>
       </q-card>
     </q-dialog>
     <ContactDialog v-model="contactDialog" :contact="contactForDialog" @saved="loadData" />
@@ -1024,6 +1024,16 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.telegram-channel-page {
+  --q-primary: #229ed9;
+  --q-info: #229ed9;
+}
+
+.telegram-channel-page :deep(.q-btn.bg-dark) {
+  background: #229ed9 !important;
+  color: #fff !important;
+}
+
 .bot-identity {
   display: flex;
   align-items: center;

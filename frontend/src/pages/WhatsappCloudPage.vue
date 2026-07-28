@@ -32,6 +32,80 @@ export function isCloudSendConfigured(status = {}) {
   return Boolean(status.sendConfigured ?? status.configured)
 }
 
+function firstCloudMetadata(contacts = []) {
+  for (const contact of contacts) {
+    const metadata = cloudIdentityOf(contact)?.metadata
+    if (metadata && typeof metadata === 'object') return metadata
+  }
+  return {}
+}
+
+function firstWebhookMetadata(events = []) {
+  for (const event of events) {
+    const value = event?.payload?.entry?.[0]?.changes?.[0]?.value
+    if (value?.metadata || event?.businessAccountId) {
+      return {
+        ...(value?.metadata || {}),
+        businessAccountId: event.businessAccountId,
+      }
+    }
+  }
+  return {}
+}
+
+export function formatWhatsappPublicNumber(value) {
+  const digits = String(value || '').replace(/\D/g, '')
+  if (!digits) return 'Número público não informado'
+  if (digits.startsWith('55') && digits.length === 13) {
+    return `+55 (${digits.slice(2, 4)}) ${digits.slice(4, 5)} ${digits.slice(5, 9)}-${digits.slice(9)}`
+  }
+  if (digits.startsWith('55') && digits.length === 12) {
+    return `+55 (${digits.slice(2, 4)}) ${digits.slice(4, 8)}-${digits.slice(8)}`
+  }
+  return `+${digits}`
+}
+
+export function whatsappConnectionIdentity({
+  configuration = {},
+  status = {},
+  contacts = [],
+  events = [],
+} = {}) {
+  const source = configuration.configuration || configuration.settings || configuration
+  const cloud = source.whatsappCloud || source.whatsapp_cloud || source.meta || {}
+  const contactMetadata = firstCloudMetadata(contacts)
+  const webhookMetadata = firstWebhookMetadata(events)
+  const phoneNumberId = status.phoneNumberId
+    || contactMetadata.phoneNumberId
+    || contactMetadata.phone_number_id
+    || webhookMetadata.phoneNumberId
+    || webhookMetadata.phone_number_id
+    || cloud.phoneNumberId
+    || cloud.previews?.phoneNumberId
+    || ''
+  const displayPhoneNumber = cloud.displayPhoneNumber
+    || status.displayPhoneNumber
+    || contactMetadata.displayPhoneNumber
+    || contactMetadata.display_phone_number
+    || webhookMetadata.displayPhoneNumber
+    || webhookMetadata.display_phone_number
+    || ''
+  const businessAccountId = cloud.businessAccountId
+    || status.businessAccountId
+    || contactMetadata.businessAccountId
+    || contactMetadata.business_account_id
+    || webhookMetadata.businessAccountId
+    || ''
+
+  return {
+    configured: Boolean(status.sendConfigured ?? status.configured ?? cloud.configured),
+    displayPhoneNumber,
+    formattedPhoneNumber: formatWhatsappPublicNumber(displayPhoneNumber),
+    phoneNumberId: String(phoneNumberId || ''),
+    businessAccountId: String(businessAccountId || ''),
+  }
+}
+
 export function cloudContactIneligibility(contact = {}) {
   const identity = cloudIdentityOf(contact)
   if (!identity) return 'Sem identidade do WhatsApp Cloud'
@@ -505,6 +579,11 @@ const filteredGroupIneligible = computed(() => {
 
 const webhookReady = computed(() => Boolean(cloudStatus.value.webhookConfigured))
 const cloudSendReady = computed(() => isCloudSendConfigured(cloudStatus.value))
+const cloudConnection = computed(() => whatsappConnectionIdentity({
+  status: cloudStatus.value,
+  contacts: cloudContacts.value,
+  events: events.value,
+}))
 const webhookStatusLabel = computed(() => webhookReady.value ? 'Webhook pronto para receber' : 'Webhook com configuração pendente')
 const webhookStatusDescription = computed(() => {
   if (webhookReady.value) return 'Verify Token e App Secret estão configurados. Mensagens recebidas podem cadastrar contatos automaticamente.'
@@ -942,6 +1021,40 @@ onBeforeUnmount(() => {
       </template>
     </PageHeader>
 
+    <section
+      class="cloud-identity q-mb-lg"
+      aria-label="Identificação do número oficial do WhatsApp"
+      data-testid="whatsapp-cloud-identity"
+    >
+      <q-avatar rounded color="positive" text-color="white" icon="chat" size="46px" class="cloud-identity__avatar" />
+      <div class="cloud-identity__main">
+        <span>Número oficial conectado</span>
+        <strong>{{ cloudConnection.formattedPhoneNumber }}</strong>
+      </div>
+      <div class="cloud-identity__metadata">
+        <div>
+          <span>Phone Number ID</span>
+          <code>{{ cloudConnection.phoneNumberId || 'Não informado' }}</code>
+        </div>
+        <div>
+          <span>WhatsApp Business Account ID</span>
+          <code>{{ cloudConnection.businessAccountId || 'Não informado' }}</code>
+        </div>
+      </div>
+      <q-space />
+      <q-badge
+        rounded
+        :color="cloudConnection.configured ? 'positive' : 'warning'"
+        :text-color="cloudConnection.configured ? 'white' : 'dark'"
+        :label="cloudConnection.configured ? 'Envio oficial configurado' : 'Configuração pendente'"
+      />
+      <ContextHelp
+        title="Identificadores do número oficial"
+        tooltip="Entenda os dados desta conexão"
+        text="O número público identifica a linha exibida aos clientes. Phone Number ID e WhatsApp Business Account ID são identificadores técnicos fornecidos pela Meta."
+      />
+    </section>
+
     <q-card flat class="glass-card cloud-tabs-card q-mb-lg">
       <q-tabs
         :model-value="activeTab"
@@ -1139,7 +1252,7 @@ onBeforeUnmount(() => {
       <q-banner rounded class="webhook-contact-banner q-mb-md"><template #avatar><q-icon name="auto_awesome" color="primary" /></template><strong>Cadastro automático ativo.</strong> Você pode atualizar, editar consentimento ou remover cada contato abaixo.</q-banner>
       <EmptyState v-if="!loading && !webhookContacts.length" icon="person_search" title="Nenhum contato recebido ainda" description="Quando alguém enviar uma mensagem ao número oficial, o contato aparecerá aqui." />
       <q-table v-else flat :rows="webhookContacts" :columns="webhookContactColumns" row-key="id" :loading="loading" :rows-per-page-options="[5, 10, 25]">
-        <template #body-cell-contact="props"><q-td :props="props"><div class="contact-name"><q-avatar color="teal-1" text-color="primary" icon="person" /><div><strong>{{ props.row.displayName || 'Sem nome' }}</strong><q-badge outline color="positive" icon="auto_awesome" :label="`Cadastro automático: ${cloudRegistration(props.row).label}`" /></div></div></q-td></template>
+        <template #body-cell-contact="props"><q-td :props="props"><div class="contact-name"><q-avatar rounded size="38px" color="teal-1" text-color="primary" icon="person" class="table-row-icon" /><div><strong>{{ props.row.displayName || 'Sem nome' }}</strong><q-badge outline color="positive" icon="auto_awesome" :label="`Cadastro automático: ${cloudRegistration(props.row).label}`" /></div></div></q-td></template>
         <template #body-cell-ids="props">
           <q-td :props="props">
             <div class="cloud-contact-identifiers">
@@ -1285,7 +1398,7 @@ onBeforeUnmount(() => {
         <template #body-cell-field="props">
           <q-td :props="props">
             <div class="webhook-event-kind">
-              <q-avatar color="teal-1" :text-color="webhookEventPresentation(props.row).fieldColor" :icon="webhookEventPresentation(props.row).fieldIcon" />
+              <q-avatar rounded size="38px" color="teal-1" :text-color="webhookEventPresentation(props.row).fieldColor" :icon="webhookEventPresentation(props.row).fieldIcon" class="table-row-icon" />
               <div>
                 <strong>{{ webhookEventPresentation(props.row).fieldLabel }}</strong>
                 <code>{{ props.row.field || 'desconhecido' }}</code>
@@ -1395,7 +1508,7 @@ onBeforeUnmount(() => {
       <q-card class="webhook-event-dialog">
         <q-card-section class="webhook-event-dialog__header">
           <div class="webhook-event-dialog__title">
-            <q-avatar color="teal-1" :text-color="selectedWebhookPresentation.fieldColor" :icon="selectedWebhookPresentation.fieldIcon" />
+            <q-avatar rounded size="40px" color="teal-1" :text-color="selectedWebhookPresentation.fieldColor" :icon="selectedWebhookPresentation.fieldIcon" class="table-row-icon" />
             <div>
               <div class="text-h6 text-weight-bold">{{ selectedWebhookPresentation.fieldLabel }}</div>
               <div class="text-caption text-muted">Evento persistido recebido da Meta</div>
@@ -1493,6 +1606,76 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.cloud-identity {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
+  padding: 13px 16px;
+  border: 1px solid rgba(18, 140, 106, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.cloud-identity__avatar,
+.table-row-icon {
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.cloud-identity__main {
+  display: grid;
+  flex: 0 0 auto;
+  min-width: 190px;
+}
+
+.cloud-identity__main span,
+.cloud-identity__metadata span {
+  color: #657976;
+  font-size: 0.7rem;
+}
+
+.cloud-identity__main strong {
+  color: #203f3b;
+  line-height: 1.25;
+}
+
+.cloud-identity__metadata {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+}
+
+.cloud-identity__metadata > div {
+  display: grid;
+  min-width: 180px;
+  gap: 1px;
+}
+
+.cloud-identity__metadata code {
+  max-width: 310px;
+  overflow: hidden;
+  color: #315f56;
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-row-icon {
+  width: 38px !important;
+  min-width: 38px !important;
+  max-width: 38px !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  max-height: 38px !important;
+  border-radius: 10px !important;
+}
+
+.table-row-icon :deep(.q-icon) {
+  font-size: 20px !important;
+}
+
 .cloud-tabs-card {
   padding: 5px;
   border: 1px solid rgba(18, 140, 106, 0.13);
@@ -2090,6 +2273,16 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 900px) {
+  .cloud-identity {
+    flex-wrap: wrap;
+  }
+
+  .cloud-identity__metadata {
+    order: 3;
+    width: 100%;
+    padding-left: 59px;
+  }
+
   .cloud-layout {
     grid-template-columns: 1fr;
   }
@@ -2105,6 +2298,46 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 650px) {
+  .cloud-identity {
+    align-items: flex-start;
+    padding: 13px;
+  }
+
+  .cloud-identity__main {
+    min-width: 0;
+    flex: 1 1 calc(100% - 62px);
+  }
+
+  .cloud-identity__metadata {
+    display: grid;
+    width: 100%;
+    padding-left: 0;
+    gap: 8px;
+  }
+
+  .cloud-identity__metadata > div {
+    min-width: 0;
+    padding: 9px 11px;
+    border-radius: 11px;
+    background: rgba(222, 248, 242, 0.58);
+  }
+
+  .cloud-identity__metadata code {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .cloud-identity > .q-badge {
+    order: 4;
+    max-width: 100%;
+  }
+
+  .cloud-identity > :deep(.context-help) {
+    order: 4;
+  }
+
   .eligibility-dialog,
   .webhook-event-dialog {
     width: 100%;

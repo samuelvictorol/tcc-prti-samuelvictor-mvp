@@ -5,6 +5,10 @@ const ApiError = require('../utils/api-error');
 const DEFINITIONS = Object.freeze({
   TELEGRAM_BOT_TOKEN: { sensitive: true, channel: 'telegram' },
   TELEGRAM_WEBHOOK_SECRET: { sensitive: true, channel: 'telegram' },
+  TELEGRAM_ONBOARDING_MESSAGE: { sensitive: false, channel: 'telegram' },
+  TELEGRAM_PHONE_SHARE_MESSAGE: { sensitive: false, channel: 'telegram' },
+  TELEGRAM_PROFILE_MESSAGE: { sensitive: false, channel: 'telegram' },
+  TELEGRAM_HELP_MESSAGE: { sensitive: false, channel: 'telegram' },
   GMAIL_USER: { sensitive: false, channel: 'email' },
   GMAIL_APP_PASSWORD: { sensitive: true, channel: 'email' },
   GMAIL_FROM: { sensitive: false, channel: 'email' },
@@ -30,8 +34,38 @@ const REQUIRED = Object.freeze({
 const SENSITIVE_PREVIEW = '••••••••••••';
 
 const DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT = 'Para ativar suas notificações, responda com {command}.';
+const DEFAULT_TELEGRAM_MESSAGES = Object.freeze({
+  onboarding: [
+    'Olá, {name}! Suas notificações pelo Telegram estão ativadas.',
+    '',
+    '{status}',
+    '',
+    'Use as opções abaixo para vincular seu telefone, consultar o Meu perfil ou abrir a ajuda.',
+    '',
+    '{invites}',
+    '',
+    'Comando utilizado: {command}'
+  ].join('\n'),
+  phoneShare: 'Para unir Telegram e WhatsApp no mesmo cadastro, compartilhe seu próprio telefone pelo botão oficial abaixo. O número só será aceito se pertencer a você.',
+  profile: 'Seu acesso seguro ao Meu perfil está pronto. O botão abaixo é pessoal, funciona uma única vez e expira em até 7 dias.',
+  help: [
+    'Ajuda do Notify Flow',
+    '',
+    'Vincular meu telefone: confirma que este Telegram e o WhatsApp pertencem a você e evita cadastros duplicados.',
+    '',
+    'Meu perfil: mostra seus dados, permissões e histórico de notificações em uma página segura.',
+    '',
+    'Você pode revisar ou revogar cada permissão quando quiser.'
+  ].join('\n')
+});
+const TELEGRAM_MESSAGE_KEYS = new Set([
+  'TELEGRAM_ONBOARDING_MESSAGE',
+  'TELEGRAM_PHONE_SHARE_MESSAGE',
+  'TELEGRAM_PROFILE_MESSAGE',
+  'TELEGRAM_HELP_MESSAGE'
+]);
 const RESERVED_CHAT_COMMANDS = new Set([
-  '/gerar-codigo',
+  '/login',
   '/meu-perfil',
   '/cancelar',
   '/stop',
@@ -86,6 +120,17 @@ function isMaskedSentinel(value) {
   return /[•*]{4,}/u.test(normalized) || /^\[?(?:redacted|masked)\]?$/i.test(normalized);
 }
 
+function hasDisallowedControlCharacters(value) {
+  return [...String(value || '')].some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint <= 8
+      || codePoint === 11
+      || codePoint === 12
+      || (codePoint >= 14 && codePoint <= 31)
+      || codePoint === 127;
+  });
+}
+
 function assertWritableValue(key, value, config) {
   if (config.sensitive && isMaskedSentinel(value)) {
     throw new ApiError(
@@ -103,6 +148,17 @@ function assertWritableValue(key, value, config) {
         'O texto deve ter ate 1000 caracteres e incluir o marcador {command}',
         { key },
         'WHATSAPP_CONSENT_REQUEST_TEXT_INVALID'
+      );
+    }
+  }
+  if (TELEGRAM_MESSAGE_KEYS.has(key)) {
+    const normalized = String(value || '').trim();
+    if (!normalized || normalized.length > 3000 || hasDisallowedControlCharacters(normalized)) {
+      throw new ApiError(
+        422,
+        'A mensagem do Telegram deve conter de 1 a 3000 caracteres e nao pode usar caracteres de controle',
+        { key },
+        'TELEGRAM_MESSAGE_INVALID'
       );
     }
   }
@@ -130,7 +186,9 @@ async function validatePermissionCommandChange(key, value) {
   const otherKey = key === 'START_NOTIFY_WHATSAPP_PERMISSION'
     ? 'START_VERIFY_TELEGRAM_PERMISSION'
     : 'START_NOTIFY_WHATSAPP_PERMISSION';
-  const fallback = otherKey === 'START_NOTIFY_WHATSAPP_PERMISSION' ? '/notify-me' : '/verify-me';
+  const fallback = otherKey === 'START_NOTIFY_WHATSAPP_PERMISSION'
+    ? '/notify-me'
+    : '/verify-me';
   const other = normalizeWhatsappPermissionText(await getValue(otherKey) || fallback);
   if (normalized === other) {
     throw new ApiError(
@@ -251,6 +309,10 @@ async function setBulk(input, actorId) {
   const mapping = {
     'telegram.botToken': 'TELEGRAM_BOT_TOKEN',
     'telegram.webhookSecret': 'TELEGRAM_WEBHOOK_SECRET',
+    'telegram.messages.onboarding': 'TELEGRAM_ONBOARDING_MESSAGE',
+    'telegram.messages.phoneShare': 'TELEGRAM_PHONE_SHARE_MESSAGE',
+    'telegram.messages.profile': 'TELEGRAM_PROFILE_MESSAGE',
+    'telegram.messages.help': 'TELEGRAM_HELP_MESSAGE',
     'whatsappCloud.accessToken': 'WHATSAPP_CLOUD_ACCESS_TOKEN',
     'whatsappCloud.phoneNumberId': 'WHATSAPP_CLOUD_PHONE_NUMBER_ID',
     'whatsappCloud.displayPhoneNumber': 'WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER',
@@ -328,7 +390,21 @@ async function getStructured() {
       botTokenConfigured: values.TELEGRAM_BOT_TOKEN?.configured || false,
       webhookSecretConfigured: values.TELEGRAM_WEBHOOK_SECRET?.configured || false,
       previews: previewsFor('telegram'),
-      permissionCommand: telegramPermissionCommand
+      permissionCommand: telegramPermissionCommand,
+      messages: {
+        onboarding: values.TELEGRAM_ONBOARDING_MESSAGE?.value
+          || process.env.TELEGRAM_ONBOARDING_MESSAGE
+          || DEFAULT_TELEGRAM_MESSAGES.onboarding,
+        phoneShare: values.TELEGRAM_PHONE_SHARE_MESSAGE?.value
+          || process.env.TELEGRAM_PHONE_SHARE_MESSAGE
+          || DEFAULT_TELEGRAM_MESSAGES.phoneShare,
+        profile: values.TELEGRAM_PROFILE_MESSAGE?.value
+          || process.env.TELEGRAM_PROFILE_MESSAGE
+          || DEFAULT_TELEGRAM_MESSAGES.profile,
+        help: values.TELEGRAM_HELP_MESSAGE?.value
+          || process.env.TELEGRAM_HELP_MESSAGE
+          || DEFAULT_TELEGRAM_MESSAGES.help
+      }
     },
     telegramPermission: { command: telegramPermissionCommand },
     whatsappPermission: {
@@ -422,6 +498,7 @@ module.exports = {
   DEFINITIONS, getValue, setValue, remove, list, setBulk, getStructured, channelConfigured, statuses,
   getWhatsappPermissionCommand, isWhatsappPermissionCommand, getTelegramPermissionCommand,
   getWhatsappConsentRequestText, isTelegramPermissionCommand, normalizeWhatsappPermissionText, CHANNEL_REVEAL_FIELDS,
-  DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT, RESERVED_CHAT_COMMANDS, getValidatedPermissionCommands,
+  DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT, DEFAULT_TELEGRAM_MESSAGES,
+  RESERVED_CHAT_COMMANDS, getValidatedPermissionCommands,
   SENSITIVE_PREVIEW, maskedPreview, isMaskedSentinel, revealChannel
 };

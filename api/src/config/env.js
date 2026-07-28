@@ -64,7 +64,15 @@ env.profileCodeTtlSeconds = number('PROFILE_CODE_TTL_SECONDS', 600);
 env.profileCodeMaxAttempts = number('PROFILE_CODE_MAX_ATTEMPTS', 5);
 env.profileCodeMaxRequests = number('PROFILE_CODE_MAX_REQUESTS', 5);
 env.profileCodeWindowSeconds = number('PROFILE_CODE_WINDOW_SECONDS', 3600);
-env.profileCodeResendSeconds = number('PROFILE_CODE_RESEND_SECONDS', 60);
+env.profileCodeResendSeconds = number('PROFILE_CODE_RESEND_SECONDS', 30);
+env.profileLinkTtlSeconds = Math.min(
+  7 * 24 * 60 * 60,
+  Math.max(60, Math.trunc(number('PROFILE_LINK_TTL_SECONDS', 7 * 24 * 60 * 60)))
+);
+env.profileSessionTtlSeconds = Math.min(
+  7 * 24 * 60 * 60,
+  Math.max(60, Math.trunc(number('PROFILE_SESSION_TTL_SECONDS', 7 * 24 * 60 * 60)))
+);
 env.telegramBotUsername = process.env.TELEGRAM_BOT_USERNAME || null;
 env.whatsappCloudDisplayPhoneNumber = process.env.WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER || null;
 

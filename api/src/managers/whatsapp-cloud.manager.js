@@ -31,6 +31,10 @@ const DEFAULT_CLOUD_MESSAGE_LABELS = Object.freeze({
 });
 const BACKUP_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
 
+function isSensitiveProfileAuthUseCase(value) {
+  return String(value || '').startsWith('profile_auth');
+}
+
 function configuredProfileUrl() {
   try {
     const base = new URL(env.publicAppUrl);
@@ -126,9 +130,11 @@ async function signatureConfiguration() {
 }
 
 async function status() {
-  const [accessToken, phoneNumberId, verifyToken, appSecret, version] = await Promise.all([
+  const [accessToken, phoneNumberId, displayPhoneNumber, businessAccountId, verifyToken, appSecret, version] = await Promise.all([
     settingsManager.getValue('WHATSAPP_CLOUD_ACCESS_TOKEN'),
     settingsManager.getValue('WHATSAPP_CLOUD_PHONE_NUMBER_ID'),
+    settingsManager.getValue('WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER'),
+    settingsManager.getValue('WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID'),
     settingsManager.getValue('WHATSAPP_CLOUD_VERIFY_TOKEN'),
     settingsManager.getValue('WHATSAPP_CLOUD_APP_SECRET'),
     settingsManager.getValue('WHATSAPP_CLOUD_API_VERSION')
@@ -147,6 +153,9 @@ async function status() {
     webhookVerificationConfigured,
     webhookSignatureConfigured,
     webhookConfigured: webhookVerificationConfigured && webhookSignatureConfigured,
+    phoneNumberId: trustedPhoneNumberId(phoneNumberId),
+    displayPhoneNumber: unwrapCredential(displayPhoneNumber) || null,
+    businessAccountId: unwrapCredential(businessAccountId) || null,
     apiVersion: normalizedVersion
   };
 }
@@ -358,7 +367,8 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
   const address = messageAddress;
   if (!address) return resultSummary;
   const inboundText = String(message.text?.body || '');
-  const profileCodeRequested = inboundText.normalize('NFKC').trim().toLowerCase() === '/gerar-codigo';
+  const profileManager = require('./profile.manager');
+  const profileLoginRequested = Boolean(profileManager.parseProfileLoginInvocation(inboundText));
   const strictPermissionGranted = await settingsManager.isWhatsappPermissionCommand(inboundText);
   const markerCandidate = inboundText.normalize('NFKC').trim().split(/\s+/).at(-1);
   const hasValidAttributionMarker = !strictPermissionGranted
@@ -403,7 +413,7 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
     displayName: cloudProfile({ ...matchedProviderContact, ...message }).displayName || contact.displayName || address,
     avatarUrl: cloudProfile({ ...matchedProviderContact, ...message }).avatarUrl || contact.avatarUrl || null,
     providerMessageId: message.id || null,
-    body: cloudMessageBody(message),
+    body: profileLoginRequested ? '/login' : cloudMessageBody(message),
     type: message.type || 'unknown',
     hasMedia: CLOUD_MESSAGE_TYPES_WITH_MEDIA.has(message.type),
     sentAt,
@@ -433,52 +443,61 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
     providerMessageId: message.id || null,
     from: address,
     type: message.type || 'unknown',
-    text: message.text?.body ? String(message.text.body).slice(0, 2000) : null,
+    text: profileLoginRequested
+      ? '/login'
+      : message.text?.body
+        ? String(message.text.body).slice(0, 2000)
+        : null,
     ...(invitationInvocation ? {
       text: permissionCommand,
       inviteAttributed: Boolean(invitationAttribution)
     } : {}),
     sentAt: sentAt.toISOString()
   });
-  if (profileCodeRequested && recordedInbound?.conversation?.id) {
-    const profileManager = require('./profile.manager');
-    const activation = await profileManager.activatePendingCodeFromWhatsapp({
+  const conversationId = recordedInbound?.conversation?.id;
+  if (profileLoginRequested && conversationId) {
+    const activation = await profileManager.activateProfileLoginFromWhatsapp({
       contactId: contact.id,
-      conversationId: recordedInbound.conversation.id
+      text: inboundText
     });
-    if (!activation.activated && activation.reasonCode === 'PROFILE_CHALLENGE_NOT_FOUND') {
-      const profileUrl = configuredProfileUrl() || '/meu-perfil';
-      await sendConversationText(
-        recordedInbound.conversation.id,
-        `Não há uma solicitação de acesso pendente. Abra ${profileUrl} e solicite um novo código.`,
-        { useCase: 'profile_auth_help' }
-      ).catch(async (error) => {
-        await logsManager.create({
-          level: 'warn',
-          channel: 'whatsapp_cloud',
-          action: 'profile_auth.guidance_failed',
-          message: 'O comando de acesso foi recebido, mas a orientação não pôde ser enviada',
-          context: { contactId: contact.id, errorCode: error.code || 'PROFILE_GUIDANCE_FAILED' }
-        }).catch(() => undefined);
-      });
+    const text = activation.activated
+      ? `Seu acesso seguro esta pronto. Abra o link abaixo para entrar no Meu perfil:\n${activation.url}\n\nO link pode ser usado uma vez e expira em ate 7 dias.`
+      : 'Este pedido de acesso nao esta mais valido. Volte ao Meu perfil, informe seu telefone e tente novamente.';
+    let deliveryError = null;
+    try {
+      await sendConversationText(conversationId, text, { useCase: 'profile_auth_link' });
+    } catch (error) {
+      deliveryError = error;
+      if (activation.activated && activation.challengeId) {
+        await profileManager.revokeProfileLink(
+          activation.challengeId,
+          'whatsapp_link_delivery_failed'
+        ).catch(() => undefined);
+      }
     }
+    const linkDelivered = activation.activated && !deliveryError;
     await logsManager.create({
-      level: activation.activated ? 'info' : 'warn',
+      level: linkDelivered ? 'info' : 'warn',
       channel: 'whatsapp_cloud',
-      action: activation.activated ? 'profile_auth.code_activated' : 'profile_auth.activation_skipped',
-      message: activation.activated
-        ? 'Código temporário do Meu perfil ativado pela conversa do WhatsApp'
-        : 'Comando de acesso recebido sem desafio pendente elegível',
+      action: linkDelivered
+        ? 'profile_auth.link_issued'
+        : activation.activated
+          ? 'profile_auth.link_delivery_failed'
+          : 'profile_auth.link_skipped',
+      message: linkDelivered
+        ? 'Link temporario do Meu perfil emitido pela conversa do WhatsApp'
+        : activation.activated
+          ? 'O link temporario foi revogado porque a entrega pelo WhatsApp falhou'
+          : 'Comando de login recebido sem solicitacao valida',
       context: {
         contactId: contact.id,
         challengeId: activation.challengeId || null,
-        reasonCode: activation.reasonCode || null
+        reasonCode: activation.reasonCode
+          || (deliveryError ? deliveryError.code || 'PROFILE_LINK_DELIVERY_FAILED' : null)
       }
     }).catch(() => undefined);
   }
-
-  const conversationId = recordedInbound?.conversation?.id;
-  if (!profileCodeRequested && conversationId && inboundText) {
+  if (!profileLoginRequested && conversationId && inboundText) {
     try {
       const chatResult = await chatProfileFlow.handleInbound({
         contactId: contact.id,
@@ -507,6 +526,36 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
   }
 
   if (permissionGranted && conversationId) {
+    if (!result.created) {
+      try {
+        const profileLink = await profileManager.createDirectProfileLink(contact.id, {
+          source: 'whatsapp_permission_command'
+        });
+        const refreshedContact = invitationAttribution?.contact || contact;
+        const allInvites = (refreshedContact.inviteOrigins || [])
+          .map((invite) => invite.title || invite.slug)
+          .filter(Boolean);
+        const invites = allInvites.slice(0, 8);
+        const inviteText = invites.length
+          ? `\nConvites vinculados: ${invites.join(', ')}${allInvites.length > invites.length
+            ? ` e mais ${allInvites.length - invites.length}`
+            : ''}.`
+          : '\nNenhum convite foi vinculado a este cadastro ainda.';
+        await sendConversationText(
+          conversationId,
+          `Seu cadastro ja existe e sua permissao foi atualizada.${inviteText}\nAcesse seus dados e preferencias pelo link seguro (uso unico, valido por ate 7 dias):\n${profileLink.url}`,
+          { useCase: 'profile_auth_existing_contact' }
+        );
+      } catch (error) {
+        await logsManager.create({
+          level: 'warn',
+          channel: 'whatsapp_cloud',
+          action: 'profile_auth.permission_link_failed',
+          message: 'A permissao foi atualizada, mas o link de perfil nao pode ser emitido',
+          context: { contactId: contact.id, errorCode: error.code || 'PROFILE_LINK_FAILED' }
+        }).catch(() => undefined);
+      }
+    }
     await chatProfileFlow.beginEmailCapture(contact.id, 'whatsapp_cloud');
     try {
       await sendConversationText(
@@ -1032,7 +1081,8 @@ async function sendConversationText(id, text, options = {}) {
   // Codigos de autenticacao devem chegar ao provedor, mas nunca podem integrar
   // o historico administrativo nem os eventos de socket. recordOutbound
   // serializa o corpo descriptografado e emite conversation:message.
-  const recorded = options.useCase === 'profile_auth'
+  const sensitiveProfileAuth = isSensitiveProfileAuthUseCase(options.useCase);
+  const recorded = sensitiveProfileAuth
     ? null
     : await conversationsManager.recordOutbound({
         channel: 'whatsapp_cloud',
@@ -1052,13 +1102,17 @@ async function sendConversationText(id, text, options = {}) {
     channel: 'whatsapp_cloud',
     action: options.useCase === 'consent_request'
       ? 'consent.request_sent'
-      : options.useCase === 'profile_auth'
-        ? 'profile_auth.code_sent'
+      : sensitiveProfileAuth
+        ? options.useCase === 'profile_auth'
+          ? 'profile_auth.code_sent'
+          : 'profile_auth.secret_sent'
         : 'chat.message_sent',
     message: options.useCase === 'consent_request'
       ? 'Solicitacao de permissao enviada no chat WhatsApp Cloud'
-      : options.useCase === 'profile_auth'
-        ? 'Codigo temporario entregue pelo WhatsApp Cloud sem persistir seu conteudo'
+      : sensitiveProfileAuth
+        ? options.useCase === 'profile_auth'
+          ? 'Codigo temporario entregue pelo WhatsApp Cloud sem persistir seu conteudo'
+          : 'Conteudo temporario de autenticacao entregue sem persistir seu segredo'
         : 'Resposta enviada no chat WhatsApp Cloud',
     context: {
       contactId,
@@ -1136,14 +1190,15 @@ async function send(input) {
       'WHATSAPP_CLOUD_TEMPLATE_ONLY'
     );
   }
-  if (!resolvedContact && input.useCase !== 'profile_auth') {
+  const sensitiveProfileAuth = isSensitiveProfileAuthUseCase(input.useCase);
+  if (!resolvedContact && !sensitiveProfileAuth) {
     resolvedContact = await contactsManager.findByChannelAddress('whatsapp_cloud', destination);
   }
   const sent = await postCloudMessage(destination, message, {
     phoneNumberId: contactPhoneNumberId(resolvedContact)
   });
   const messageId = sent.providerMessageId;
-  if (input.useCase !== 'profile_auth') {
+  if (!sensitiveProfileAuth) {
     const template = message.template || {};
     const templateName = String(template.name || input.templateName || 'template_oficial');
     try {
@@ -1215,5 +1270,6 @@ module.exports = {
   cloudProfile,
   upsertCloudContact,
   matchingCloudContact,
-  sameProviderUser
+  sameProviderUser,
+  isSensitiveProfileAuthUseCase
 };

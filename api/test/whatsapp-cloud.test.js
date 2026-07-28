@@ -12,6 +12,7 @@ const whatsappCloudController = require('../src/controllers/whatsapp-cloud.contr
 const templatesManager = require('../src/managers/templates.manager');
 const notificationsManager = require('../src/managers/notifications.manager');
 const conversationsManager = require('../src/managers/conversations.manager');
+const profileManager = require('../src/managers/profile.manager');
 const { channelSendSchema } = require('../src/dtos/channels.dto');
 const { createTemplateSchema } = require('../src/dtos/templates.dto');
 const { buildCustomTemplateMessage, normalizeBuilder } = require('../src/utils/whatsapp-cloud-templates');
@@ -121,6 +122,8 @@ test('status separa preparo de envio, challenge e assinatura do WhatsApp Cloud',
   const values = {
     WHATSAPP_CLOUD_ACCESS_TOKEN: 'access',
     WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
+    WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER: '5511931234567',
+    WHATSAPP_CLOUD_BUSINESS_ACCOUNT_ID: '2000000000000001',
     WHATSAPP_CLOUD_API_VERSION: 'v25.0'
   };
   settingsManager.getValue = async (key) => values[key] || null;
@@ -131,11 +134,24 @@ test('status separa preparo de envio, challenge e assinatura do WhatsApp Cloud',
     webhookVerificationConfigured: false,
     webhookSignatureConfigured: false,
     webhookConfigured: false,
+    phoneNumberId: '1000000000000001',
+    displayPhoneNumber: '5511931234567',
+    businessAccountId: '2000000000000001',
     apiVersion: 'v25.0'
   });
 
   values.WHATSAPP_CLOUD_PHONE_NUMBER_ID = 'phone-id';
-  assert.equal((await whatsappCloudManager.status()).sendConfigured, false);
+  assert.deepEqual(await whatsappCloudManager.status(), {
+    configured: false,
+    sendConfigured: false,
+    webhookVerificationConfigured: false,
+    webhookSignatureConfigured: false,
+    webhookConfigured: false,
+    phoneNumberId: null,
+    displayPhoneNumber: '5511931234567',
+    businessAccountId: '2000000000000001',
+    apiVersion: 'v25.0'
+  });
   values.WHATSAPP_CLOUD_PHONE_NUMBER_ID = '1000000000000001';
   values.WHATSAPP_CLOUD_API_VERSION = '25';
   assert.equal((await whatsappCloudManager.status()).sendConfigured, false);
@@ -877,6 +893,77 @@ test('/meu-perfil no WhatsApp responde com resumo privado e link publico', async
   assert.match(response.text.body, /samuel@example\.test/);
   assert.match(response.text.body, /https:\/\/notify\.example\/meu-perfil/);
   assert.doesNotMatch(response.text.body, /507f1f77bcf86cd799439011/);
+});
+
+test('falha ao entregar magic link revoga o grant e nao registra sucesso falso', async (context) => {
+  stubWebhookPersistence(context);
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [settingsManager, 'isWhatsappPermissionCommand'],
+    [contactsManager, 'findByChannelAddress'],
+    [contactsManager, 'findByChannelOrPhone'],
+    [contactsManager, 'upsertFromChannel'],
+    [logsManager, 'create'],
+    [adminNotificationsManager, 'create'],
+    [profileManager, 'parseProfileLoginInvocation'],
+    [profileManager, 'activateProfileLoginFromWhatsapp'],
+    [profileManager, 'revokeProfileLink'],
+    [global, 'fetch']
+  ]);
+  const appSecret = 'cloud-secret';
+  settingsManager.getValue = async (key) => ({
+    WHATSAPP_CLOUD_APP_SECRET: appSecret,
+    WHATSAPP_CLOUD_ACCESS_TOKEN: 'test-access-token',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
+    WHATSAPP_CLOUD_API_VERSION: 'v25.0'
+  })[key] || null;
+  settingsManager.isWhatsappPermissionCommand = async () => false;
+  contactsManager.findByChannelAddress = async () => null;
+  contactsManager.findByChannelOrPhone = async () => null;
+  contactsManager.upsertFromChannel = async () => ({
+    id: '507f1f77bcf86cd799439011',
+    displayName: 'Samuel',
+    upsertState: { created: false, identityAdded: false }
+  });
+  profileManager.parseProfileLoginInvocation = () => ({ command: '/login', marker: 'safe-marker' });
+  profileManager.activateProfileLoginFromWhatsapp = async () => ({
+    activated: true,
+    challengeId: '9f9e0f12-353a-4c28-9a96-b9e267def122',
+    url: 'https://notify.example/meu-perfil#acesso=token-opaco'
+  });
+  let revokedChallengeId = null;
+  profileManager.revokeProfileLink = async (challengeId) => {
+    revokedChallengeId = challengeId;
+    return { revoked: true };
+  };
+  const actions = [];
+  logsManager.create = async (input) => { actions.push(input.action); return {}; };
+  adminNotificationsManager.create = async () => ({});
+  global.fetch = async () => ({
+    ok: false,
+    status: 500,
+    json: async () => ({ error: { message: 'provider unavailable', code: 2 } })
+  });
+  const payload = {
+    entry: [{ changes: [{ value: {
+      contacts: [{ wa_id: '551131234567', profile: { name: 'Samuel' } }],
+      messages: [{
+        id: 'wamid.profile-login',
+        from: '551131234567',
+        type: 'text',
+        text: { body: '/login safe-marker' }
+      }]
+    } }] }]
+  };
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256=' + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+  const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
+
+  assert.equal(result.receivedMessages, 1);
+  assert.equal(revokedChallengeId, '9f9e0f12-353a-4c28-9a96-b9e267def122');
+  assert.ok(actions.includes('profile_auth.link_delivery_failed'));
+  assert.equal(actions.includes('profile_auth.link_issued'), false);
 });
 
 test('webhook Cloud contact-only nao cadastra contato nem concede opt-in', async (context) => {

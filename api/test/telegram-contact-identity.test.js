@@ -7,6 +7,7 @@ const conversationsManager = require('../src/managers/conversations.manager');
 const logsManager = require('../src/managers/logs.manager');
 const adminNotificationsManager = require('../src/managers/admin-notifications.manager');
 const telegramManager = require('../src/managers/telegram.manager');
+const profileManager = require('../src/managers/profile.manager');
 const socketService = require('../src/services/socket.service');
 const chatProfileFlow = require('../src/services/chat-profile-flow.service');
 const { encrypt, decrypt, searchHash } = require('../src/services/crypto.service');
@@ -52,6 +53,7 @@ function stubTelegramInbound(context, options = {}) {
     notify: adminNotificationsManager.create,
     emit: socketService.emit,
     fetch: global.fetch,
+    directProfileLink: profileManager.createDirectProfileLink,
     publicAppUrl: env.publicAppUrl
   };
   telegramManager.clearIdentityCache();
@@ -68,6 +70,7 @@ function stubTelegramInbound(context, options = {}) {
     adminNotificationsManager.create = originals.notify;
     socketService.emit = originals.emit;
     global.fetch = originals.fetch;
+    profileManager.createDirectProfileLink = originals.directProfileLink;
     env.publicAppUrl = originals.publicAppUrl;
     telegramManager.clearIdentityCache();
     chatProfileFlow.resetLocalStateForTests();
@@ -76,7 +79,11 @@ function stubTelegramInbound(context, options = {}) {
     TELEGRAM_WEBHOOK_SECRET: 'webhook-secret',
     TELEGRAM_BOT_TOKEN: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd',
     START_NOTIFY_WHATSAPP_PERMISSION: options.notifyCommand || '/notify-me',
-    START_VERIFY_TELEGRAM_PERMISSION: options.verifyCommand || '/verify-me'
+    START_VERIFY_TELEGRAM_PERMISSION: options.verifyCommand || '/verify-me',
+    TELEGRAM_ONBOARDING_MESSAGE: options.telegramMessages?.onboarding,
+    TELEGRAM_PHONE_SHARE_MESSAGE: options.telegramMessages?.phoneShare,
+    TELEGRAM_PROFILE_MESSAGE: options.telegramMessages?.profile,
+    TELEGRAM_HELP_MESSAGE: options.telegramMessages?.help
   })[key] || null;
   contactsManager.findByChannelAddress = async () => options.existing || null;
   let upsertInput;
@@ -98,6 +105,10 @@ function stubTelegramInbound(context, options = {}) {
     channels: [{ channel: 'telegram', authorized: true, consentStatus: 'granted' }]
   };
   contactsManager.update = async () => ({});
+  profileManager.createDirectProfileLink = async () => ({
+    url: `${env.publicAppUrl.replace(/\/$/, '')}/meu-perfil#acesso=grant-seguro-teste`,
+    expiresAt: new Date(Date.now() + 300_000).toISOString()
+  });
   conversationsManager.recordInbound = async () => ({ conversation: { id: '507f1f77bcf86cd799439012' } });
   const logs = [];
   logsManager.create = async (entry) => { logs.push(entry); return entry; };
@@ -216,16 +227,52 @@ test('comando Telegram configurado autoriza o contato e envia menu de onboarding
   assert.equal(state.input().consentCommand, '/validar-telegram');
   assert.equal(state.input().metadata.permissionCommandReceived, true);
   assert.equal(state.input().metadata.permissionCommandReceivedVia, 'telegram');
-  assert.equal(state.providerCalls.length, 2);
+  assert.equal(state.providerCalls.length, 3);
   const menu = state.providerCalls.find((payload) => payload.reply_markup?.inline_keyboard);
-  const emailPrompt = state.providerCalls.find((payload) => !payload.reply_markup);
+  const emailPrompt = state.providerCalls.find((payload) => (
+    !payload.reply_markup && /cadastrar ou atualizar seu email/i.test(payload.text)
+  ));
+  const phonePrompt = state.providerCalls.find((payload) => payload.reply_markup?.keyboard);
   assert.equal(menu.chat_id, '445566');
   assert.equal(menu.reply_markup.inline_keyboard.length, 3);
   assert.match(menu.reply_markup.inline_keyboard[0][0].callback_data, /onboarding:phone/);
-  assert.match(menu.reply_markup.inline_keyboard[1][0].url, /^https?:\/\/.*\/meu-perfil$/);
+  assert.match(menu.reply_markup.inline_keyboard[1][0].url, /^https?:\/\/.*\/meu-perfil#acesso=/);
   assert.match(menu.reply_markup.inline_keyboard[2][0].callback_data, /onboarding:help/);
   assert.equal(JSON.stringify(menu).includes('request_contact'), false);
   assert.match(emailPrompt.text, /cadastrar ou atualizar seu email/i);
+  assert.equal(phonePrompt.reply_markup.keyboard[0][0].request_contact, true);
+});
+
+test('opt-in com email existente ainda solicita o telefone nativo e usa mensagens configuradas', async (context) => {
+  const state = stubTelegramInbound(context, {
+    existing: { id: '507f1f77bcf86cd799439011' },
+    telegramMessages: {
+      onboarding: 'Bem-vindo, {name}! Convites:\n{invites}\nUsei {command}.',
+      phoneShare: 'Mensagem personalizada para vincular seu telefone.'
+    },
+    contact: {
+      id: '507f1f77bcf86cd799439011',
+      displayName: 'Samuel',
+      email: 'samuel@example.test',
+      phone: null,
+      inviteOrigins: [{ title: 'Convite TCC', slug: 'convite-tcc' }],
+      upsertState: { created: false, identityAdded: false }
+    }
+  });
+
+  await telegramManager.webhook(telegramUpdate(2_026_072_214, {
+    text: '/notify-me'
+  }), 'webhook-secret');
+
+  const menu = state.providerCalls.find((payload) => payload.reply_markup?.inline_keyboard);
+  const phonePrompt = state.providerCalls.find((payload) => payload.reply_markup?.keyboard);
+  assert.equal(state.providerCalls.some((payload) => /cadastrar ou atualizar seu email/i.test(payload.text)), false);
+  assert.match(menu.text, /Bem-vindo, Samuel/);
+  assert.match(menu.text, /Convite TCC \(convite-tcc\)/);
+  assert.match(menu.text, /\/notify-me/);
+  assert.match(menu.text, /cadastro já existia e foi encontrado/i);
+  assert.equal(phonePrompt.text, 'Mensagem personalizada para vincular seu telefone.');
+  assert.equal(phonePrompt.reply_markup.keyboard[0][0].request_contact, true);
 });
 
 test('deep-link do comando /notify dinamico abre o mesmo onboarding Telegram', async (context) => {
@@ -281,7 +328,7 @@ test('menu usa a origem HTTPS do webhook quando PUBLIC_APP_URL ainda aponta para
   assert.equal(menuPayload.reply_markup.inline_keyboard.length, 3);
   assert.equal(
     menuPayload.reply_markup.inline_keyboard[1][0].url,
-    'https://notify-test.ngrok-free.app/meu-perfil'
+    'https://notify-test.ngrok-free.app/meu-perfil#acesso=grant-seguro-teste'
   );
   assert.equal(state.logs.some((entry) => entry.action === 'contact.phone_request_failed'), false);
 });
@@ -342,7 +389,7 @@ test('/meu-perfil responde com os dados do proprio contato e link publico', asyn
   const response = state.providerCalls.find((payload) => /Seus dados no Notify Flow/.test(payload.text));
   assert.ok(response);
   assert.match(response.text, /samuel@example\.test/);
-  assert.match(response.text, /https:\/\/notify\.example\/meu-perfil/);
+  assert.match(response.text, /https:\/\/notify\.example\/meu-perfil#acesso=grant-seguro-teste/);
   assert.doesNotMatch(response.text, /507f1f77bcf86cd799439011/);
 });
 
@@ -369,6 +416,32 @@ test('callback de telefone responde ao Telegram e so entao abre o request_contac
   const duplicate = await telegramManager.webhook(update, 'webhook-secret');
   assert.equal(duplicate.duplicate, true);
   assert.equal(state.providerCalls.length, 2);
+});
+
+test('callback Meu perfil emite link pessoal temporario que autentica sem codigo', async (context) => {
+  const state = stubTelegramInbound(context, {
+    existing: { id: '507f1f77bcf86cd799439011' },
+    telegramMessages: {
+      profile: 'Seu link pessoal está pronto e só pode ser usado uma vez.'
+    }
+  });
+  const result = await telegramManager.webhook({
+    update_id: 2_026_072_215,
+    callback_query: {
+      id: 'callback-profile-1',
+      data: 'notify:onboarding:profile:v1',
+      from: { id: 445566, first_name: 'Samuel' },
+      message: { message_id: 905, chat: { id: 445566, type: 'private' } }
+    }
+  }, 'webhook-secret');
+
+  assert.equal(result.callback, 'onboarding_profile');
+  const profileMessage = state.providerCalls.find((payload) => payload.reply_markup?.inline_keyboard);
+  assert.equal(profileMessage.text, 'Seu link pessoal está pronto e só pode ser usado uma vez.');
+  assert.match(
+    profileMessage.reply_markup.inline_keyboard[0][0].url,
+    /^https:\/\/notify\.example\/meu-perfil#acesso=/
+  );
 });
 
 test('callback de Ajuda explica vinculo e Meu perfil sem pedir telefone', async (context) => {

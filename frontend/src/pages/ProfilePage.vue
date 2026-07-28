@@ -9,15 +9,15 @@ import {
 } from '../services/profile-identifier.js'
 import {
   clearProfileSession,
+  exchangeProfileLink,
   fetchOwnProfile,
   fetchProfileActivationLinks,
   fetchProfileHistory,
   getProfileToken,
-  requestProfileCode,
+  requestProfileLogin,
   revokeOwnConsent,
   setOwnEmailConsent,
   updateOwnProfile,
-  verifyProfileCode,
 } from '../services/profile.js'
 
 const $q = useQuasar()
@@ -25,11 +25,16 @@ const step = ref(getProfileToken() ? 'profile' : 'identifier')
 const loading = ref(false)
 const profile = ref(null)
 const activationLinks = ref(null)
-const identifierType = ref('email')
+const identifierType = ref('phone')
 const emailIdentifier = ref('')
 const phoneIdentifier = ref('')
-const code = ref('')
-const challenge = reactive({ id: '', expiresInSeconds: 600, whatsappUrl: '', command: '/gerar-codigo' })
+const loginRequest = reactive({
+  deliveryChannel: '',
+  expiresAt: '',
+  whatsappUrl: '',
+  command: '/login',
+  message: '',
+})
 const editMode = ref(false)
 const editForm = reactive({ displayName: '', email: '', phone: '', telegramUsername: '' })
 const revokeDialog = ref(false)
@@ -41,8 +46,8 @@ const historyLoading = ref(false)
 const historyPagination = reactive({ page: 1, rowsPerPage: 10, rowsNumber: 0 })
 
 const identifierTypeOptions = Object.freeze([
-  { label: 'E-mail', value: 'email', icon: 'alternate_email' },
   { label: 'Telefone', value: 'phone', icon: 'phone' },
+  { label: 'E-mail', value: 'email', icon: 'alternate_email' },
 ])
 
 const channelMeta = Object.freeze({
@@ -99,34 +104,36 @@ function onPhoneIdentifierInput(value) {
 }
 
 function resetIdentifier() {
-  identifierType.value = 'email'
+  identifierType.value = 'phone'
   emailIdentifier.value = ''
   phoneIdentifier.value = ''
 }
 
-function useAnotherIdentifier() {
-  window.localStorage.removeItem('notify_profile_pending_challenge')
-  challenge.id = ''
-  challenge.whatsappUrl = ''
-  code.value = ''
-  step.value = 'identifier'
+function clearLoadedProfileState() {
+  profile.value = null
+  activationLinks.value = null
+  history.value = []
+  historyPagination.page = 1
+  historyPagination.rowsNumber = 0
+  editMode.value = false
+  Object.assign(editForm, {
+    displayName: '',
+    email: '',
+    phone: '',
+    telegramUsername: '',
+  })
 }
 
-function restorePendingChallenge() {
-  try {
-    const pending = JSON.parse(window.localStorage.getItem('notify_profile_pending_challenge') || 'null')
-    if (!pending?.id || !pending?.expiresAt || new Date(pending.expiresAt).getTime() <= Date.now()) {
-      window.localStorage.removeItem('notify_profile_pending_challenge')
-      return
-    }
-    challenge.id = pending.id
-    challenge.expiresInSeconds = Math.max(1, Math.ceil((new Date(pending.expiresAt).getTime() - Date.now()) / 1000))
-    challenge.whatsappUrl = pending.whatsappUrl || ''
-    challenge.command = pending.command || '/gerar-codigo'
-    step.value = 'code'
-  } catch (_error) {
-    window.localStorage.removeItem('notify_profile_pending_challenge')
-  }
+function useAnotherIdentifier() {
+  Object.assign(loginRequest, {
+    deliveryChannel: '',
+    expiresAt: '',
+    whatsappUrl: '',
+    command: '/login',
+    message: '',
+  })
+  clearLoadedProfileState()
+  step.value = 'identifier'
 }
 
 function syncEditForm() {
@@ -155,6 +162,7 @@ async function loadHistory(pagination = historyPagination) {
 
 async function loadProfile() {
   loading.value = true
+  clearLoadedProfileState()
   try {
     profile.value = await fetchOwnProfile()
     syncEditForm()
@@ -165,62 +173,62 @@ async function loadProfile() {
     ])
   } catch (error) {
     clearProfileSession()
+    clearLoadedProfileState()
     step.value = 'identifier'
-    profile.value = null
-    $q.notify({ type: 'warning', message: errorMessage(error, 'Sua sessão expirou. Solicite um novo código.') })
+    $q.notify({ type: 'warning', message: errorMessage(error, 'Sua sessão expirou. Solicite um novo link.') })
   } finally {
     loading.value = false
   }
 }
 
-async function requestCode() {
+async function requestLogin() {
   loading.value = true
-  const whatsappWindow = window.open('about:blank', '_blank')
+  const whatsappWindow = identifierType.value === 'phone' ? window.open('', '_blank') : null
   if (whatsappWindow) whatsappWindow.opener = null
   try {
     const identifier = identifierType.value === 'phone'
       ? phoneIdentifier.value
       : emailIdentifier.value
-    const result = await requestProfileCode(
+    const result = await requestProfileLogin(
       normalizeProfileIdentifierForRequest(identifier, identifierType.value),
+      identifierType.value,
     )
-    challenge.id = result.challengeId
-    challenge.expiresInSeconds = result.expiresInSeconds || 600
-    challenge.whatsappUrl = result.whatsappUrl || ''
-    challenge.command = result.command || '/gerar-codigo'
-    window.localStorage.setItem('notify_profile_pending_challenge', JSON.stringify({
-      id: challenge.id,
-      expiresAt: result.expiresAt,
-      whatsappUrl: challenge.whatsappUrl,
-      command: challenge.command,
-    }))
-    code.value = ''
-    step.value = 'code'
-    if (challenge.whatsappUrl) {
-      if (whatsappWindow) whatsappWindow.location.replace(challenge.whatsappUrl)
-      else window.location.assign(challenge.whatsappUrl)
+    Object.assign(loginRequest, {
+      deliveryChannel: result.deliveryChannel || identifierType.value,
+      expiresAt: result.expiresAt || '',
+      whatsappUrl: result.whatsappUrl || '',
+      command: result.command || '/login',
+      message: result.message || '',
+    })
+    step.value = 'waiting'
+    if (loginRequest.whatsappUrl) {
+      if (whatsappWindow) whatsappWindow.location.href = loginRequest.whatsappUrl
+      else window.location.href = loginRequest.whatsappUrl
     } else {
       whatsappWindow?.close()
     }
     $q.notify({
       type: 'positive',
-      message: 'Envie o comando no WhatsApp para gerar o código.',
-      caption: `A conversa oficial foi aberta com ${challenge.command}. Depois, use aqui o mesmo código de seis dígitos.`,
+      message: identifierType.value === 'phone'
+        ? 'Conversa oficial aberta no WhatsApp.'
+        : 'Link seguro enviado para seu email.',
+      caption: result.message,
     })
   } catch (error) {
     whatsappWindow?.close()
-    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível solicitar o código.') })
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível solicitar o acesso.') })
   } finally {
     loading.value = false
   }
 }
 
-async function verifyCode() {
+async function exchangeLinkToken(token) {
   loading.value = true
+  clearLoadedProfileState()
+  step.value = 'identifier'
   try {
-    const result = await verifyProfileCode(challenge.id, code.value)
+    const result = await exchangeProfileLink(token)
     profile.value = result.profile
-    window.localStorage.removeItem('notify_profile_pending_challenge')
     syncEditForm()
     step.value = 'profile'
     await Promise.all([
@@ -228,10 +236,20 @@ async function verifyCode() {
       fetchProfileActivationLinks().then((value) => { activationLinks.value = value }).catch(() => undefined),
     ])
   } catch (error) {
-    $q.notify({ type: 'negative', message: errorMessage(error, 'Código inválido ou expirado.') })
+    clearProfileSession()
+    step.value = 'identifier'
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Link de acesso inválido, expirado ou já utilizado.') })
   } finally {
     loading.value = false
   }
+}
+
+function profileLinkTokenFromFragment() {
+  const token = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('acesso')
+  if (!token) return null
+  // Limpa o segredo antes de qualquer chamada de rede, render ou navegação.
+  window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`)
+  return token
 }
 
 async function saveProfile() {
@@ -302,25 +320,22 @@ function activationFor(channel) {
 
 function logout() {
   clearProfileSession()
-  profile.value = null
-  activationLinks.value = null
+  clearLoadedProfileState()
   resetIdentifier()
-  code.value = ''
   step.value = 'identifier'
 }
 
 function onProfileSessionExpired() {
-  profile.value = null
-  activationLinks.value = null
-  code.value = ''
+  clearLoadedProfileState()
   step.value = 'identifier'
-  $q.notify({ type: 'warning', message: 'Sua sessao de perfil expirou. Solicite um novo codigo.' })
+  $q.notify({ type: 'warning', message: 'Sua sessão de perfil expirou. Solicite um novo link.' })
 }
 
 onMounted(() => {
   window.addEventListener('notify:profile-session-expired', onProfileSessionExpired)
-  if (getProfileToken()) loadProfile()
-  else restorePendingChallenge()
+  const linkToken = profileLinkTokenFromFragment()
+  if (linkToken) exchangeLinkToken(linkToken)
+  else if (getProfileToken()) loadProfile()
 })
 
 onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired', onProfileSessionExpired))
@@ -348,15 +363,15 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
               <div class="eyebrow">MEU PERFIL</div>
               <h1>Seus dados e permissões, sob seu controle.</h1>
               <p v-if="step === 'identifier'">
-                Escolha como deseja se identificar. Abriremos o WhatsApp oficial para você enviar <strong>/gerar-codigo</strong> e receber o código temporário.
+                Entre com seu telefone pelo WhatsApp oficial ou receba um link seguro no email já cadastrado.
               </p>
               <p v-else>
-                Envie <strong>{{ challenge.command }}</strong> na conversa aberta e digite aqui o código de seis números. Ele expira em {{ Math.round(challenge.expiresInSeconds / 60) }} minutos.
+                {{ loginRequest.message }}
               </p>
             </q-card-section>
 
             <q-card-section v-if="step === 'identifier'">
-              <q-form @submit.prevent="requestCode">
+              <q-form @submit.prevent="requestLogin">
                 <q-select
                   v-model="identifierType"
                   outlined
@@ -409,7 +424,17 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
                     </q-input>
                   </div>
                 </q-slide-transition>
-                <q-btn type="submit" color="dark" unelevated no-caps size="lg" class="full-width" icon-right="arrow_forward" label="Receber código" :loading="loading" />
+                <q-btn
+                  type="submit"
+                  color="dark"
+                  unelevated
+                  no-caps
+                  size="lg"
+                  class="full-width"
+                  icon-right="arrow_forward"
+                  :label="identifierType === 'phone' ? 'Continuar pelo WhatsApp' : 'Receber link por email'"
+                  :loading="loading"
+                />
               </q-form>
               <q-banner rounded class="neutral-note q-mt-lg">
                 Se não houver um cadastro único para o identificador informado, avisaremos antes de tentar o envio.
@@ -418,25 +443,16 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
 
             <q-card-section v-else>
               <q-banner rounded class="activation-note q-mb-md">
-                O WhatsApp responde dentro da janela oficial de atendimento. Se a conversa não abriu,
-                <a v-if="challenge.whatsappUrl" :href="challenge.whatsappUrl" target="_blank" rel="noopener noreferrer">abra o WhatsApp novamente</a>.
+                <template v-if="loginRequest.deliveryChannel === 'whatsapp_cloud'">
+                  Envie a mensagem <strong>{{ loginRequest.command }}</strong> que já está pronta na conversa.
+                  O WhatsApp responderá com um link de uso único.
+                  <a v-if="loginRequest.whatsappUrl" :href="loginRequest.whatsappUrl" target="_blank" rel="noopener noreferrer">Abrir novamente</a>.
+                </template>
+                <template v-else>
+                  Verifique sua caixa de entrada e abra o link de uso único enviado ao email cadastrado.
+                </template>
               </q-banner>
-              <q-form @submit.prevent="verifyCode">
-                <q-input
-                  v-model="code"
-                  outlined
-                  input-class="code-input"
-                  label="Código de acesso"
-                  mask="######"
-                  inputmode="numeric"
-                  autocomplete="one-time-code"
-                  :rules="[(value) => /^\d{6}$/.test(value || '') || 'Digite os seis números']"
-                >
-                  <template #prepend><q-icon name="password" /></template>
-                </q-input>
-                <q-btn type="submit" color="dark" unelevated no-caps size="lg" class="full-width" icon-right="verified_user" label="Validar e entrar" :loading="loading" />
-                <q-btn flat no-caps class="full-width q-mt-sm" label="Usar outro email ou telefone" @click="useAnotherIdentifier" />
-              </q-form>
+              <q-btn flat no-caps class="full-width q-mt-sm" label="Usar outro email ou telefone" @click="useAnotherIdentifier" />
             </q-card-section>
           </q-card>
         </section>

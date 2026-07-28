@@ -68,6 +68,15 @@ describe('compositor amigável de notificações', () => {
     expect(source).toContain("v-for=\"panel in ['global', 'template', 'quick']\"")
   })
 
+  it('mantém o formulário enxuto sem os banners explicativos removidos', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
+
+    expect(source).not.toContain('Escolha um, dois ou três canais')
+    expect(source).not.toContain('Ativos agora:')
+    expect(source).not.toContain('WhatsApp oficial usa um formulário próprio')
+    expect(source).not.toContain('Nome aprovado, componentes e permissões são montados sem JSON')
+  })
+
   it('aceita qualquer combinação não vazia de canais no template global', () => {
     const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
 

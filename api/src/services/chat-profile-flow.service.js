@@ -195,7 +195,7 @@ async function handleInbound({ contactId, channel, text, profileUrl }) {
         handled: true,
         kind: 'email_conflict',
         errorCode: error.code,
-        text: 'Esse email ja pertence a outro perfil. Para proteger seus dados, faca a vinculacao pelo Meu perfil usando o codigo de acesso.'
+        text: 'Esse email ja pertence a outro perfil. Para proteger seus dados, abra o Meu perfil pelo link seguro enviado no canal confirmado.'
       };
     }
     throw error;

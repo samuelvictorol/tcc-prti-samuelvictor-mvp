@@ -13,7 +13,7 @@ const whatsappCloudManager = require('./whatsapp-cloud.manager');
 const telegramManager = require('./telegram.manager');
 const settingsManager = require('./settings.manager');
 const { env } = require('../config/env');
-const { searchHash } = require('../services/crypto.service');
+const { searchHash, tokenHash } = require('../services/crypto.service');
 const { getRedis } = require('../services/redis.service');
 const {
   normalizeEmail,
@@ -30,11 +30,15 @@ const PROFILE_SCOPE = Object.freeze([
   'profile:consent:revoke',
   'profile:history'
 ]);
+// Compatibilidade interna com desafios legados já persistidos. O fluxo público
+// atual usa exclusivamente PROFILE_LINK_COMMAND e não expõe estas operações.
 const PROFILE_LOGIN_COMMAND = '/gerar-codigo';
+const PROFILE_LINK_COMMAND = '/login';
+const PROFILE_LOGIN_MARKER_PATTERN = /^pl_([A-Za-z0-9_-]{16})_([A-Za-z0-9_-]{11})$/;
 const PROFILE_LOGIN_FLOW = Object.freeze({
-  label: 'Código pela conversa oficial',
-  command: PROFILE_LOGIN_COMMAND,
-  description: 'O contato abre o WhatsApp oficial, envia o comando e recebe um código temporário na janela de atendimento.'
+  label: 'Link seguro de uso único',
+  command: PROFILE_LINK_COMMAND,
+  description: 'O contato confirma a identidade pelo WhatsApp ou email e recebe um link temporário de uso único.'
 });
 const CODE_REQUEST_MESSAGE = 'Abra o WhatsApp oficial e envie /gerar-codigo para receber o codigo temporario.';
 const INVALID_CODE_MESSAGE = 'Codigo invalido, expirado ou sem tentativas disponiveis';
@@ -151,17 +155,319 @@ function secureCode() {
   return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
-function issueProfileToken(contactId) {
+function issueProfileToken(contactId, expiresIn = env.profileJwtTtl) {
   return jwt.sign({
     sub: String(contactId),
     type: 'profile_access',
     scope: PROFILE_SCOPE
   }, env.profileJwtSecret, {
-    expiresIn: env.profileJwtTtl,
+    expiresIn,
     issuer: 'notify-app-api',
     audience: 'notify-app-contact',
     jwtid: crypto.randomUUID()
   });
+}
+
+function normalizeBrazilianLoginPhone(value) {
+  let digits = String(value || '').normalize('NFKC').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (/^\d{10,11}$/.test(digits)) digits = `55${digits}`;
+  if (!/^55[1-9]\d{9,10}$/.test(digits)) {
+    throw new ApiError(
+      422,
+      'Informe um telefone brasileiro com DDD, por exemplo (11) 91234-5678',
+      null,
+      'PROFILE_PHONE_INVALID'
+    );
+  }
+  return digits;
+}
+
+function profileLoginMarkerSignature(nonce) {
+  return crypto.createHmac('sha256', env.profileJwtSecret)
+    .update(`profile-login-marker:v1:${nonce}`)
+    .digest()
+    .subarray(0, 8)
+    .toString('base64url');
+}
+
+function createProfileLoginMarker(nonce = crypto.randomBytes(12).toString('base64url')) {
+  if (!/^[A-Za-z0-9_-]{16}$/.test(nonce)) {
+    throw new ApiError(500, 'Nao foi possivel criar o acesso seguro', null, 'PROFILE_LOGIN_MARKER_INVALID');
+  }
+  return `pl_${nonce}_${profileLoginMarkerSignature(nonce)}`;
+}
+
+function parseProfileLoginInvocation(value) {
+  const normalized = String(value || '').normalize('NFKC').trim();
+  const match = normalized.match(/^\/login(?:\s+(\S+))?$/i);
+  if (!match?.[1]) return null;
+  const marker = match[1];
+  const markerMatch = marker.match(PROFILE_LOGIN_MARKER_PATTERN);
+  if (!markerMatch) return null;
+  const expected = profileLoginMarkerSignature(markerMatch[1]);
+  const actualBuffer = Buffer.from(markerMatch[2]);
+  const expectedBuffer = Buffer.from(expected);
+  if (actualBuffer.length !== expectedBuffer.length
+    || !crypto.timingSafeEqual(actualBuffer, expectedBuffer)) return null;
+  return { command: PROFILE_LINK_COMMAND, marker };
+}
+
+function issueProfileLinkToken() {
+  // Token opaco: o fragmento nao revela contactId, challengeId ou outros
+  // metadados mesmo antes de ser consumido.
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+function publicProfileLink(token) {
+  const url = new URL('/meu-perfil', env.publicAppUrl);
+  // O token fica no fragmento: navegadores nao o enviam ao servidor, logs,
+  // proxies ou cabecalho Referer antes da troca one-time.
+  url.hash = `acesso=${encodeURIComponent(token)}`;
+  return url.toString();
+}
+
+async function persistProfileLink(contactId, challenge, source) {
+  const now = new Date();
+  const linkExpiresAt = new Date(now.getTime() + env.profileLinkTtlSeconds * 1000);
+  const linkToken = issueProfileLinkToken();
+  const update = await ProfileAuthChallenge.findOneAndUpdate({
+    _id: challenge._id,
+    contact: contactId,
+    activatedAt: null,
+    revokedAt: null,
+    expiresAt: { $gt: now },
+    linkConsumedAt: null
+  }, {
+    $set: {
+      flow: 'link',
+      activatedAt: now,
+      activationChannel: String(source || '').includes('telegram')
+        ? 'telegram'
+        : String(source || '').includes('email')
+          ? 'email'
+          : 'whatsapp_cloud',
+      linkTokenHash: tokenHash(linkToken),
+      linkExpiresAt,
+      linkSource: String(source || 'trusted_inbound_channel').slice(0, 100)
+    },
+    $max: { expiresAt: linkExpiresAt }
+  }, { new: true });
+  if (!update) return null;
+  return {
+    url: publicProfileLink(linkToken),
+    expiresAt: linkExpiresAt.toISOString()
+  };
+}
+
+async function requestLogin(input, meta = {}) {
+  const identifier = input.identifierType === 'phone'
+    ? normalizedIdentifier(normalizeBrazilianLoginPhone(input.identifier))
+    : normalizedIdentifier(input.identifier);
+  if (identifier.type !== input.identifierType) {
+    throw new ApiError(422, 'Identificador invalido para o tipo escolhido', null, 'PROFILE_IDENTIFIER_INVALID');
+  }
+  const releaseLock = await acquireRequestLock(identifier.identifierHash);
+  try {
+    await enforceRequestRate(identifier.identifierHash);
+    const contact = await uniqueContactForIdentifier(identifier);
+    if (!contact) {
+      const identifierLabel = identifier.type === 'email' ? 'email' : 'telefone';
+      throw new ApiError(
+        404,
+        `Nao encontramos um contato unico com esse ${identifierLabel}`,
+        null,
+        'PROFILE_CONTACT_NOT_FOUND'
+      );
+    }
+    const challengeId = crypto.randomUUID();
+    const expiresAt = new Date(Date.now() + env.profileCodeTtlSeconds * 1000);
+    const challenge = await ProfileAuthChallenge.create({
+      challengeId,
+      flow: 'link',
+      identifierType: identifier.type,
+      identifierHash: identifier.identifierHash,
+      contact: contact._id,
+      maxAttempts: 1,
+      requestIpHash: meta.ip ? searchHash(`profile-ip:${meta.ip}`) : undefined,
+      userAgent: String(meta.userAgent || '').slice(0, 500),
+      codeExpiresAt: expiresAt,
+      expiresAt
+    });
+    if (identifier.type === 'email') {
+      const link = await persistProfileLink(contact._id, challenge, 'email_login_request');
+      if (!link) throw new ApiError(409, 'Nao foi possivel emitir o link de acesso', null, 'PROFILE_LINK_ISSUE_FAILED');
+      try {
+        await gmailManager.send({
+          destination: identifier.value,
+          allowUnconsented: true,
+          useCase: 'profile_auth',
+          subject: 'Acesso seguro ao seu perfil',
+          text: `Use o link abaixo para entrar no Meu perfil. Ele pode ser usado uma vez e expira em ate 7 dias:\n\n${link.url}`
+        });
+      } catch (error) {
+        await ProfileAuthChallenge.updateOne(
+          { _id: challenge._id },
+          { $set: { revokedAt: new Date() } }
+        );
+        throw new ApiError(
+          503,
+          'Nao foi possivel enviar o link por email. Tente novamente.',
+          { reasonCode: error.code || 'EMAIL_DELIVERY_FAILED' },
+          'PROFILE_LINK_DELIVERY_FAILED'
+        );
+      }
+      return {
+        deliveryChannel: 'email',
+        expiresAt: link.expiresAt,
+        expiresInSeconds: env.profileLinkTtlSeconds,
+        message: 'Enviamos um link seguro para o email cadastrado. Abra-o para entrar.'
+      };
+    }
+    const entryPoint = await profileWhatsappEntryPoint();
+    const marker = createProfileLoginMarker();
+    await ProfileAuthChallenge.updateOne(
+      { _id: challenge._id },
+      { $set: { loginMarkerHash: tokenHash(marker) } }
+    );
+    const url = new URL(entryPoint.url);
+    url.searchParams.set('text', `${PROFILE_LINK_COMMAND} ${marker}`);
+    return {
+      command: PROFILE_LINK_COMMAND,
+      deliveryChannel: 'whatsapp_cloud',
+      whatsappUrl: url.toString(),
+      expiresAt: expiresAt.toISOString(),
+      expiresInSeconds: env.profileCodeTtlSeconds,
+      message: 'Envie a mensagem pronta no WhatsApp. O atendimento respondera com seu link seguro de acesso.'
+    };
+  } finally {
+    await releaseLock();
+  }
+}
+
+async function activateProfileLoginFromWhatsapp(input = {}) {
+  if (!mongoose.isValidObjectId(input.contactId)) {
+    return { activated: false, reasonCode: 'PROFILE_CHALLENGE_CONTEXT_INVALID' };
+  }
+  const invocation = parseProfileLoginInvocation(input.text);
+  if (!invocation) return { activated: false, reasonCode: 'PROFILE_LOGIN_MARKER_INVALID' };
+  const now = new Date();
+  const challenge = await ProfileAuthChallenge.findOne({
+    flow: 'link',
+    contact: input.contactId,
+    loginMarkerHash: tokenHash(invocation.marker),
+    activatedAt: null,
+    consumedAt: null,
+    revokedAt: null,
+    expiresAt: { $gt: now }
+  }).select('+loginMarkerHash');
+  if (!challenge) return { activated: false, reasonCode: 'PROFILE_CHALLENGE_NOT_FOUND' };
+  const link = await persistProfileLink(input.contactId, challenge, 'whatsapp_login_command');
+  return link
+    ? { activated: true, challengeId: challenge.challengeId, ...link }
+    : { activated: false, reasonCode: 'PROFILE_CHALLENGE_ALREADY_ACTIVATED' };
+}
+
+async function createDirectProfileLink(contactId, options = {}) {
+  if (!mongoose.isValidObjectId(contactId)) {
+    throw new ApiError(422, 'Contato invalido', null, 'PROFILE_CONTACT_INVALID');
+  }
+  const identifierHash = searchHash(`profile:direct:${contactId}`);
+  const releaseLock = await acquireRequestLock(`direct:${identifierHash}`);
+  try {
+    const contact = await Contact.findOne({ _id: contactId, active: true, deletedAt: null })
+      .select(contactsManager.SECRET_SELECT);
+    if (!contact) throw new ApiError(404, 'Perfil indisponivel', null, 'PROFILE_UNAVAILABLE');
+    const now = new Date();
+    await ProfileAuthChallenge.updateMany({
+      contact: contactId,
+      flow: 'link',
+      linkConsumedAt: null,
+      revokedAt: null,
+      linkExpiresAt: { $gt: now }
+    }, {
+      $set: { revokedAt: now }
+    });
+    const challenge = await ProfileAuthChallenge.create({
+      challengeId: crypto.randomUUID(),
+      flow: 'link',
+      identifierType: 'phone',
+      identifierHash,
+      contact: contactId,
+      maxAttempts: 1,
+      expiresAt: new Date(now.getTime() + env.profileLinkTtlSeconds * 1000)
+    });
+    const link = await persistProfileLink(contactId, challenge, options.source || 'trusted_inbound_channel');
+    if (!link) throw new ApiError(409, 'Nao foi possivel emitir o link de acesso', null, 'PROFILE_LINK_ISSUE_FAILED');
+    return link;
+  } finally {
+    await releaseLock();
+  }
+}
+
+async function revokeProfileLink(challengeId, source = 'delivery_failed') {
+  const result = await ProfileAuthChallenge.updateOne({
+    challengeId,
+    flow: 'link',
+    linkConsumedAt: null,
+    revokedAt: null
+  }, {
+    $set: {
+      revokedAt: new Date(),
+      linkSource: String(source || 'delivery_failed').slice(0, 100)
+    }
+  });
+  return { revoked: Boolean(result.modifiedCount) };
+}
+
+async function exchangeProfileLink(input, meta = {}) {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(String(input.token || ''))) {
+    await registerSecurityStrike(meta.ip || 'unknown');
+    throw new ApiError(401, 'Link de acesso invalido ou expirado', null, 'INVALID_PROFILE_LINK');
+  }
+  const now = new Date();
+  const challenge = await ProfileAuthChallenge.findOneAndUpdate({
+    flow: 'link',
+    linkTokenHash: tokenHash(input.token),
+    linkConsumedAt: null,
+    revokedAt: null,
+    linkExpiresAt: { $gt: now }
+  }, {
+    $set: { linkConsumedAt: now, consumedAt: now }
+  }, { new: true }).select('+linkTokenHash');
+  if (!challenge) {
+    await registerSecurityStrike(meta.ip || 'unknown');
+    throw new ApiError(401, 'Link de acesso ja utilizado, invalido ou expirado', null, 'INVALID_PROFILE_LINK');
+  }
+  const contactId = await resolveActiveProfileContactId(challenge.contact);
+  if (!contactId) {
+    throw new ApiError(401, 'Link de acesso invalido ou expirado', null, 'INVALID_PROFILE_LINK');
+  }
+  const accessToken = issueProfileToken(contactId, env.profileSessionTtlSeconds);
+  const claims = jwt.decode(accessToken);
+  return {
+    accessToken,
+    tokenType: 'Bearer',
+    expiresAt: new Date(claims.exp * 1000).toISOString(),
+    expiresInSeconds: Math.max(0, claims.exp - Math.floor(Date.now() / 1000)),
+    profile: await getOwnProfile(contactId)
+  };
+}
+
+async function resolveActiveProfileContactId(candidateId) {
+  let contactId = String(candidateId || '');
+  for (let depth = 0; depth < 3 && mongoose.isValidObjectId(contactId); depth += 1) {
+    const contact = await Contact.findById(contactId).select(contactsManager.SECRET_SELECT);
+    if (!contact) return null;
+    if (contact.active !== false && !contact.deletedAt) return String(contact._id);
+    const mergedIntoContactId = contactsManager.serialize(contact, {
+      includeInlineAvatar: false
+    })?.metadata?.mergedIntoContactId;
+    if (!mongoose.isValidObjectId(mergedIntoContactId)
+      || String(mergedIntoContactId) === contactId) return null;
+    contactId = String(mergedIntoContactId);
+  }
+  return null;
 }
 
 async function authenticateProfileAccess(token) {
@@ -178,10 +484,10 @@ async function authenticateProfileAccess(token) {
     || !PROFILE_SCOPE.every((scope) => decoded.scope.includes(scope))) {
     throw new ApiError(403, 'Escopo de perfil invalido', null, 'INVALID_PROFILE_SCOPE');
   }
-  const available = await Contact.exists({ _id: decoded.sub, active: true, deletedAt: null });
-  if (!available) throw new ApiError(401, 'Perfil indisponivel', null, 'PROFILE_UNAVAILABLE');
+  const contactId = await resolveActiveProfileContactId(decoded.sub);
+  if (!contactId) throw new ApiError(401, 'Perfil indisponivel', null, 'PROFILE_UNAVAILABLE');
   return {
-    contactId: String(decoded.sub),
+    contactId,
     scope: decoded.scope,
     expiresAt: new Date(decoded.exp * 1000).toISOString()
   };
@@ -210,7 +516,7 @@ async function enforceRequestRate(identifierHash) {
   const tooSoon = latest?.createdAt
     && Date.now() - new Date(latest.createdAt).getTime() < env.profileCodeResendSeconds * 1000;
   if (count >= env.profileCodeMaxRequests || tooSoon) {
-    throw new ApiError(429, 'Aguarde antes de solicitar outro codigo', null, 'PROFILE_CODE_RATE_LIMIT');
+    throw new ApiError(429, 'Aguarde antes de solicitar outro acesso', null, 'PROFILE_CODE_RATE_LIMIT');
   }
 }
 
@@ -252,7 +558,7 @@ async function acquireRequestLock(identifierHash) {
       );
     }
     if (!acquired) {
-      throw new ApiError(429, 'Aguarde antes de solicitar outro codigo', null, 'PROFILE_CODE_RATE_LIMIT');
+      throw new ApiError(429, 'Aguarde antes de solicitar outro acesso', null, 'PROFILE_CODE_RATE_LIMIT');
     }
     return async () => {
       try {
@@ -266,7 +572,7 @@ async function acquireRequestLock(identifierHash) {
     };
   }
   if (localRequestLocks.has(key)) {
-    throw new ApiError(429, 'Aguarde antes de solicitar outro codigo', null, 'PROFILE_CODE_RATE_LIMIT');
+    throw new ApiError(429, 'Aguarde antes de solicitar outro acesso', null, 'PROFILE_CODE_RATE_LIMIT');
   }
   localRequestLocks.add(key);
   return async () => { localRequestLocks.delete(key); };
@@ -808,6 +1114,11 @@ async function deliveryHistory(contactId, query = {}) {
 function challengeStatus(challenge, now = new Date()) {
   if (challenge.consumedAt) return 'verified';
   if (challenge.revokedAt) return 'revoked';
+  if (challenge.flow === 'link') {
+    const expiry = challenge.linkExpiresAt || challenge.expiresAt;
+    if (expiry <= now) return 'expired';
+    return challenge.activatedAt ? 'active' : 'awaiting_whatsapp';
+  }
   if (challengeCodeExpiry(challenge) <= now) return 'expired';
   if (challenge.attempts >= challenge.maxAttempts) return 'blocked';
   if (!challenge.activatedAt) return 'awaiting_whatsapp';
@@ -822,8 +1133,8 @@ async function profileTemplateAvailability() {
     languages: [],
     checkedAt: new Date().toISOString(),
     reasonCode: null,
-    command: PROFILE_LOGIN_COMMAND,
-    flow: 'whatsapp_service_window'
+    command: PROFILE_LINK_COMMAND,
+    flow: 'one_time_profile_link'
   };
 }
 
@@ -831,7 +1142,12 @@ async function loginOverview(query = {}) {
   const { page, limit, skip } = parsePagination(query);
   const filter = {};
   if (query.identifierType) filter.identifierType = query.identifierType;
-  if (query.deliveryChannel) filter['deliveries.channel'] = query.deliveryChannel;
+  if (query.deliveryChannel) {
+    filter.$or = [
+      { 'deliveries.channel': query.deliveryChannel },
+      { flow: 'link', activationChannel: query.deliveryChannel }
+    ];
+  }
   const [items, total, gmailStatus, cloudStatus, telegramStatus, templateAvailability] = await Promise.all([
     ProfileAuthChallenge.find(filter)
       .select('-identifierHash -codeHash -requestIpHash')
@@ -852,8 +1168,8 @@ async function loginOverview(query = {}) {
         name: null,
         languageCode: null,
         bodyParameter: null,
-        command: PROFILE_LOGIN_COMMAND,
-        flow: 'whatsapp_service_window',
+        command: PROFILE_LINK_COMMAND,
+        flow: 'one_time_profile_link',
         description: PROFILE_LOGIN_FLOW.description,
         editable: false,
         approvalConfirmed: templateAvailability.approvalConfirmed,
@@ -862,14 +1178,14 @@ async function loginOverview(query = {}) {
         languages: templateAvailability.languages,
         checkedAt: templateAvailability.checkedAt,
         statusReasonCode: templateAvailability.reasonCode,
-        prerequisite: 'Configure o numero publico do WhatsApp Cloud. O contato inicia a conversa e o sistema responde dentro da janela de 24 horas.'
+        prerequisite: 'Configure o numero publico do WhatsApp Cloud e/ou Gmail. O link e assinado, de uso unico e valido por no maximo 7 dias.'
       },
       providers: {
         email: { configured: Boolean(gmailStatus.configured) },
         whatsapp_cloud: {
           configured: Boolean(cloudStatus.sendConfigured || cloudStatus.configured),
           serviceWindowFlow: true,
-          command: PROFILE_LOGIN_COMMAND
+          command: PROFILE_LINK_COMMAND
         },
         telegram: { configured: Boolean(telegramStatus.configured) }
       }
@@ -882,13 +1198,17 @@ async function loginOverview(query = {}) {
       status: challengeStatus(challenge),
       attempts: challenge.attempts,
       maxAttempts: challenge.maxAttempts,
+      activationChannel: challenge.activationChannel || null,
+      linkSource: challenge.linkSource || null,
       deliveries: (challenge.deliveries || []).map((delivery) => ({
         channel: delivery.channel,
         status: delivery.status,
         errorCode: delivery.errorCode || null,
         attemptedAt: delivery.attemptedAt
       })),
-      expiresAt: challengeCodeExpiry(challenge),
+      expiresAt: challenge.flow === 'link'
+        ? challenge.linkExpiresAt || challenge.expiresAt
+        : challengeCodeExpiry(challenge),
       activatedAt: challenge.activatedAt || null,
       createdAt: challenge.createdAt,
       consumedAt: challenge.consumedAt
@@ -914,5 +1234,15 @@ module.exports = {
   deliveryHistory,
   loginOverview,
   profileTemplateAvailability,
-  issueProfileToken
+  issueProfileToken,
+  PROFILE_LINK_COMMAND,
+  normalizeBrazilianLoginPhone,
+  createProfileLoginMarker,
+  parseProfileLoginInvocation,
+  requestLogin,
+  activateProfileLoginFromWhatsapp,
+  createDirectProfileLink,
+  revokeProfileLink,
+  exchangeProfileLink,
+  resolveActiveProfileContactId
 };

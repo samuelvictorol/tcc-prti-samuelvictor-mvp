@@ -169,7 +169,6 @@ const channels = computed(() => [
 ])
 
 const enabledChannelOptions = computed(() => channels.value.filter((channel) => channel.enabled))
-const enabledChannelNames = computed(() => enabledChannelOptions.value.map((channel) => channel.label).join(', '))
 const quickEnabledChannelOptions = computed(() => enabledChannelOptions.value.filter((channel) => channel.value !== 'whatsapp_cloud'))
 const templateEnabledChannelOptions = computed(() => enabledChannelOptions.value)
 const dispatchChannelOptions = computed(() => tab.value === 'quick'
@@ -505,21 +504,6 @@ onMounted(loadData)
 
         <q-tab-panels v-model="tab" animated class="transparent">
           <q-tab-panel v-for="panel in ['global', 'template', 'quick']" :key="panel" :name="panel" class="q-pa-none">
-            <div v-if="panel === 'global'" class="global-note q-mb-md">
-              <q-icon name="hub" size="24px" />
-              <div>
-                <strong>Escolha um, dois ou três canais</strong>
-                <span v-if="enabledChannelOptions.length">Ativos agora: {{ enabledChannelNames }}. Selecione somente os canais desejados e um template para cada um; contatos sem autorização serão ignorados sem bloquear os demais.</span>
-                <span v-else>Configure ao menos um canal. Os demais poderão continuar vazios.</span>
-              </div>
-            </div>
-            <div v-else-if="panel === 'template' && app.isChannelEnabled('whatsappCloud')" class="global-note q-mb-md">
-              <q-icon name="cloud_sync" size="24px" />
-              <div><strong>WhatsApp oficial usa um formulário próprio</strong><span>Nome aprovado, componentes e permissões são montados sem JSON na tela do canal.</span></div>
-              <q-space />
-              <q-btn flat color="primary" no-caps label="Abrir WhatsApp oficial" to="/whatsapp-cloud" />
-            </div>
-
             <div class="form-grid">
               <q-select
                 v-model="form.contactIds"
@@ -812,28 +796,6 @@ onMounted(loadData)
 
 .composer-tabs {
   justify-content: flex-start;
-}
-
-.global-note {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 15px;
-  border: 1px solid rgba(53, 188, 164, 0.2);
-  border-radius: 15px;
-  background: rgba(130, 248, 230, 0.12);
-  color: #184b44;
-}
-
-.global-note strong,
-.global-note span {
-  display: block;
-}
-
-.global-note span {
-  margin-top: 2px;
-  color: #55706c;
-  font-size: 0.78rem;
 }
 
 .global-template-grid,

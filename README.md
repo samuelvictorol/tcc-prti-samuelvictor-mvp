@@ -50,7 +50,7 @@ A tela **Chats** representa apenas conversas da API oficial. A Meta não disponi
 
 1. Abre um convite público e lê Termos de Uso, Termos de Serviço e Política de Privacidade.
 2. Inicia o canal escolhido e autoriza notificações quando aplicável.
-3. Pode acessar `/meu-perfil` por email ou telefone usando um código único de seis dígitos, válido por dez minutos por padrão.
+3. Pode acessar `/meu-perfil` por telefone, confirmando `/login` no WhatsApp oficial, ou por email, usando um link assinado de uso único válido por no máximo sete dias.
 4. Consulta seus dados e histórico e revoga permissões separadamente.
 
 ### Administrador
@@ -89,7 +89,7 @@ Três templates WhatsApp Cloud são semeados e protegidos contra exclusão:
 
 O nome e o idioma precisam estar disponíveis e aprovados na conta do WhatsApp Business que atende o número remetente correspondente. O preset `hello_world` também está disponível para teste, mas não é um registro fixo do banco.
 
-O acesso ao Meu perfil não depende mais de um template de autenticação: a página abre o número oficial com `/gerar-codigo`, o contato inicia a conversa e a API responde com texto livre dentro da janela de atendimento de 24 horas. O mesmo código temporário é enviado, de forma independente, ao Gmail e Telegram previamente vinculados.
+O acesso ao Meu perfil não depende de template de autenticação. Por telefone, a página abre o número oficial com `/login` e um marcador assinado; após o webhook confirmar o mesmo contato, a API responde dentro da janela de atendimento com um link de uso único. Por email, esse link é enviado ao endereço já vinculado. O segredo fica no fragmento da URL, é removido antes da troca e nunca é salvo no histórico do chat.
 
 ### Conjuntos de templates
 

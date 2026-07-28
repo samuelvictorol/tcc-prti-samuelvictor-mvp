@@ -55,4 +55,16 @@ describe('canais e alertas sonoros', () => {
     expect(telegram).toContain(':disable="!chatIsAuthorized(selected)"')
     expect(telegram).toContain('ainda não autorizou notificações pelo Telegram')
   })
+
+  it('aplica a identidade visual azul no Telegram e vermelha no Gmail', () => {
+    const telegram = source('pages/TelegramPage.vue')
+    const gmail = source('pages/EmailPage.vue')
+
+    expect(telegram).toContain('telegram-channel-page')
+    expect(telegram).toContain('--q-primary: #229ed9')
+    expect(telegram).not.toContain('color="primary"')
+    expect(gmail).toContain('email-channel-page')
+    expect(gmail).toContain('--q-primary: #d93025')
+    expect(gmail).toContain('.email-channel-page :deep(.q-btn.bg-dark)')
+  })
 })

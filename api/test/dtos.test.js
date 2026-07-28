@@ -112,6 +112,27 @@ test('settings bulk aceita contrato amigavel do frontend', () => {
   assert.equal(result.success, true);
 });
 
+test('settings bulk aceita textos amigaveis do onboarding Telegram e rejeita controle', () => {
+  const valid = bulkSettingsSchema.safeParse({
+    body: {
+      telegram: {
+        messages: {
+          onboarding: 'Olá, {name}! Use {command}.\n{invites}',
+          phoneShare: 'Compartilhe seu telefone pelo botão oficial.',
+          profile: 'Abra seu acesso seguro.',
+          help: 'Aqui você encontra ajuda.'
+        }
+      }
+    }
+  });
+  const invalid = bulkSettingsSchema.safeParse({
+    body: { telegram: { messages: { onboarding: 'Mensagem\u0000invalida' } } }
+  });
+  assert.equal(valid.success, true);
+  assert.equal(valid.data.body.telegram.messages.onboarding.includes('{invites}'), true);
+  assert.equal(invalid.success, false);
+});
+
 test('settings bulk aceita comando WhatsApp amigavel e rejeita caracteres de controle', () => {
   const valid = bulkSettingsSchema.safeParse({ body: {
     whatsappPermission: { command: '/notify-me' }
@@ -227,14 +248,30 @@ test('settings bulk salva e serializa o comando Telegram separado', async (conte
   });
 
   const result = await settingsManager.setBulk(
-    { telegramPermission: { command: '/validar-no-telegram' } },
+    {
+      telegramPermission: { command: '/validar-no-telegram' },
+      telegram: {
+        messages: {
+          onboarding: 'Olá, {name}. {status} {invites} {command}',
+          phoneShare: 'Compartilhe seu telefone.',
+          profile: 'Abra seu perfil com segurança.',
+          help: 'Ajuda amigável.'
+        }
+      }
+    },
     '507f1f77bcf86cd799439011'
   );
 
   assert.ok(result.updated.includes('START_VERIFY_TELEGRAM_PERMISSION'));
+  assert.ok(result.updated.includes('TELEGRAM_ONBOARDING_MESSAGE'));
+  assert.ok(result.updated.includes('TELEGRAM_PHONE_SHARE_MESSAGE'));
+  assert.ok(result.updated.includes('TELEGRAM_PROFILE_MESSAGE'));
+  assert.ok(result.updated.includes('TELEGRAM_HELP_MESSAGE'));
   assert.equal(result.configuration.telegramPermission.command, '/validar-no-telegram');
   assert.equal(result.configuration.telegram.permissionCommand, '/validar-no-telegram');
+  assert.equal(result.configuration.telegram.messages.help, 'Ajuda amigável.');
   assert.match(stored.get('START_VERIFY_TELEGRAM_PERMISSION').valueEncrypted, /^enc:v1:/);
+  assert.match(stored.get('TELEGRAM_ONBOARDING_MESSAGE').valueEncrypted, /^enc:v1:/);
 });
 
 test('settings bulk ignora campos vazios de canais opcionais', () => {

@@ -13,8 +13,7 @@ const pagination = reactive({ page: 1, rowsPerPage: 20, rowsNumber: 0 })
 const columns = [
   { name: 'createdAt', label: 'Solicitado em', field: 'createdAt', align: 'left' },
   { name: 'identifierType', label: 'Identificador', field: 'identifierType', align: 'left' },
-  { name: 'deliveries', label: 'Entregas do código', field: 'deliveries', align: 'left' },
-  { name: 'attempts', label: 'Tentativas', field: 'attempts', align: 'center' },
+  { name: 'deliveries', label: 'Canal de acesso', field: 'deliveries', align: 'left' },
   { name: 'status', label: 'Situação', field: 'status', align: 'left' },
   { name: 'expiresAt', label: 'Expira em', field: 'expiresAt', align: 'left' },
 ]
@@ -38,7 +37,7 @@ function statusMeta(status) {
     revoked: { label: 'Revogado', color: 'grey-7' },
     expired: { label: 'Expirado', color: 'grey-7' },
     blocked: { label: 'Bloqueado', color: 'negative' },
-    pending_login: { label: 'Aguardando código', color: 'warning' },
+    pending_login: { label: 'Aguardando confirmação', color: 'warning' },
     awaiting_whatsapp: { label: 'Aguardando WhatsApp', color: 'info' },
     active: { label: 'Ativo', color: 'positive' },
     sent: { label: 'Enviado', color: 'positive' },
@@ -86,7 +85,7 @@ onMounted(() => load())
       <div>
         <div class="eyebrow">ACESSO DO CONTATO</div>
         <h1>Logins do Meu Perfil</h1>
-        <p>Códigos temporários de seis dígitos, com validade de 10 minutos e sem armazenamento do valor em texto aberto.</p>
+        <p>Links de acesso assinados, de uso único e com validade máxima de 7 dias.</p>
       </div>
       <q-btn outline no-caps icon="refresh" label="Atualizar" :loading="loading" @click="load()" />
     </header>
@@ -95,24 +94,24 @@ onMounted(() => load())
       <q-card flat class="status-card template-card">
         <q-card-section class="status-card__title">
           <q-avatar color="positive" text-color="white" icon="forum" />
-          <div><span>FLUXO DE ACESSO</span><strong>{{ template.label || 'Código pela conversa oficial' }}</strong></div>
+          <div><span>FLUXO DE ACESSO</span><strong>{{ template.label || 'Link seguro de uso único' }}</strong></div>
           <div class="status-card__actions">
             <ContextHelp
-              title="Como o código é gerado"
+              title="Como o acesso seguro funciona"
               tooltip="Entenda o login pela conversa oficial"
             >
               <p><strong>{{ template.prerequisite || 'Configure o número público do WhatsApp Cloud.' }}</strong></p>
-              <p>Ao solicitar acesso em <code>/meu-perfil</code>, o sistema abre o WhatsApp oficial com o comando <code>{{ template.command || '/gerar-codigo' }}</code>.</p>
-              <p>O contato envia o comando, abre a janela oficial de atendimento de 24 horas e recebe uma resposta de texto com um código de seis dígitos.</p>
-              <p>O mesmo código também é enviado ao Gmail e Telegram já vinculados, de forma independente. Nenhum template de autenticação da Meta é necessário para este fluxo.</p>
+              <p>Com telefone, o sistema abre o WhatsApp oficial com <code>/login</code> e um marcador assinado que não pode ser alterado.</p>
+              <p>Após a confirmação pelo webhook, o atendimento responde com um link de uso único. Com email, o mesmo tipo de link é enviado à caixa de entrada cadastrada.</p>
+              <p>O token fica no fragmento da URL, é removido antes da troca e não depende de template de autenticação da Meta.</p>
             </ContextHelp>
             <q-badge :color="statusMeta(template.status).color" :label="statusMeta(template.status).label" />
           </div>
         </q-card-section>
         <q-card-section class="template-details">
-          <div><small>Comando</small><code>{{ template.command || '/gerar-codigo' }}</code></div>
-          <div><small>Canal de início</small><strong>WhatsApp oficial</strong></div>
-          <div><small>Validade</small><strong>10 minutos</strong></div>
+          <div><small>Comando</small><code>/login</code></div>
+          <div><small>Canais de início</small><strong>WhatsApp oficial ou Gmail</strong></div>
+          <div><small>Validade máxima</small><strong>7 dias · uso único</strong></div>
         </q-card-section>
       </q-card>
 
@@ -122,7 +121,7 @@ onMounted(() => load())
           <div><span>PROVEDOR</span><strong>Gmail</strong></div>
           <q-badge :color="providers.email?.configured ? 'positive' : 'grey-7'" :label="providers.email?.configured ? 'Configurado' : 'Não configurado'" />
         </q-card-section>
-        <q-card-section class="provider-copy">Envia o mesmo código para o email já vinculado ao contato.</q-card-section>
+        <q-card-section class="provider-copy">Envia o link seguro de uso único para o email já vinculado ao contato.</q-card-section>
       </q-card>
 
       <q-card flat class="status-card">
@@ -132,7 +131,7 @@ onMounted(() => load())
           <q-badge :color="providers.whatsapp_cloud?.configured ? 'positive' : 'grey-7'" :label="providers.whatsapp_cloud?.configured ? 'Configurado' : 'Não configurado'" />
         </q-card-section>
         <q-card-section class="provider-copy">
-          Responde com texto livre porque o próprio contato abre a conversa e inicia a janela oficial de atendimento.
+          Recebe <code>/login</code> com marcador seguro e responde com o link temporário dentro da janela oficial.
         </q-card-section>
       </q-card>
 
@@ -142,7 +141,7 @@ onMounted(() => load())
           <div><span>PROVEDOR</span><strong>Telegram</strong></div>
           <q-badge :color="providers.telegram?.configured ? 'positive' : 'grey-7'" :label="providers.telegram?.configured ? 'Configurado' : 'Não configurado'" />
         </q-card-section>
-        <q-card-section class="provider-copy">Envia o mesmo código somente ao Telegram já vinculado e autorizado pelo contato.</q-card-section>
+        <q-card-section class="provider-copy">Pode oferecer um link seguro ao contato já vinculado pelo bot.</q-card-section>
       </q-card>
     </section>
 
@@ -168,9 +167,18 @@ onMounted(() => load())
             <q-chip v-for="delivery in props.row.deliveries" :key="delivery.channel" dense outline :color="statusMeta(delivery.status).color" :icon="channelMeta(delivery.channel).icon">
               {{ channelMeta(delivery.channel).label }} · {{ statusMeta(delivery.status).label }}
             </q-chip>
+            <q-chip
+              v-if="!props.row.deliveries?.length && props.row.activationChannel"
+              dense
+              outline
+              :color="channelMeta(props.row.activationChannel).color"
+              :icon="channelMeta(props.row.activationChannel).icon"
+            >
+              {{ channelMeta(props.row.activationChannel).label }} · link seguro
+            </q-chip>
+            <span v-if="!props.row.deliveries?.length && !props.row.activationChannel">—</span>
           </div></q-td>
         </template>
-        <template #body-cell-attempts="props"><q-td :props="props">{{ props.row.attempts }} / {{ props.row.maxAttempts }}</q-td></template>
         <template #body-cell-status="props"><q-td :props="props"><q-badge :color="challengeMeta(props.row.status).color" :label="challengeMeta(props.row.status).label" /></q-td></template>
         <template #body-cell-expiresAt="props"><q-td :props="props">{{ formatDate(props.row.expiresAt) }}</q-td></template>
         <template #no-data><div class="full-width text-center q-pa-xl text-grey-7">Nenhuma solicitação de acesso registrada.</div></template>

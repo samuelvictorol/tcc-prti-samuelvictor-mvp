@@ -21,6 +21,13 @@ describe('identificador do login de perfil', () => {
     expect(normalizeProfileIdentifierForRequest(input.value, input.mode)).toBe('5511931234567')
   })
 
+  it('aceita telefone brasileiro nacional e E.164 sem duplicar o DDI', () => {
+    expect(formatBrazilianProfilePhone('61981748795')).toBe('(61) 9 8174-8795')
+    expect(formatBrazilianProfilePhone('5561981748795')).toBe('(61) 9 8174-8795')
+    expect(normalizeProfileIdentifierForRequest('61981748795', 'phone')).toBe('5561981748795')
+    expect(normalizeProfileIdentifierForRequest('5561981748795', 'phone')).toBe('5561981748795')
+  })
+
   it('aplica a máscara nacional sem aceitar mais de onze dígitos', () => {
     expect(updateBrazilianProfilePhoneInput('1131234567')).toBe('(11) 3123-4567')
     expect(updateBrazilianProfilePhoneInput('11931234567')).toBe('(11) 9 3123-4567')

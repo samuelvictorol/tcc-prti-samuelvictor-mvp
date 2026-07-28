@@ -14,11 +14,11 @@ const contactsManager = require('./contacts.manager');
 const groupsManager = require('./groups.manager');
 
 const MAX_SLUG_ATTEMPTS = 200;
-const ATTRIBUTION_PREFIX = 'ni';
-const ATTRIBUTION_NONCE_BYTES = 8;
-const ATTRIBUTION_SIGNATURE_BYTES = 12;
+const ATTRIBUTION_NONCE_BYTES = 4;
+const ATTRIBUTION_SIGNATURE_BYTES = 8;
 const ATTRIBUTION_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
-const ATTRIBUTION_MARKER_PATTERN = /^ni_([a-f\d]{24})_([A-Za-z0-9_-]{11})_([A-Za-z0-9_-]{16})$/;
+const LEGACY_ATTRIBUTION_MARKER_PATTERN = /^ni_([a-f\d]{24})_([A-Za-z0-9_-]{11})_([A-Za-z0-9_-]{16})$/;
+const ATTRIBUTION_MARKER_PATTERN = /^([a-z0-9][a-z0-9-]{1,11})_([A-Za-z0-9_-]{16})_([A-Za-z0-9_-]{6})_([A-Za-z0-9_-]{11})$/;
 
 function slugBaseFromTitle(value) {
   const normalized = String(value || '')
@@ -70,32 +70,68 @@ function telegramInviteRedirectUrl(value, permissionCommand) {
   }
 }
 
-function attributionSignature(inviteId, nonce) {
+function attributionSignature(inviteId, nonce, slugPrefix = '') {
   return crypto.createHmac('sha256', env.inviteTokenSecret)
-    .update(String(inviteId).toLowerCase() + '.' + nonce)
+    .update(`invite-attribution:v2:${slugPrefix}:${String(inviteId).toLowerCase()}:${nonce}`)
     .digest()
     .subarray(0, ATTRIBUTION_SIGNATURE_BYTES)
     .toString('base64url');
 }
 
-function createAttributionMarker(inviteId, nonce = crypto.randomBytes(ATTRIBUTION_NONCE_BYTES).toString('base64url')) {
+function legacyAttributionSignature(inviteId, nonce) {
+  return crypto.createHmac('sha256', env.inviteTokenSecret)
+    .update(String(inviteId).toLowerCase() + '.' + nonce)
+    .digest()
+    .subarray(0, 12)
+    .toString('base64url');
+}
+
+function compactInviteId(inviteId) {
+  return Buffer.from(String(inviteId), 'hex').toString('base64url');
+}
+
+function expandInviteId(compactId) {
+  const value = Buffer.from(compactId, 'base64url');
+  return value.length === 12 ? value.toString('hex') : null;
+}
+
+function attributionSlugPrefix(slug) {
+  return slugBaseFromTitle(slug || 'convite').slice(0, 12).replace(/-+$/g, '') || 'convite';
+}
+
+function createAttributionMarker(inviteId, slug = 'convite', suppliedNonce) {
   const normalizedId = String(inviteId || '').toLowerCase();
-  if (!/^[a-f\d]{24}$/.test(normalizedId) || !/^[A-Za-z0-9_-]{11}$/.test(nonce)) {
+  const slugPrefix = attributionSlugPrefix(slug);
+  const nonce = suppliedNonce
+    || crypto.randomBytes(ATTRIBUTION_NONCE_BYTES).toString('base64url');
+  if (!/^[a-f\d]{24}$/.test(normalizedId) || !/^[A-Za-z0-9_-]{6}$/.test(nonce)) {
     throw new ApiError(422, 'Convite invalido para atribuicao', null, 'INVITE_ATTRIBUTION_INVALID');
   }
-  return `${ATTRIBUTION_PREFIX}_${normalizedId}_${nonce}_${attributionSignature(normalizedId, nonce)}`;
+  return `${slugPrefix}_${compactInviteId(normalizedId)}_${nonce}_${attributionSignature(normalizedId, nonce, slugPrefix)}`;
 }
 
 function parseAttributionMarker(value) {
   const marker = String(value || '').trim();
+  const legacy = marker.match(LEGACY_ATTRIBUTION_MARKER_PATTERN);
+  if (legacy) {
+    const [, inviteId, nonce, signature] = legacy;
+    const expected = legacyAttributionSignature(inviteId, nonce);
+    const providedBuffer = Buffer.from(signature);
+    const expectedBuffer = Buffer.from(expected);
+    if (providedBuffer.length !== expectedBuffer.length
+      || !crypto.timingSafeEqual(providedBuffer, expectedBuffer)) return null;
+    return { marker, inviteId, version: 1 };
+  }
   const match = marker.match(ATTRIBUTION_MARKER_PATTERN);
   if (!match) return null;
-  const [, inviteId, nonce, signature] = match;
-  const expected = attributionSignature(inviteId, nonce);
+  const [, slugPrefix, compactId, nonce, signature] = match;
+  const inviteId = expandInviteId(compactId);
+  if (!inviteId) return null;
+  const expected = attributionSignature(inviteId, nonce, slugPrefix);
   const providedBuffer = Buffer.from(signature);
   const expectedBuffer = Buffer.from(expected);
   if (providedBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(providedBuffer, expectedBuffer)) return null;
-  return { marker, inviteId };
+  return { marker, inviteId, slugPrefix, version: 2 };
 }
 
 function telegramInviteRedirectUrlWithAttribution(value, permissionCommand, attributionMarker) {
@@ -186,8 +222,8 @@ async function resolveWhatsappInviteInvocation(text, permissionCommand) {
 
 async function resolveTelegramInviteInvocation(text) {
   const match = String(text || '').normalize('NFKC').trim()
-    .match(/^\/start(?:@[a-z0-9_]{3,32})?\s+(ni_[A-Za-z0-9_-]{1,61})$/i);
-  if (!match) return null;
+    .match(/^\/start(?:@[a-z0-9_]{3,32})?\s+([A-Za-z0-9_-]{1,64})$/i);
+  if (!match || !parseAttributionMarker(match[1])) return null;
   const attribution = await resolveAttributionMarker(match[1]);
   return attribution ? {
     ...attribution,
@@ -369,7 +405,7 @@ async function track(slug, linkId, token, meta = {}) {
   if (!link || !link.active) throw new ApiError(404, 'Link de convite nao encontrado');
   const permissionCommand = await settingsManager.getWhatsappPermissionCommand();
   const supportsAttribution = ['telegram', 'whatsapp_cloud'].includes(link.channel);
-  const attributionMarker = supportsAttribution ? createAttributionMarker(invite._id) : null;
+  const attributionMarker = supportsAttribution ? createAttributionMarker(invite._id, invite.slug) : null;
   const redirectUrl = link.channel === 'telegram'
     ? telegramInviteRedirectUrlWithAttribution(link.url, permissionCommand, attributionMarker)
     : link.channel === 'whatsapp_cloud'

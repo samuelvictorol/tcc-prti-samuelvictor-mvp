@@ -104,8 +104,8 @@ Snapshots manuais e automáticos são criptografados e armazenados em GridFS, ev
 ### Contato em `/meu-perfil`
 
 - Identificador público é email ou telefone; a busca exige correspondência única.
-- Código aleatório de seis dígitos é guardado apenas como HMAC, tem uso único, expiração e limite de tentativas/reenvio.
-- O mesmo código é tentado em paralelo por Gmail, WhatsApp Cloud e Telegram autorizado; falha de um canal não cancela os outros.
+- O login atual usa um link opaco de uso único; o fluxo numérico anterior permanece apenas como compatibilidade interna e não é apresentado na interface pública.
+- No WhatsApp, o webhook confirma `/login` e o remetente antes de responder pelo chat; no email e Telegram, o link é emitido somente para a identidade já vinculada.
 - Após a validação, um JWT separado (`notify-app-contact`) permite somente ler/editar o próprio perfil, revogar consentimento e consultar o próprio histórico.
 
 O código não é persistido em logs ou histórico de conversa.
@@ -150,7 +150,7 @@ Somente Gmail aceita HTML. Telegram usa definições próprias; WhatsApp Cloud u
 
 Esses registros são semeados, marcados como `systemManaged` e não podem ter sua identidade alterada ou ser excluídos. Antes do envio, o mesmo nome e idioma devem estar disponíveis e aprovados na conta do WhatsApp Business que atende o número remetente correspondente. `hello_world` é apenas um preset de teste.
 
-O login público usa um desafio pendente associado ao contato. O código só é gerado quando o webhook recebe `/gerar-codigo` do mesmo número; a resposta usa a janela de atendimento aberta pelo contato e replica o código para Gmail e Telegram vinculados. Apenas o hash do código é persistido.
+O login público cria um desafio associado ao contato. Por telefone, o usuário envia `/login` com um marcador curto e assinado ao número oficial; o webhook valida remetente, marcador e desafio antes de responder com um link de uso único. Por email, o mesmo tipo de link é entregue pelo Gmail configurado. O token fica no fragmento da URL, nunca no histórico do chat, e é consumido atomicamente na primeira abertura.
 
 O builder custom do Cloud valida componentes `header`, `body` e `button`, índices e subtipos, parâmetros nomeados/posicionais e os tipos aceitos pela Meta.
 

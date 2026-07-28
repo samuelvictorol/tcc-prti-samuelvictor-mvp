@@ -93,7 +93,7 @@ services:
       - key: PROFILE_CODE_WINDOW_SECONDS
         value: "3600"
       - key: PROFILE_CODE_RESEND_SECONDS
-        value: "60"
+        value: "30"
 
       - key: ADMIN1_EMAIL
         sync: false
@@ -104,6 +104,10 @@ services:
         value: /notify-me
       - key: START_VERIFY_TELEGRAM_PERMISSION
         value: /verify-me
+      - key: PROFILE_LINK_TTL_SECONDS
+        value: "604800"
+      - key: PROFILE_SESSION_TTL_SECONDS
+        value: "604800"
       - key: WHATSAPP_CLOUD_API_VERSION
         value: v25.0
       - key: RATE_LIMIT_WINDOW_MS

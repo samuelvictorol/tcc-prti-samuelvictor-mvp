@@ -271,7 +271,7 @@ test('limite por identificador bloqueia nova solicitacao antes de consultar o co
 test('codigo correto e de uso unico emite JWT exclusivo de contato', async (context) => {
   restoreAfter(context, [
     [ProfileAuthChallenge, 'findOne'], [ProfileAuthChallenge, 'findOneAndUpdate'],
-    [Contact, 'exists'], [contactsManager, 'getById']
+    [Contact, 'exists'], [Contact, 'findById'], [contactsManager, 'getById']
   ]);
   const challengeId = '9f9e0f12-353a-4c28-9a96-b9e267def122';
   const code = '384920';
@@ -294,6 +294,7 @@ test('codigo correto e de uso unico emite JWT exclusivo de contato', async (cont
     return claims === 1 ? { ...challenge, consumedAt: new Date() } : null;
   };
   Contact.exists = async () => ({ _id: contactId });
+  Contact.findById = () => chain({ _id: contactId, active: true, deletedAt: null });
   contactsManager.getById = async () => profileContact(contactId);
 
   const result = await profileManager.verifyCode({ challengeId, code });
@@ -465,14 +466,19 @@ test('painel administrativo de logins nunca devolve codigo ou hashes', async (co
     [settingsManager, 'getValue'],
     [global, 'fetch']
   ]);
-  ProfileAuthChallenge.find = () => chain([{
+  let overviewFilter;
+  ProfileAuthChallenge.find = (filter) => {
+    overviewFilter = filter;
+    return chain([{
     _id: '507f1f77bcf86cd799439088',
     challengeId: '9f9e0f12-353a-4c28-9a96-b9e267def122',
     contact: '507f1f77bcf86cd799439011', identifierType: 'email',
     codeHash: 'nao-pode-sair', identifierHash: 'tambem-nao', requestIpHash: 'nem-ip',
+    flow: 'link', activationChannel: 'email', linkSource: 'email_login_request',
     attempts: 1, maxAttempts: 5, expiresAt: new Date(Date.now() + 60_000),
-    deliveries: [{ channel: 'email', status: 'sent' }], createdAt: new Date()
-  }]);
+    deliveries: [], createdAt: new Date()
+    }]);
+  };
   ProfileAuthChallenge.countDocuments = async () => 1;
   gmailManager.status = async () => ({ configured: true });
   whatsappCloudManager.status = async () => ({ configured: true, sendConfigured: true });
@@ -484,11 +490,15 @@ test('painel administrativo de logins nunca devolve codigo ou hashes', async (co
   })[key];
   global.fetch = async () => { throw new Error('o fluxo nao deve consultar templates da Meta'); };
 
-  const result = await profileManager.loginOverview({ page: 1, limit: 20 });
+  const result = await profileManager.loginOverview({
+    page: 1,
+    limit: 20,
+    deliveryChannel: 'email'
+  });
   const serialized = JSON.stringify(result);
   assert.equal(result.configuration.template.name, null);
-  assert.equal(result.configuration.template.command, '/gerar-codigo');
-  assert.equal(result.configuration.template.flow, 'whatsapp_service_window');
+  assert.equal(result.configuration.template.command, '/login');
+  assert.equal(result.configuration.template.flow, 'one_time_profile_link');
   assert.equal(result.configuration.template.editable, false);
   assert.equal(result.configuration.template.approvalConfirmed, true);
   assert.equal(result.configuration.template.found, true);
@@ -496,6 +506,12 @@ test('painel administrativo de logins nunca devolve codigo ou hashes', async (co
   assert.deepEqual(result.configuration.template.languages, []);
   assert.equal(result.configuration.providers.whatsapp_cloud.serviceWindowFlow, true);
   assert.equal(result.configuration.providers.telegram.configured, true);
+  assert.deepEqual(overviewFilter.$or, [
+    { 'deliveries.channel': 'email' },
+    { flow: 'link', activationChannel: 'email' }
+  ]);
+  assert.equal(result.items[0].activationChannel, 'email');
+  assert.equal(result.items[0].linkSource, 'email_login_request');
   assert.doesNotMatch(serialized, /nao-pode-sair|tambem-nao|nem-ip|codeHash|identifierHash|requestIpHash/);
   assert.doesNotMatch(serialized, /secret-token|do-not-expose/);
 });

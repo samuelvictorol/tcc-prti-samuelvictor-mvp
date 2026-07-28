@@ -307,7 +307,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <q-page class="page-container">
+  <q-page class="page-container email-channel-page">
     <PageHeader
       eyebrow="Canal de email"
       title="Gmail"
@@ -484,6 +484,15 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.email-channel-page {
+  --q-primary: #d93025;
+}
+
+.email-channel-page :deep(.q-btn.bg-dark) {
+  background: #d93025 !important;
+  color: #fff !important;
+}
+
 .email-layout {
   grid-template-columns: minmax(0, 1.35fr) minmax(310px, 0.65fr);
   align-items: start;

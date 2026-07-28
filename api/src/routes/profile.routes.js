@@ -6,8 +6,8 @@ const { requireAuth } = require('../middlewares/auth');
 const { requireProfileAuth } = require('../middlewares/profile-auth');
 const { profileCodeRequestLimiter, profileCodeVerifyLimiter } = require('../middlewares/security');
 const {
-  requestProfileCodeSchema,
-  verifyProfileCodeSchema,
+  requestProfileLoginSchema,
+  exchangeProfileLinkSchema,
   updateOwnProfileSchema,
   revokeOwnConsentSchema,
   setOwnEmailConsentSchema,
@@ -17,8 +17,8 @@ const {
 const { env } = require('../config/env');
 
 const profileRouter = express.Router();
-profileRouter.post('/request-code', profileCodeRequestLimiter, validate(requestProfileCodeSchema), asyncHandler(controller.requestCode));
-profileRouter.post('/verify-code', profileCodeVerifyLimiter, validate(verifyProfileCodeSchema), asyncHandler(controller.verifyCode));
+profileRouter.post('/request-login', profileCodeRequestLimiter, validate(requestProfileLoginSchema), asyncHandler(controller.requestLogin));
+profileRouter.post('/exchange-link', profileCodeVerifyLimiter, validate(exchangeProfileLinkSchema), asyncHandler(controller.exchangeLink));
 profileRouter.use(requireProfileAuth);
 profileRouter.get('/', asyncHandler(controller.me));
 profileRouter.patch('/', validate(updateOwnProfileSchema), asyncHandler(controller.update));

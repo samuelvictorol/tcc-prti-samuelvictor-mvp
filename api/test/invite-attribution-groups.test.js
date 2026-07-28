@@ -23,9 +23,12 @@ const sharedContactId = new mongoose.Types.ObjectId('507f1f77bcf86cd799439023');
 const manualContactId = new mongoose.Types.ObjectId('507f1f77bcf86cd799439024');
 
 test('marcador de convite cabe no start Telegram, detecta adulteracao e substitui o start padrao', () => {
-  const marker = invitesManager.createAttributionMarker(inviteIdA);
-  assert.equal(marker.length <= 64, true);
+  const marker = invitesManager.createAttributionMarker(inviteIdA, 'campanha-verao-promocional');
+  assert.equal(marker.startsWith('campanha-ver'), true);
+  assert.equal(marker.length <= 48, true);
   assert.equal(invitesManager.parseAttributionMarker(marker)?.inviteId, String(inviteIdA));
+  const sixCharacterSlug = invitesManager.createAttributionMarker(inviteIdA, 'evento');
+  assert.equal(sixCharacterSlug.startsWith('evento_'), true);
 
   const last = marker.at(-1);
   const tampered = marker.slice(0, -1) + (last === 'A' ? 'B' : 'A');

@@ -219,11 +219,11 @@ const operationalSignals = [
           <span class="help-kicker">Área do contato</span>
           <h2 id="profile-title">Meu perfil</h2>
           <p>
-            Em <strong>/meu-perfil</strong>, o contato entra com email ou telefone, valida um código
-            temporário e acompanha os canais autorizados e as notificações recebidas.
+            Em <strong>/meu-perfil</strong>, o contato entra com email ou telefone por um link
+            pessoal de uso único e acompanha os canais autorizados e as notificações recebidas.
           </p>
           <div class="profile-help__features">
-            <div><q-icon name="password" /><span><strong>Acesso seguro</strong><small>Código temporário enviado pelos canais disponíveis.</small></span></div>
+            <div><q-icon name="link" /><span><strong>Acesso seguro</strong><small>Link pessoal, de uso único, enviado pelo canal confirmado.</small></span></div>
             <div><q-icon name="tune" /><span><strong>Preferências</strong><small>Revogação de permissões com confirmação explícita.</small></span></div>
             <div><q-icon name="history" /><span><strong>Histórico individual</strong><small>Somente entregas relacionadas ao próprio contato.</small></span></div>
           </div>

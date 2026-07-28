@@ -1,15 +1,15 @@
 const { z, paginationQuery } = require('./common.dto');
 
-const requestProfileCodeSchema = z.object({
+const requestProfileLoginSchema = z.object({
   body: z.object({
+    identifierType: z.enum(['email', 'phone']),
     identifier: z.string().trim().min(7).max(254)
   })
 });
 
-const verifyProfileCodeSchema = z.object({
+const exchangeProfileLinkSchema = z.object({
   body: z.object({
-    challengeId: z.string().uuid(),
-    code: z.string().trim().regex(/^\d{6}$/, 'Codigo deve conter 6 digitos')
+    token: z.string().trim().min(40).max(4096)
   })
 });
 
@@ -46,8 +46,8 @@ const profileLoginLogsSchema = z.object({
 });
 
 module.exports = {
-  requestProfileCodeSchema,
-  verifyProfileCodeSchema,
+  requestProfileLoginSchema,
+  exchangeProfileLinkSchema,
   updateOwnProfileSchema,
   revokeOwnConsentSchema,
   setOwnEmailConsentSchema,

@@ -35,6 +35,7 @@ const localMediaFileIds = new Map();
 
 const BOT_IDENTITY_TTL_MS = 5 * 60 * 1000;
 const BOT_IDENTITY_FAILURE_TTL_MS = 30 * 1000;
+const TELEGRAM_AVATAR_MAX_BYTES = 128 * 1024;
 const TELEGRAM_ALLOWED_UPDATES = Object.freeze(['message', 'channel_post', 'my_chat_member', 'callback_query']);
 const ONBOARDING_PHONE_CALLBACK = 'notify:onboarding:phone:v1';
 const ONBOARDING_PROFILE_CALLBACK = 'notify:onboarding:profile:v1';
@@ -338,8 +339,80 @@ async function publicProfileUrl() {
   }
 }
 
-async function sendOnboardingMenu(chatId, command) {
-  const profileUrl = await publicProfileUrl();
+async function configuredTelegramMessage(key, fallback) {
+  const configured = await settingsManager.getValue(key);
+  return String(configured || fallback || '').trim().slice(0, 3000);
+}
+
+function renderTelegramMessage(template, variables = {}) {
+  return String(template || '').replace(/\{(name|command|invites|status)\}/g, (_match, key) => (
+    variables[key] === undefined || variables[key] === null ? '' : String(variables[key])
+  )).trim();
+}
+
+function inviteSummary(contact = {}) {
+  const allOrigins = contact.inviteOrigins || [];
+  const origins = allOrigins.slice(0, 8);
+  if (!origins.length) return 'Nenhum convite associado a este cadastro.';
+  return [
+    'Convites associados:',
+    ...origins.map((origin) => {
+      const title = String(origin.title || origin.slug || 'Convite').slice(0, 100);
+      const slug = String(origin.slug || '').slice(0, 100);
+      return `• ${title}${slug ? ` (${slug})` : ''}`;
+    }),
+    ...(allOrigins.length > origins.length ? [`• e mais ${allOrigins.length - origins.length} convite(s)`] : [])
+  ].join('\n');
+}
+
+async function issueSecureProfileLink(contactId, source) {
+  if (!contactId) return null;
+  const publicUrl = await publicProfileUrl();
+  if (!publicUrl) return null;
+  try {
+    // Import tardio evita o ciclo: profile.manager usa telegram.manager nas
+    // entregas OTP, enquanto este fluxo apenas emite um grant temporario.
+    const profileManager = require('./profile.manager');
+    const issued = await profileManager.createDirectProfileLink(contactId, { source });
+    const issuedUrl = new URL(issued.url);
+    const target = new URL(publicUrl);
+    target.search = issuedUrl.search;
+    target.hash = issuedUrl.hash;
+    return { ...issued, url: target.toString() };
+  } catch (error) {
+    await logsManager.create({
+      level: 'warn',
+      channel: 'telegram',
+      action: 'profile.secure_link_failed',
+      message: 'Nao foi possivel emitir o acesso temporario ao Meu perfil',
+      context: { contactId, errorCode: error.code || 'PROFILE_LINK_FAILED', source }
+    }).catch(() => undefined);
+    return null;
+  }
+}
+
+async function sendOnboardingMenu(chatId, command, contact = {}, options = {}) {
+  const [profileLink, onboardingTemplate] = await Promise.all([
+    issueSecureProfileLink(contact.id, 'telegram_onboarding'),
+    configuredTelegramMessage(
+      'TELEGRAM_ONBOARDING_MESSAGE',
+      settingsManager.DEFAULT_TELEGRAM_MESSAGES.onboarding
+    )
+  ]);
+  const profileUrl = profileLink?.url || null;
+  const contactStatus = options.existing
+    ? 'Seu cadastro já existia e foi encontrado com segurança; apenas atualizamos a autorização e os dados recentes.'
+    : 'Seu cadastro foi criado com segurança a partir desta conversa.';
+  let onboardingText = renderTelegramMessage(onboardingTemplate, {
+    name: contact.displayName || 'tudo bem',
+    command: String(command || '/verify-me').slice(0, 80),
+    invites: inviteSummary(contact),
+    status: contactStatus
+  });
+  if (!String(onboardingTemplate).includes('{status}')) {
+    onboardingText = `${onboardingText}\n\n${contactStatus}`;
+  }
+  onboardingText = [...onboardingText].slice(0, 4096).join('');
   if (!profileUrl) {
     await logsManager.create({
       level: 'warn',
@@ -351,15 +424,7 @@ async function sendOnboardingMenu(chatId, command) {
   }
   const result = await call('sendMessage', {
     chat_id: String(chatId),
-    text: [
-      'Permissão de notificações ativada.',
-      '',
-      '1. Vincule seu telefone para unir Telegram e WhatsApp no mesmo cadastro.',
-      '2. Acesse Meu perfil para consultar seus dados e notificações.',
-      '3. Use Ajuda para entender estas opções.',
-      '',
-      `Comando atual: ${String(command || '/notify-me').slice(0, 80)}`
-    ].join('\n'),
+    text: onboardingText,
     reply_markup: {
       inline_keyboard: [
         [{ text: '1. Vincular meu telefone', callback_data: ONBOARDING_PHONE_CALLBACK }],
@@ -421,9 +486,13 @@ function verifiedTelegramContactPhone(message = {}) {
 }
 
 async function offerOptionalPhoneShare(chatId) {
+  const text = await configuredTelegramMessage(
+    'TELEGRAM_PHONE_SHARE_MESSAGE',
+    settingsManager.DEFAULT_TELEGRAM_MESSAGES.phoneShare
+  );
   return call('sendMessage', {
     chat_id: String(chatId),
-    text: 'Se quiser unir este Telegram ao seu cadastro existente, compartilhe seu próprio telefone pelo botão abaixo. Isso é opcional.',
+    text,
     reply_markup: {
       keyboard: [[{
         text: 'Compartilhar meu telefone (opcional)',
@@ -483,6 +552,7 @@ async function fetchTelegramProfileAvatarUncached(userId) {
     profilePhotoCache.set(key, { value: null, expiresAt: Date.now() + 60 * 60 * 1000 });
     return null;
   }
+  if (Number(smallest.file_size || 0) > TELEGRAM_AVATAR_MAX_BYTES) return null;
   const file = await call('getFile', { file_id: smallest.file_id }, 0, credential);
   if (!file?.file_path) return null;
   const safePath = String(file.file_path).split('/').map(encodeURIComponent).join('/');
@@ -491,20 +561,21 @@ async function fetchTelegramProfileAvatarUncached(userId) {
   });
   if (!response.ok) return null;
   const declaredLength = Number(response.headers.get('content-length') || 0);
-  if (declaredLength > 24_000) return null;
+  if (declaredLength > TELEGRAM_AVATAR_MAX_BYTES) return null;
   const contentType = String(response.headers.get('content-type') || 'image/jpeg').toLowerCase();
   if (!contentType.startsWith('image/')) return null;
   const bytes = Buffer.from(await response.arrayBuffer());
-  if (!bytes.length || bytes.length > 24_000) return null;
+  if (!bytes.length || bytes.length > TELEGRAM_AVATAR_MAX_BYTES) return null;
   const dataUrl = 'data:' + contentType.split(';')[0] + ';base64,' + bytes.toString('base64');
   if (profilePhotoCache.size >= 500) profilePhotoCache.delete(profilePhotoCache.keys().next().value);
   profilePhotoCache.set(key, { value: dataUrl, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
   return dataUrl;
 }
 
-async function fetchTelegramProfileAvatar(userId) {
+async function fetchTelegramProfileAvatar(userId, options = {}) {
   const key = String(userId || '');
   if (!key) return null;
+  if (options.force) profilePhotoCache.delete(key);
   if (profilePhotoPending.has(key)) return profilePhotoPending.get(key);
   const pending = fetchTelegramProfileAvatarUncached(key).finally(() => profilePhotoPending.delete(key));
   profilePhotoPending.set(key, pending);
@@ -515,7 +586,9 @@ function scheduleTelegramAvatarHydration(user = {}, context = {}) {
   if (!user.id || context.avatarUrl) return;
   const task = setImmediate(async () => {
     try {
-      const avatarUrl = await fetchTelegramProfileAvatar(user.id);
+      const avatarUrl = await fetchTelegramProfileAvatar(user.id, {
+        force: Boolean(context.forceAvatarRefresh)
+      });
       if (!avatarUrl) return;
       if (context.contactId) await contactsManager.updateChannelAvatar(context.contactId, 'telegram', avatarUrl);
       if (context.externalId) {
@@ -688,32 +761,34 @@ async function handleOnboardingCallback(update, query) {
   }
 
   if (action === 'profile') {
-    const profileUrl = await publicProfileUrl();
+    const contact = await contactsManager.findByChannelAddress('telegram', chatId);
+    const profileLink = await issueSecureProfileLink(contact?.id, 'telegram_onboarding_callback');
+    const profileUrl = profileLink?.url || null;
     if (!profileUrl) {
       await answerMenuCallback(query.id, 'A URL publica do Meu perfil ainda nao esta disponivel. Tente novamente apos configurar o acesso HTTPS.', true);
       return { received: true, updateId: update.update_id, callback: 'onboarding_profile_unavailable' };
     }
+    const profileText = await configuredTelegramMessage(
+      'TELEGRAM_PROFILE_MESSAGE',
+      settingsManager.DEFAULT_TELEGRAM_MESSAGES.profile
+    );
     await answerMenuCallback(query.id, 'Link do Meu perfil atualizado.');
     await call('sendMessage', {
       chat_id: chatId,
-      text: 'Acesse seu Meu perfil pelo botao abaixo.',
+      text: profileText,
       reply_markup: { inline_keyboard: [[{ text: 'Abrir Meu perfil', url: profileUrl }]] }
     });
     return { received: true, updateId: update.update_id, callback: 'onboarding_profile' };
   }
 
+  const helpText = await configuredTelegramMessage(
+    'TELEGRAM_HELP_MESSAGE',
+    settingsManager.DEFAULT_TELEGRAM_MESSAGES.help
+  );
   await answerMenuCallback(query.id, 'Ajuda aberta.');
   await call('sendMessage', {
     chat_id: chatId,
-    text: [
-      'Ajuda do Notify App',
-      '',
-      '1. Vincular meu telefone: abre o botão oficial do Telegram para você compartilhar o seu próprio número. O sistema valida a titularidade e, quando encontra o mesmo telefone no WhatsApp, une os canais em um único contato.',
-      '',
-      '2. Acessar Meu perfil: abre a página segura onde você pode entrar, revisar seus dados, permissões e histórico de notificações.',
-      '',
-      'O compartilhamento do telefone é opcional e nunca é aceito quando pertence a outra pessoa.'
-    ].join('\n')
+    text: helpText
   });
   await logsManager.create({
     channel: 'telegram',
@@ -904,6 +979,7 @@ async function webhook(update, providedSecret) {
           'telegram'
         )
         : null;
+      const effectiveContact = invitationAttribution?.contact || contact;
       if (!existing && contact.upsertState?.created !== false) {
         await notifyNewContact(contact, 'telegram', { source: 'private_message' });
       }
@@ -956,7 +1032,8 @@ async function webhook(update, providedSecret) {
         contactId: contact.id,
         externalId: String(chat.id),
         displayName: displayName(avatarUser, String(chat.id)),
-        isGroup: false
+        isGroup: false,
+        forceAvatarRefresh: sharedContact.verified
       });
       await logsManager.create({ channel: 'telegram', action: 'message.received', message: 'Mensagem recebida em chat privado', context: { contactId: contact.id, updateId: update.update_id } });
       publishMessage(
@@ -969,11 +1046,16 @@ async function webhook(update, providedSecret) {
       let chatProfileHandled = false;
       if (message.text) {
         try {
+          const ownProfileRequested = /^\/meu-perfil(?:@[a-z0-9_]{3,32})?$/i
+            .test(String(message.text).trim());
+          const directProfileLink = ownProfileRequested
+            ? await issueSecureProfileLink(contact.id, 'telegram_profile_command')
+            : null;
           const chatResult = await chatProfileFlow.handleInbound({
             contactId: contact.id,
             channel: 'telegram',
             text: message.text,
-            profileUrl: await publicProfileUrl()
+            profileUrl: directProfileLink?.url || await publicProfileUrl()
           });
           chatProfileHandled = chatResult.handled;
           if (chatResult.handled) {
@@ -1017,20 +1099,38 @@ async function webhook(update, providedSecret) {
           }).catch(() => undefined);
         });
       } else if (permissionInvocation.matched) {
-        await sendOnboardingMenu(chat.id, permissionInvocation.command).catch(async (error) => {
+        await sendOnboardingMenu(
+          chat.id,
+          permissionInvocation.command,
+          effectiveContact,
+          { existing: Boolean(existing) }
+        ).catch(async (error) => {
           await logsManager.create({
             level: 'warn', channel: 'telegram', action: 'onboarding.menu_send_failed',
             message: 'Contato autorizado, mas o bot nao conseguiu exibir o menu de onboarding',
             context: { contactId: contact.id, phase: 'onboarding_menu', error: error.message }
           }).catch(() => undefined);
         });
-        await sendEmailCapturePrompt(chat.id, contact.id).catch(async (error) => {
+        if (!effectiveContact.email) {
+          await sendEmailCapturePrompt(chat.id, contact.id).catch(async (error) => {
+            await logsManager.create({
+              level: 'warn',
+              channel: 'telegram',
+              action: 'chat_profile.email_prompt_failed',
+              message: 'Permissao recebida, mas o pedido opcional de email nao foi entregue',
+              context: { contactId: contact.id, errorCode: error.code || 'CHAT_PROFILE_PROMPT_FAILED' }
+            }).catch(() => undefined);
+          });
+        }
+        // Mesmo quando ja existe email, o telefone ainda precisa ser confirmado
+        // pelo request_contact nativo para consolidar Telegram e WhatsApp.
+        await offerOptionalPhoneShare(chat.id).catch(async (error) => {
           await logsManager.create({
             level: 'warn',
             channel: 'telegram',
-            action: 'chat_profile.email_prompt_failed',
-            message: 'Permissao recebida, mas o pedido opcional de email nao foi entregue',
-            context: { contactId: contact.id, errorCode: error.code || 'CHAT_PROFILE_PROMPT_FAILED' }
+            action: 'contact.phone_request_failed',
+            message: 'Contato autorizado, mas o bot nao conseguiu solicitar o telefone para vinculacao',
+            context: { contactId: contact.id, error: error.message }
           }).catch(() => undefined);
         });
       } else if ((started || writeAccessAllowed) && !contact.phone) {

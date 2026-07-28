@@ -196,6 +196,18 @@ test('codigo de perfil chega ao provedor sem entrar no historico, socket ou log'
   assert.equal(result.message, null);
   assert.equal(logs[0].action, 'profile_auth.code_sent');
   assert.doesNotMatch(JSON.stringify(logs), /123456/);
+
+  const magicLink = 'https://notify.example/meu-perfil#acesso=segredo-opaco';
+  const linkResult = await whatsappCloudManager.sendConversationText(
+    '507f1f77bcf86cd799439011',
+    magicLink,
+    { useCase: 'profile_auth_link' }
+  );
+  assert.equal(providerBody.text.body, magicLink);
+  assert.equal(historyCalled, false);
+  assert.equal(linkResult.message, null);
+  assert.equal(logs.at(-1).action, 'profile_auth.secret_sent');
+  assert.doesNotMatch(JSON.stringify(logs), /segredo-opaco/);
 });
 
 test('janela fechada bloqueia texto livre antes de chamar a Meta', async (context) => {

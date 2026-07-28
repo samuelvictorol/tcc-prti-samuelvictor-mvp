@@ -25,6 +25,12 @@ import {
 } from '../services/whatsapp.js'
 
 const DEFAULT_WHATSAPP_CONSENT_REQUEST_TEXT = 'Para ativar suas notificações, responda com {command}.'
+const DEFAULT_TELEGRAM_MESSAGES = Object.freeze({
+  onboarding: 'Olá, {name}! Suas notificações pelo Telegram estão ativadas.\n\n{status}\n\nUse as opções abaixo para vincular seu telefone, consultar o Meu perfil ou abrir a ajuda.\n\n{invites}\n\nComando utilizado: {command}',
+  phoneShare: 'Para unir Telegram e WhatsApp no mesmo cadastro, compartilhe seu próprio telefone pelo botão oficial abaixo. O número só será aceito se pertencer a você.',
+  profile: 'Seu acesso seguro ao Meu perfil está pronto. O botão abaixo é pessoal, funciona uma única vez e expira em até 7 dias.',
+  help: 'Ajuda do Notify Flow\n\nVincular meu telefone: confirma que este Telegram e o WhatsApp pertencem a você e evita cadastros duplicados.\n\nMeu perfil: mostra seus dados, permissões e histórico de notificações em uma página segura.\n\nVocê pode revisar ou revogar cada permissão quando quiser.',
+})
 
 const $q = useQuasar()
 const app = useAppStore()
@@ -42,7 +48,13 @@ const logPage = ref(1)
 const logPages = ref(1)
 const stats = reactive({ contacts: 0, deliveries: 0, failed: 0 })
 const settings = reactive({
-  telegram: { botToken: '', webhookSecret: '', webhookUrl: '', bot: null },
+  telegram: {
+    botToken: '',
+    webhookSecret: '',
+    webhookUrl: '',
+    bot: null,
+    messages: { ...DEFAULT_TELEGRAM_MESSAGES },
+  },
   whatsappCloud: { accessToken: '', phoneNumberId: '', displayPhoneNumber: '', businessAccountId: '', verifyToken: '', appSecret: '', apiVersion: 'v25.0' },
   whatsappPermission: {
     command: DEFAULT_WHATSAPP_PERMISSION_COMMAND,
@@ -113,9 +125,12 @@ function applySettings(value = {}) {
   settings.telegram.webhookSecretConfigured = false
   settings.telegram.bot = null
   const telegramSource = { ...(source.telegram || {}) }
+  const telegramMessages = { ...(telegramSource.messages || {}) }
   delete telegramSource.botToken
   delete telegramSource.webhookSecret
+  delete telegramSource.messages
   Object.assign(settings.telegram, telegramSource)
+  Object.assign(settings.telegram.messages, DEFAULT_TELEGRAM_MESSAGES, telegramMessages)
   Object.assign(settings.whatsappCloud, source.whatsappCloud || source.whatsapp_cloud || source.meta || {})
   Object.assign(settings.email, source.email || source.gmail || {})
   for (const channel of ['telegram', 'whatsappCloud', 'email']) {
@@ -216,11 +231,23 @@ async function saveTelegramPermission() {
     $q.notify({ type: 'warning', message: 'Informe o comando que abre o onboarding do Telegram.' })
     return
   }
+  const messages = Object.fromEntries(
+    Object.entries(settings.telegram.messages || {}).map(([key, value]) => [key, String(value || '').trim()]),
+  )
+  if (Object.values(messages).some((message) => !message)) {
+    $q.notify({ type: 'warning', message: 'Preencha as quatro mensagens amigáveis do Telegram.' })
+    return
+  }
   savingTelegramPermission.value = true
   try {
-    const result = await app.saveSettings({ telegramPermission: { command } })
+    const result = await app.saveSettings({
+      telegramPermission: { command },
+      telegram: { messages },
+    })
     settings.telegramPermission.command = telegramPermissionCommandFromSettings(result)
-    $q.notify({ type: 'positive', message: 'Comando de onboarding do Telegram salvo.' })
+    const source = result.configuration || result.settings || result
+    Object.assign(settings.telegram.messages, source.telegram?.messages || messages)
+    $q.notify({ type: 'positive', message: 'Comando e mensagens do Telegram salvos.' })
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível salvar o comando do Telegram.') })
   } finally {
@@ -662,6 +689,88 @@ onBeforeUnmount(() => {
       />
     </q-card>
 
+    <q-card flat class="glass-card section-card telegram-messages-card q-mb-lg">
+      <q-expansion-item
+        icon="forum"
+        label="Mensagens amigáveis do Telegram"
+        caption="Personalize o onboarding sem alterar a lógica segura do bot"
+        header-class="text-weight-bold"
+      >
+        <div class="telegram-messages-card__body">
+          <div class="telegram-messages-card__intro">
+            <span>Marcadores disponíveis:</span>
+            <q-chip dense outline color="info">{name}</q-chip>
+            <q-chip dense outline color="info">{command}</q-chip>
+            <q-chip dense outline color="info">{status}</q-chip>
+            <q-chip dense outline color="info">{invites}</q-chip>
+            <ContextHelp
+              title="Textos dinâmicos do Telegram"
+              tooltip="Entenda os marcadores"
+              :text="[
+                '{name} mostra o nome reconhecido pelo Telegram.',
+                '{command} acompanha o comando configurado.',
+                '{status} informa se o cadastro foi encontrado ou criado.',
+                '{invites} lista os convites associados ao contato.',
+              ]"
+            />
+          </div>
+          <div class="telegram-messages-card__grid">
+            <q-input
+              v-model="settings.telegram.messages.onboarding"
+              outlined
+              type="textarea"
+              autogrow
+              label="Boas-vindas e menu"
+              maxlength="3000"
+              counter
+              hint="Aceita {name}, {command}, {status} e {invites}."
+            />
+            <q-input
+              v-model="settings.telegram.messages.phoneShare"
+              outlined
+              type="textarea"
+              autogrow
+              label="Solicitação de telefone"
+              maxlength="3000"
+              counter
+              hint="Explica a vinculação segura entre Telegram e WhatsApp."
+            />
+            <q-input
+              v-model="settings.telegram.messages.profile"
+              outlined
+              type="textarea"
+              autogrow
+              label="Acesso ao Meu perfil"
+              maxlength="3000"
+              counter
+              hint="Acompanha o botão pessoal, temporário e de uso único."
+            />
+            <q-input
+              v-model="settings.telegram.messages.help"
+              outlined
+              type="textarea"
+              autogrow
+              label="Ajuda do bot"
+              maxlength="3000"
+              counter
+              hint="Explique telefone, perfil e permissões em linguagem simples."
+            />
+          </div>
+          <div class="telegram-messages-card__actions">
+            <q-btn
+              color="info"
+              unelevated
+              no-caps
+              icon="save"
+              label="Salvar mensagens do Telegram"
+              :loading="savingTelegramPermission"
+              @click="saveTelegramPermission"
+            />
+          </div>
+        </div>
+      </q-expansion-item>
+    </q-card>
+
     <q-card flat class="glass-card section-card whatsapp-permission-card whatsapp-permission-card--cloud q-mb-lg">
       <div class="whatsapp-permission-card__icon"><q-icon name="how_to_reg" /></div>
       <div class="whatsapp-permission-card__copy">
@@ -968,6 +1077,36 @@ onBeforeUnmount(() => {
   grid-column: 2 / 5;
 }
 
+.telegram-messages-card {
+  overflow: hidden;
+}
+
+.telegram-messages-card__body {
+  padding: 8px 16px 16px;
+}
+
+.telegram-messages-card__intro {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+  color: #52706b;
+  font-size: 0.78rem;
+}
+
+.telegram-messages-card__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.telegram-messages-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
 .log-list {
   border: 1px solid rgba(3, 21, 21, 0.08);
   border-radius: 16px;
@@ -1061,6 +1200,14 @@ onBeforeUnmount(() => {
   .whatsapp-permission-card--cloud .whatsapp-permission-card__input--message {
     grid-row: auto;
     grid-column: auto;
+  }
+
+  .telegram-messages-card__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .telegram-messages-card__actions > .q-btn {
+    width: 100%;
   }
 }
 </style>
