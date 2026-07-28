@@ -1156,10 +1156,10 @@ async function listChats(query = {}) {
   const result = await contactsManager.list({ ...query, channel: 'telegram', authorized: true, active: true });
   return {
     ...result,
-    items: result.items.map((contact) => ({
-      ...contact,
-      chatId: contact.channels.find((identity) => identity.channel === 'telegram' && identity.authorized)?.address
-    }))
+    items: result.items.map((contact) => {
+      const identity = contact.channels.find((item) => item.channel === 'telegram' && item.authorized);
+      return { ...contact, chatId: identity?.deliveryAddress || null };
+    })
   };
 }
 
@@ -1171,9 +1171,9 @@ async function sync() {
     contactPage = await contactsManager.list({ channel: 'telegram', authorized: true, active: true, page, limit: 100 });
     for (const contact of contactPage.items) {
       const identity = contact.channels.find((item) => item.channel === 'telegram' && item.authorized);
-      if (!identity) continue;
+      if (!identity?.deliveryAddress) continue;
       await conversationsManager.upsertConversation({
-        channel: 'telegram', externalId: identity.address, contactId: contact.id,
+        channel: 'telegram', externalId: identity.deliveryAddress, contactId: contact.id,
         displayName: contact.displayName, avatarUrl: contact.avatarUrl, isGroup: false
       });
       contactsSynced += 1;

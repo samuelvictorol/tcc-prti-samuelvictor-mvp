@@ -268,7 +268,7 @@ test('settings bulk ignora nulls enviados por formularios de outros canais', () 
   assert.equal(result.data.body.email.fromName, undefined);
 });
 
-test('notificacao global rejeita envio rapido e exige templates por canal', () => {
+test('notificacao global rejeita envio rapido e aceita de um a tres templates por canal', () => {
   const quick = createNotificationSchema.safeParse({
     body: {
       kind: 'quick',
@@ -295,6 +295,42 @@ test('notificacao global rejeita envio rapido e exige templates por canal', () =
     }
   });
   assert.equal(global.success, true);
+
+  const oneChannel = createNotificationSchema.safeParse({
+    body: {
+      kind: 'global',
+      channel: 'global',
+      templateIds: { telegram: '507f1f77bcf86cd799439012' },
+      contactIds: ['507f1f77bcf86cd799439011'],
+      groupIds: []
+    }
+  });
+  assert.equal(oneChannel.success, true);
+
+  const twoChannels = createNotificationSchema.safeParse({
+    body: {
+      kind: 'global',
+      channel: 'global',
+      templateIds: {
+        whatsapp_cloud: '507f1f77bcf86cd799439013',
+        email: '507f1f77bcf86cd799439014'
+      },
+      contactIds: ['507f1f77bcf86cd799439011'],
+      groupIds: []
+    }
+  });
+  assert.equal(twoChannels.success, true);
+
+  const noChannel = createNotificationSchema.safeParse({
+    body: {
+      kind: 'global',
+      channel: 'global',
+      templateIds: {},
+      contactIds: ['507f1f77bcf86cd799439011'],
+      groupIds: []
+    }
+  });
+  assert.equal(noChannel.success, false);
 });
 
 test('notificacoes exigem template no Cloud', () => {

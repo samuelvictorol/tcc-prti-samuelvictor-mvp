@@ -24,7 +24,7 @@ const createNotificationSchema = z.object({
     const globalTemplateIds = Object.values(body.templateIds || {}).filter(Boolean);
     if (body.kind === 'template' && !body.templateId) context.addIssue({ code: z.ZodIssueCode.custom, message: 'templateId obrigatorio' });
     if (body.kind === 'global' && !globalTemplateIds.length) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ['templateIds'], message: 'Selecione ao menos um template por canal' });
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['templateIds'], message: 'Selecione ao menos um canal com template' });
     }
     if (body.kind === 'quick' && !body.content) context.addIssue({ code: z.ZodIssueCode.custom, message: 'content obrigatorio' });
     if (body.kind === 'quick' && body.channel === CHANNELS.GLOBAL) {

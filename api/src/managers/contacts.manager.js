@@ -146,6 +146,23 @@ function cloudDeliveryAddress(identity) {
   return normalizeWhatsappE164(identity.address, { blockedIdentifiers });
 }
 
+function telegramPrivateChatId(value) {
+  const normalized = String(value ?? '').trim();
+  return /^\d{1,20}$/.test(normalized) ? normalized : null;
+}
+
+function telegramDeliveryAddress(identity) {
+  if (!identity || identity.raw.channel !== 'telegram') return null;
+  const metadata = identity.metadata || {};
+  // O chat_id recebido no webhook é o destino efetivo da Bot API. Registros
+  // antigos podem manter user_id/username em address, embora a UI já mostre o
+  // chat_id correto vindo dos metadados.
+  return telegramPrivateChatId(metadata.chatId)
+    || telegramPrivateChatId(metadata.userId)
+    || telegramPrivateChatId(identity.address)
+    || null;
+}
+
 function webPhoneAddress(identity) {
   if (!identity || identity.raw.channel !== 'whatsapp_web') return null;
   const metadata = identity.metadata || {};
@@ -228,10 +245,14 @@ function serialize(contact, options = {}) {
       address: identity.address,
       deliveryAddress: identity.raw.channel === 'whatsapp_cloud'
         ? cloudDeliveryAddress(identity)
-        : identity.address,
+        : identity.raw.channel === 'telegram'
+          ? telegramDeliveryAddress(identity)
+          : identity.address,
       addressUnavailableReason: identity.raw.channel === 'whatsapp_cloud' && !cloudDeliveryAddress(identity)
         ? 'WHATSAPP_PHONE_UNAVAILABLE'
-        : null,
+        : identity.raw.channel === 'telegram' && !telegramDeliveryAddress(identity)
+          ? 'TELEGRAM_CHAT_UNAVAILABLE'
+          : null,
       authorized: identity.raw.authorized,
       consentStatus: identity.raw.consentStatus,
       source: identity.raw.source,
@@ -1222,6 +1243,20 @@ async function getDestination(contactId, channel, options = {}) {
         'O contato nao possui telefone E.164 verificado para WhatsApp Cloud',
         null,
         'WHATSAPP_PHONE_UNAVAILABLE'
+      );
+    }
+  } else if (channel === 'telegram') {
+    address = telegramDeliveryAddress({
+      raw: identity,
+      address,
+      metadata: safeDecrypt(identity.metadataEncrypted, true) || {}
+    });
+    if (!address) {
+      throw new ApiError(
+        409,
+        'O contato nao possui chat_id confirmado para Telegram',
+        null,
+        'TELEGRAM_CHAT_UNAVAILABLE'
       );
     }
   }

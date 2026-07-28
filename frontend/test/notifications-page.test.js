@@ -6,6 +6,7 @@ vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 
 import {
   mergeNotificationVariableDefinitions,
+  notificationTemplatePreview,
   notificationTemplateVariableDefinitions,
 } from '../src/pages/NotificationsPage.vue'
 
@@ -64,5 +65,46 @@ describe('compositor amigável de notificações', () => {
     expect(globalTab).toBeLessThan(templateTab)
     expect(templateTab).toBeLessThan(quickTab)
     expect(source).toContain("v-for=\"panel in ['global', 'template', 'quick']\"")
+  })
+
+  it('aceita qualquer combinação não vazia de canais no template global', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
+
+    expect(source).toContain('selectedGlobalChannelOptions')
+    expect(source).toContain('Selecione ao menos um canal e seu respectivo template.')
+    expect(source).toContain('Template ${channel.label} (opcional)')
+    expect(source).not.toContain('const missing = enabledChannelOptions.value.filter')
+  })
+
+  it('monta uma prévia amigável por canal sem renderizar HTML bruto', () => {
+    expect(notificationTemplatePreview({
+      name: 'Boas-vindas',
+      subject: 'Olá {{nome}}',
+      html: '<p>Bem-vindo, <strong>{{nome}}</strong>.</p><script>alert(1)</script>',
+    }, 'email', { nome: 'Ana' })).toEqual(expect.objectContaining({
+      subject: 'Olá Ana',
+      body: 'Bem-vindo, Ana.',
+    }))
+
+    expect(notificationTemplatePreview({
+      name: 'Pedido',
+      externalTemplateName: 'order_confirmed',
+      languageCode: 'pt_BR',
+      body: 'Pedido {{codigo}} confirmado.',
+    }, 'whatsapp_cloud', { codigo: 'ABC-123' })).toEqual(expect.objectContaining({
+      officialName: 'order_confirmed',
+      languageCode: 'pt_BR',
+      body: 'Pedido ABC-123 confirmado.',
+    }))
+  })
+
+  it('usa uma q-dialog responsiva para revisar os canais antes da fila', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
+
+    expect(source).toContain('<q-dialog v-model="reviewDialog" persistent :maximized="$q.screen.lt.sm">')
+    expect(source).toContain('v-for="item in reviewItems"')
+    expect(source).toContain('Confirmar e colocar na fila')
+    expect(source).toContain('@click="confirmSend"')
+    expect(source).not.toContain('$q.dialog({')
   })
 })

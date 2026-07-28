@@ -79,18 +79,20 @@ test('canal fica disponivel para envio sem depender das credenciais de webhook',
   const query = { select: () => query, lean: async () => null };
   Setting.findOne = () => query;
   process.env.WHATSAPP_CLOUD_ACCESS_TOKEN = 'access';
-  process.env.WHATSAPP_CLOUD_PHONE_NUMBER_ID = 'phone-id';
+  process.env.WHATSAPP_CLOUD_PHONE_NUMBER_ID = '1000000000000001';
   delete process.env.WHATSAPP_CLOUD_VERIFY_TOKEN;
   delete process.env.WHATSAPP_CLOUD_APP_SECRET;
 
   assert.equal(await settingsManager.channelConfigured('whatsapp_cloud'), true);
+  process.env.WHATSAPP_CLOUD_PHONE_NUMBER_ID = 'phone-id';
+  assert.equal(await settingsManager.channelConfigured('whatsapp_cloud'), false);
 });
 
 test('status separa preparo de envio, challenge e assinatura do WhatsApp Cloud', async (context) => {
   restoreAfter(context, [[settingsManager, 'getValue']]);
   const values = {
     WHATSAPP_CLOUD_ACCESS_TOKEN: 'access',
-    WHATSAPP_CLOUD_PHONE_NUMBER_ID: 'phone-id',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
     WHATSAPP_CLOUD_API_VERSION: 'v25.0'
   };
   settingsManager.getValue = async (key) => values[key] || null;
@@ -103,6 +105,12 @@ test('status separa preparo de envio, challenge e assinatura do WhatsApp Cloud',
     webhookConfigured: false,
     apiVersion: 'v25.0'
   });
+
+  values.WHATSAPP_CLOUD_PHONE_NUMBER_ID = 'phone-id';
+  assert.equal((await whatsappCloudManager.status()).sendConfigured, false);
+  values.WHATSAPP_CLOUD_PHONE_NUMBER_ID = '1000000000000001';
+  values.WHATSAPP_CLOUD_API_VERSION = '25';
+  assert.equal((await whatsappCloudManager.status()).sendConfigured, false);
 });
 
 test('challenge do webhook exige somente o verify token', async (context) => {
@@ -240,7 +248,7 @@ test('templates oficiais sem parametros omitem components', async (context) => {
   context.after(() => { global.fetch = originalFetch; });
   settingsManager.getValue = async (key) => ({
     WHATSAPP_CLOUD_ACCESS_TOKEN: 'access',
-    WHATSAPP_CLOUD_PHONE_NUMBER_ID: 'phone-id',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
     WHATSAPP_CLOUD_API_VERSION: 'v25.0'
   })[key] || null;
   logsManager.create = async () => ({});
@@ -267,6 +275,133 @@ test('templates oficiais sem parametros omitem components', async (context) => {
     recorded.map((item) => item.body),
     ['[Template: jaspers_market_plain_text_v1]', '[Template: hello_world]']
   );
+});
+
+test('fila usa o Phone Number ID confiavel do contato recebido pelo webhook', async (context) => {
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [logsManager, 'create'],
+    [contactsManager, 'getDestination'],
+    [conversationsManager, 'recordOutbound']
+  ]);
+  const originalFetch = global.fetch;
+  context.after(() => { global.fetch = originalFetch; });
+  settingsManager.getValue = async (key) => ({
+    WHATSAPP_CLOUD_ACCESS_TOKEN: 'access',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1999999999999999',
+    WHATSAPP_CLOUD_API_VERSION: 'v25.0'
+  })[key] || null;
+  logsManager.create = async () => ({});
+  contactsManager.getDestination = async () => ({
+    address: '5511931234567',
+    contact: {
+      id: '507f1f77bcf86cd799439012',
+      displayName: 'Contato ficticio',
+      channels: [{
+        channel: 'whatsapp_cloud',
+        address: '5511931234567',
+        authorized: true,
+        consentStatus: 'granted',
+        metadata: { phoneNumberId: '1000000000000001' }
+      }]
+    }
+  });
+  conversationsManager.recordOutbound = async (input) => ({
+    message: { id: '507f1f77bcf86cd799439013', body: input.body }
+  });
+  let providerUrl;
+  global.fetch = async (url) => {
+    providerUrl = url;
+    return { ok: true, json: async () => ({ messages: [{ id: 'wamid.contact-phone-id' }] }) };
+  };
+
+  const result = await whatsappCloudManager.send({
+    contactId: '507f1f77bcf86cd799439012',
+    officialTemplate: { preset: 'hello_world' }
+  });
+
+  assert.equal(providerUrl, 'https://graph.facebook.com/v25.0/1000000000000001/messages');
+  assert.equal(result.providerMessageId, 'wamid.contact-phone-id');
+});
+
+test('erro da Meta vira diagnostico seguro e acionavel sem expor access token', async (context) => {
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [contactsManager, 'findByChannelAddress']
+  ]);
+  const originalFetch = global.fetch;
+  context.after(() => { global.fetch = originalFetch; });
+  settingsManager.getValue = async (key) => ({
+    WHATSAPP_CLOUD_ACCESS_TOKEN: 'EAA-token-que-nao-deve-aparecer',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
+    WHATSAPP_CLOUD_API_VERSION: 'v25.0'
+  })[key] || null;
+  contactsManager.findByChannelAddress = async () => null;
+  global.fetch = async () => ({
+    ok: false,
+    status: 401,
+    json: async () => ({
+      error: {
+        message: 'Error validating application. Application has been deleted.',
+        type: 'OAuthException',
+        code: 190,
+        fbtrace_id: 'trace-ficticio'
+      }
+    })
+  });
+
+  await assert.rejects(
+    () => whatsappCloudManager.send({
+      destination: '5511931234567',
+      allowUnconsented: true,
+      officialTemplate: { preset: 'hello_world' }
+    }),
+    (error) => {
+      assert.equal(error.code, 'WHATSAPP_CLOUD_ERROR');
+      assert.equal(error.statusCode, 502);
+      assert.equal(error.expose, true);
+      assert.match(error.message, /Access token da Meta invalido/i);
+      assert.equal(error.details.providerHttpStatus, 401);
+      assert.equal(error.details.providerErrorCode, 190);
+      assert.equal(error.details.providerTraceId, 'trace-ficticio');
+      assert.doesNotMatch(JSON.stringify(error), /EAA-token-que-nao-deve-aparecer/);
+      return true;
+    }
+  );
+});
+
+test('configuracao rejeita Phone Number ID nao numerico antes de chamar a Meta', async (context) => {
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [contactsManager, 'findByChannelAddress']
+  ]);
+  const originalFetch = global.fetch;
+  context.after(() => { global.fetch = originalFetch; });
+  settingsManager.getValue = async (key) => ({
+    WHATSAPP_CLOUD_ACCESS_TOKEN: 'access',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: 'numero-incorreto',
+    WHATSAPP_CLOUD_API_VERSION: 'v25.0'
+  })[key] || null;
+  contactsManager.findByChannelAddress = async () => null;
+  let providerCalled = false;
+  global.fetch = async () => {
+    providerCalled = true;
+    throw new Error('nao deveria chamar');
+  };
+
+  await assert.rejects(
+    () => whatsappCloudManager.send({
+      destination: '5511931234567',
+      allowUnconsented: true,
+      officialTemplate: { preset: 'hello_world' }
+    }),
+    (error) => {
+      assert.equal(error.code, 'WHATSAPP_CLOUD_PHONE_NUMBER_ID_INVALID');
+      assert.equal(error.expose, true);
+      return true;
+    }
+  );
+  assert.equal(providerCalled, false);
 });
 
 test('contrato amigavel valida os tres presets sem payload JSON manual', () => {

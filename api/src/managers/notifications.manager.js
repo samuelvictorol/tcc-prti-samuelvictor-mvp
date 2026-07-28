@@ -253,9 +253,13 @@ function serializeNotification(notification, options = {}) {
 
 function notificationChannels(channel, kind, templateIds = {}) {
   const requestedGlobalChannels = NOTIFICATION_DELIVERY_CHANNELS.filter((selectedChannel) => templateIds?.[selectedChannel]);
-  let selectedChannels = channel === 'global'
-    ? (kind === 'global' && requestedGlobalChannels.length ? requestedGlobalChannels : [...NOTIFICATION_DELIVERY_CHANNELS])
-    : [channel];
+  // No modo global, a presença do template é a seleção explícita do canal.
+  // Canais omitidos não geram delivery (nem skipped/failed) e, portanto, não
+  // consomem capacidade da fila. O create valida o mapa vazio antes de chegar aqui.
+  let selectedChannels = [channel];
+  if (channel === 'global') {
+    selectedChannels = kind === 'global' ? requestedGlobalChannels : [...NOTIFICATION_DELIVERY_CHANNELS];
+  }
   if (channel === 'global' && kind === 'quick') {
     selectedChannels = selectedChannels.filter((selectedChannel) => selectedChannel !== CHANNELS.WHATSAPP_CLOUD);
   }
@@ -351,7 +355,7 @@ async function create(input, actorId) {
     const selectedEntries = Object.entries(input.templateIds || {})
       .filter(([channel, id]) => NOTIFICATION_DELIVERY_CHANNELS.includes(channel) && id);
     if (!selectedEntries.length) {
-      throw new ApiError(422, 'Selecione ao menos um template por canal', null, 'GLOBAL_TEMPLATE_REQUIRED');
+      throw new ApiError(422, 'Selecione ao menos um canal com template', null, 'GLOBAL_TEMPLATE_REQUIRED');
     }
     for (const [channel, templateId] of selectedEntries) {
       const selected = await templatesManager.getById(templateId);
@@ -511,7 +515,13 @@ async function dispatchDelivery(notification, delivery, templateOrMap) {
 }
 
 function permanentDeliveryError(error) {
-  if (['CONTACT_DISABLED', 'CHANNEL_NOT_AUTHORIZED', 'UNKNOWN_DESTINATION'].includes(error.code) || CHANNEL_SKIP_CODES.has(error.code)) return true;
+  if ([
+    'CONTACT_DISABLED',
+    'CHANNEL_NOT_AUTHORIZED',
+    'UNKNOWN_DESTINATION',
+    'WHATSAPP_CLOUD_PHONE_NUMBER_ID_INVALID',
+    'WHATSAPP_CLOUD_VERSION_INVALID'
+  ].includes(error.code) || CHANNEL_SKIP_CODES.has(error.code)) return true;
   const providerDetails = error.details || {};
   const providerCode = Number(providerDetails.code ?? providerDetails.providerErrorCode ?? providerDetails.error_code);
   if (providerDetails.is_transient === true || providerDetails.isTransient === true || TRANSIENT_PROVIDER_CODES.has(providerCode)) return false;

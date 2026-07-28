@@ -52,6 +52,56 @@ export function mergeNotificationVariableDefinitions(entries = []) {
   }
   return [...merged.values()]
 }
+
+function previewPlainText(value = '') {
+  return String(value || '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\s+([.,!?;:])/g, '$1')
+    .replace(/\n\s+/g, '\n')
+    .trim()
+}
+
+function previewInterpolate(value, variables = {}) {
+  return String(value || '').replace(/{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}/g, (placeholder, key) => {
+    const replacement = variables[key]
+    return replacement === undefined || replacement === null || String(replacement).trim() === ''
+      ? placeholder
+      : String(replacement)
+  })
+}
+
+export function notificationTemplatePreview(template = {}, channel = '', variables = {}) {
+  const telegramText = template.payload?.telegram?.text
+  const rawBody = channel === 'telegram'
+    ? (telegramText || template.body)
+    : channel === 'email'
+      ? (template.html || template.body)
+      : template.body
+  const body = previewInterpolate(previewPlainText(rawBody), variables)
+  const subject = channel === 'email'
+    ? previewInterpolate(previewPlainText(template.subject || 'Sem assunto'), variables)
+    : ''
+  const officialName = channel === 'whatsapp_cloud'
+    ? String(template.externalTemplateName || template.name || '').trim()
+    : ''
+  return {
+    body: body || (channel === 'whatsapp_cloud'
+      ? 'A prévia textual não foi informada; o payload usará os componentes cadastrados neste template.'
+      : 'Este template não possui uma prévia textual.'),
+    subject,
+    officialName,
+    languageCode: channel === 'whatsapp_cloud' ? String(template.languageCode || 'pt_BR') : '',
+  }
+}
 </script>
 
 <script setup>
@@ -60,7 +110,7 @@ import { useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { useAppStore } from '../stores/app.js'
-import { notificationChannel, notificationDeliveryCounts, sendsToAllAvailableChannels } from '../services/channels.js'
+import { notificationChannel, notificationDeliveryCounts } from '../services/channels.js'
 import { asList, errorMessage, fetchAll, http, unwrap } from '../services/http.js'
 
 const $q = useQuasar()
@@ -68,6 +118,8 @@ const app = useAppStore()
 const tab = ref('global')
 const loading = ref(false)
 const sending = ref(false)
+const reviewDialog = ref(false)
+const pendingPayload = ref(null)
 const contacts = ref([])
 const groups = ref([])
 const templates = ref([])
@@ -133,6 +185,8 @@ const selectedTemplate = computed(() => templateById(form.templateId))
 const selectedGlobalTemplates = computed(() => enabledChannelOptions.value
   .map((channel) => ({ channel: channel.value, template: templateById(form.templateIds[channel.value]) }))
   .filter((entry) => entry.template))
+const selectedGlobalChannelOptions = computed(() => enabledChannelOptions.value
+  .filter((channel) => Boolean(form.templateIds[channel.value])))
 const variableDefinitions = computed(() => tab.value === 'global'
   ? mergeNotificationVariableDefinitions(selectedGlobalTemplates.value)
   : tab.value === 'template' && selectedTemplate.value
@@ -140,6 +194,41 @@ const variableDefinitions = computed(() => tab.value === 'global'
     : [])
 
 const selectedRecipients = computed(() => form.contactIds.length + form.groupIds.length)
+const previewVariables = computed(() => Object.fromEntries(variableDefinitions.value.map((definition) => [
+  definition.key,
+  form.variableValues[definition.key],
+])))
+const reviewItems = computed(() => {
+  if (tab.value === 'quick') {
+    const channel = channels.value.find((item) => item.value === form.channel)
+    if (!channel) return []
+    return [{
+      ...channel,
+      templateName: 'Mensagem rápida',
+      preview: {
+        subject: form.channel === 'email' ? form.subject || 'Sem assunto' : '',
+        body: form.message.trim(),
+      },
+    }]
+  }
+  if (tab.value === 'template') {
+    const channel = channels.value.find((item) => item.value === form.channel)
+    if (!channel || !selectedTemplate.value) return []
+    return [{
+      ...channel,
+      templateName: selectedTemplate.value.name || selectedTemplate.value.title || 'Template',
+      preview: notificationTemplatePreview(selectedTemplate.value, form.channel, previewVariables.value),
+    }]
+  }
+  return selectedGlobalChannelOptions.value.map((channel) => {
+    const template = templateById(form.templateIds[channel.value])
+    return {
+      ...channel,
+      templateName: template?.name || template?.title || 'Template',
+      preview: notificationTemplatePreview(template, channel.value, previewVariables.value),
+    }
+  })
+})
 
 function newIdempotencyKey(prefix) {
   const value = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -245,7 +334,6 @@ function buildPayload() {
 }
 
 async function send() {
-  const sendsToAllAvailable = sendsToAllAvailableChannels(tab.value, form.channel)
   if (!selectedRecipients.value) {
     $q.notify({ type: 'warning', message: 'Selecione ao menos um contato ou grupo.' })
     return
@@ -261,17 +349,16 @@ async function send() {
     }
   }
   if (tab.value === 'global') {
-    const missing = enabledChannelOptions.value.filter((channel) => !form.templateIds[channel.value])
-    if (missing.length) {
-      $q.notify({ type: 'warning', message: `Selecione o template de: ${missing.map((channel) => channel.label).join(', ')}.` })
+    if (!selectedGlobalChannelOptions.value.length) {
+      $q.notify({ type: 'warning', message: 'Selecione ao menos um canal e seu respectivo template.' })
       return
     }
   }
-  if (sendsToAllAvailable && !dispatchChannelOptions.value.length) {
+  if (tab.value === 'global' && !enabledChannelOptions.value.length) {
     $q.notify({ type: 'warning', message: 'Configure ao menos um canal antes do disparo global.' })
     return
   }
-  if (!sendsToAllAvailable && !dispatchChannelOptions.value.some((channel) => channel.value === form.channel)) {
+  if (tab.value !== 'global' && !dispatchChannelOptions.value.some((channel) => channel.value === form.channel)) {
     $q.notify({ type: 'warning', message: 'Escolha um canal configurado para este teste manual.' })
     return
   }
@@ -284,48 +371,47 @@ async function send() {
     return
   }
 
-  $q.dialog({
-    title: 'Confirmar disparo',
-    message: sendsToAllAvailable
-      ? `A API tentará ${dispatchChannelOptions.value.length} canal(is) configurado(s) para cada contato, enviando apenas onde houver autorização. Canais indisponíveis serão ignorados. Deseja continuar?`
-      : `A API validará o consentimento no canal escolhido para ${selectedRecipients.value} seleção(ões). Deseja continuar?`,
-    cancel: { flat: true, label: 'Revisar' },
-    ok: { color: 'primary', label: 'Colocar na fila' },
-  }).onOk(async () => {
-    sending.value = true
-    try {
-      const result = unwrap(await http.post('/notifications', payload)) || {}
-      const { queued, skipped } = notificationDeliveryCounts(result)
-      if (queued === 0) {
-        $q.notify({
-          type: 'warning',
-          message: 'Nenhuma entrega foi colocada na fila.',
-          caption: skipped
-            ? `${skipped} combinação(ões) de contato e canal foram ignoradas. Verifique configuração e consentimento.`
-            : 'O contato não possui um canal configurado e autorizado para este envio.',
-        })
-        await loadData()
-        return
-      }
+  pendingPayload.value = payload
+  reviewDialog.value = true
+}
+
+async function confirmSend() {
+  if (!pendingPayload.value || sending.value) return
+  sending.value = true
+  try {
+    const result = unwrap(await http.post('/notifications', pendingPayload.value)) || {}
+    const { queued, skipped } = notificationDeliveryCounts(result)
+    reviewDialog.value = false
+    pendingPayload.value = null
+    if (queued === 0) {
       $q.notify({
-        type: 'positive',
-        message: queued !== undefined ? `${queued} entrega(s) colocada(s) na fila.` : 'Notificação colocada na fila.',
-        caption: skipped ? `${skipped} canal(is) sem configuração ou autorização foram ignorados.` : undefined,
+        type: 'warning',
+        message: 'Nenhuma entrega foi colocada na fila.',
+        caption: skipped
+          ? `${skipped} combinação(ões) de contato e canal foram ignoradas. Verifique configuração e consentimento.`
+          : 'O contato não possui um canal configurado e autorizado para este envio.',
       })
-      if (queued > 0) {
-        form.message = ''
-        form.templateId = null
-        if (tab.value === 'global') {
-          form.templateIds = { telegram: null, whatsapp_cloud: null, email: null }
-        }
-      }
       await loadData()
-    } catch (error) {
-      $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível agendar as notificações.') })
-    } finally {
-      sending.value = false
+      return
     }
-  })
+    $q.notify({
+      type: 'positive',
+      message: queued !== undefined ? `${queued} entrega(s) colocada(s) na fila.` : 'Notificação colocada na fila.',
+      caption: skipped ? `${skipped} canal(is) sem configuração ou autorização foram ignorados.` : undefined,
+    })
+    if (queued > 0) {
+      form.message = ''
+      form.templateId = null
+      if (tab.value === 'global') {
+        form.templateIds = { telegram: null, whatsapp_cloud: null, email: null }
+      }
+    }
+    await loadData()
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível agendar as notificações.') })
+  } finally {
+    sending.value = false
+  }
 }
 
 onMounted(loadData)
@@ -358,8 +444,8 @@ onMounted(loadData)
             <div v-if="panel === 'global'" class="global-note q-mb-md">
               <q-icon name="hub" size="24px" />
               <div>
-                <strong>Todos os canais disponíveis para cada contato</strong>
-                <span v-if="enabledChannelOptions.length">Ativos agora: {{ enabledChannelNames }}. Escolha um template próprio para cada canal; contatos sem autorização serão ignorados sem bloquear os demais.</span>
+                <strong>Escolha um, dois ou três canais</strong>
+                <span v-if="enabledChannelOptions.length">Ativos agora: {{ enabledChannelNames }}. Selecione somente os canais desejados e um template para cada um; contatos sem autorização serão ignorados sem bloquear os demais.</span>
                 <span v-else>Configure ao menos um canal. Os demais poderão continuar vazios.</span>
               </div>
             </div>
@@ -431,8 +517,8 @@ onMounted(loadData)
                       emit-value
                       map-options
                       :options="templatesForChannel(channel.value)"
-                      :label="`Template ${channel.label} *`"
-                      :hint="templatesForChannel(channel.value).length ? 'Somente templates ativos deste canal' : 'Cadastre um template para continuar'"
+                      :label="`Template ${channel.label} (opcional)`"
+                      :hint="templatesForChannel(channel.value).length ? 'Selecione para incluir este canal no envio' : 'Nenhum template ativo deste canal'"
                     >
                       <template #option="scope">
                         <q-item v-bind="scope.itemProps">
@@ -478,7 +564,7 @@ onMounted(loadData)
           <div><span>Destinos selecionados</span><strong>{{ selectedRecipients }}</strong></div>
           <div>
             <span>Canal</span>
-            <strong>{{ tab === 'global' || form.channel === 'global' ? `${dispatchChannelOptions.length} disponível(is)` : (dispatchChannelOptions.find((item) => item.value === form.channel)?.label || '—') }}</strong>
+            <strong>{{ tab === 'global' ? `${selectedGlobalChannelOptions.length} selecionado(s)` : (dispatchChannelOptions.find((item) => item.value === form.channel)?.label || '—') }}</strong>
           </div>
           <q-space />
           <q-btn color="dark" unelevated no-caps size="lg" icon-right="send" label="Revisar e enviar" :loading="sending" @click="send" />
@@ -518,6 +604,60 @@ onMounted(loadData)
         <template #body-cell-status="props"><q-td :props="props"><q-badge :color="statusColor(props.row.status)" :label="props.row.status || 'queued'" /></q-td></template>
       </q-table>
     </q-card>
+
+    <q-dialog v-model="reviewDialog" persistent :maximized="$q.screen.lt.sm">
+      <q-card class="review-dialog-card">
+        <q-card-section class="review-dialog-header">
+          <div>
+            <div class="text-overline text-primary">Revisar e enviar</div>
+            <h2>Confira o conteúdo antes de enfileirar</h2>
+            <p>{{ selectedRecipients }} seleção(ões) de destino · {{ reviewItems.length }} canal(is)</p>
+          </div>
+          <q-btn flat round dense icon="close" aria-label="Voltar à edição" :disable="sending" @click="reviewDialog = false" />
+        </q-card-section>
+
+        <q-separator />
+        <q-card-section class="review-dialog-content scroll">
+          <q-banner rounded class="review-consent-note">
+            <template #avatar><q-icon name="verified_user" color="primary" /></template>
+            A fila validará configuração e consentimento separadamente em cada canal. Uma falha não interrompe as demais entregas.
+          </q-banner>
+
+          <div class="review-preview-grid">
+            <article v-for="item in reviewItems" :key="item.value" class="review-preview-card">
+              <header>
+                <span class="review-channel-icon"><q-icon :name="item.icon" /></span>
+                <div>
+                  <strong>{{ item.label }}</strong>
+                  <span>{{ item.templateName }}</span>
+                </div>
+                <q-badge outline color="primary" label="Selecionado" />
+              </header>
+
+              <div v-if="item.preview.officialName" class="review-meta">
+                <span>Nome oficial</span>
+                <strong>{{ item.preview.officialName }}</strong>
+                <q-badge color="grey-3" text-color="dark" :label="item.preview.languageCode" />
+              </div>
+              <div v-if="item.preview.subject" class="review-subject">
+                <span>Assunto</span>
+                <strong>{{ item.preview.subject }}</strong>
+              </div>
+              <div class="review-message">
+                <span>Prévia da mensagem</span>
+                <p>{{ item.preview.body }}</p>
+              </div>
+            </article>
+          </div>
+        </q-card-section>
+
+        <q-separator />
+        <q-card-actions align="right" class="review-dialog-actions">
+          <q-btn flat no-caps label="Voltar e editar" :disable="sending" @click="reviewDialog = false" />
+          <q-btn color="primary" unelevated no-caps icon-right="send" label="Confirmar e colocar na fila" :loading="sending" @click="confirmSend" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -662,6 +802,149 @@ onMounted(loadData)
   background: linear-gradient(145deg, rgba(255,255,255,.8), rgba(130,248,230,.15));
 }
 
+.review-dialog-card {
+  display: flex;
+  width: min(900px, calc(100vw - 32px));
+  max-width: 900px;
+  max-height: min(86vh, 900px);
+  flex-direction: column;
+  border-radius: 22px;
+}
+
+.review-dialog-header,
+.review-dialog-actions {
+  flex: 0 0 auto;
+  background: #fbfffe;
+}
+
+.review-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 22px 24px 18px;
+}
+
+.review-dialog-header h2 {
+  margin: 0;
+  color: #071f1c;
+  font-size: clamp(1.25rem, 3vw, 1.7rem);
+}
+
+.review-dialog-header p {
+  margin: 5px 0 0;
+  color: #647975;
+}
+
+.review-dialog-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 20px 24px;
+}
+
+.review-consent-note {
+  margin-bottom: 16px;
+  border: 1px solid rgba(39, 183, 159, 0.2);
+  background: rgba(130, 248, 230, 0.12);
+  color: #345d56;
+}
+
+.review-preview-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.review-preview-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(14, 89, 78, 0.14);
+  border-radius: 17px;
+  background: #f9fdfc;
+  box-shadow: 0 8px 24px rgba(7, 57, 50, 0.06);
+}
+
+.review-preview-card > header {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  background: rgba(130, 248, 230, 0.11);
+}
+
+.review-preview-card > header strong,
+.review-preview-card > header span {
+  display: block;
+}
+
+.review-preview-card > header span {
+  overflow: hidden;
+  color: #657975;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-channel-icon {
+  display: grid !important;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 12px;
+  background: #dffaf5;
+  color: #168f7d !important;
+  font-size: 21px !important;
+}
+
+.review-meta,
+.review-subject,
+.review-message {
+  padding: 12px 14px;
+  border-top: 1px solid rgba(14, 89, 78, 0.09);
+}
+
+.review-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 8px;
+}
+
+.review-meta > span,
+.review-subject > span,
+.review-message > span {
+  display: block;
+  color: #70817e;
+  font-size: 0.7rem;
+}
+
+.review-meta > strong {
+  overflow-wrap: anywhere;
+}
+
+.review-meta > span {
+  grid-column: 1 / -1;
+}
+
+.review-subject strong {
+  display: block;
+  margin-top: 3px;
+}
+
+.review-message p {
+  margin: 6px 0 0;
+  color: #173c36;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.review-dialog-actions {
+  gap: 8px;
+  padding: 14px 20px;
+}
+
 @media (max-width: 1000px) {
   .notification-layout {
     grid-template-columns: 1fr;
@@ -673,6 +956,33 @@ onMounted(loadData)
 }
 
 @media (max-width: 650px) {
+  .review-dialog-card {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+  }
+
+  .review-dialog-header,
+  .review-dialog-content {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .review-preview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .review-dialog-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+  }
+
+  .review-dialog-actions .q-btn {
+    width: 100%;
+  }
+
   .send-summary {
     align-items: stretch;
     flex-wrap: wrap;

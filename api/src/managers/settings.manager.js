@@ -31,6 +31,18 @@ const SENSITIVE_PREVIEW = '••••••••••••';
 
 const DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT = 'Para ativar suas notificações, responda com {command}.';
 
+function unwrapConfiguredValue(value) {
+  let normalized = String(value ?? '').trim();
+  if (normalized.length >= 2) {
+    const first = normalized[0];
+    const last = normalized.at(-1);
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      normalized = normalized.slice(1, -1).trim();
+    }
+  }
+  return normalized;
+}
+
 const CHANNEL_REVEAL_FIELDS = Object.freeze({
   telegram: Object.freeze({
     botToken: 'TELEGRAM_BOT_TOKEN',
@@ -171,7 +183,17 @@ async function channelConfigured(channel) {
   const required = REQUIRED[channel];
   if (!required) throw new ApiError(400, 'Canal desconhecido');
   const values = await Promise.all(required.map(getValue));
-  return required.every((_key, index) => Boolean(values[index]));
+  if (channel === 'whatsapp_cloud') {
+    const accessToken = unwrapConfiguredValue(values[0]).replace(/^Bearer\s+/i, '').trim();
+    const phoneNumberId = unwrapConfiguredValue(values[1]);
+    const version = unwrapConfiguredValue(
+      await getValue('WHATSAPP_CLOUD_API_VERSION')
+      || process.env.WHATSAPP_CLOUD_API_VERSION
+      || 'v25.0'
+    );
+    return Boolean(accessToken && /^\d{5,30}$/.test(phoneNumberId) && /^v\d+\.\d+$/.test(version));
+  }
+  return required.every((_key, index) => Boolean(unwrapConfiguredValue(values[index])));
 }
 
 async function statuses() {

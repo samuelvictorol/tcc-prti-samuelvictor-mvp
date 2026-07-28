@@ -117,14 +117,14 @@ test('resposta livre usa Graph v25, persiste outbound e nao renova a janela inbo
   conversationsManager.getById = async () => serializedConversation();
   contactsManager.getById = async () => serializedContact(false);
   settingsManager.getValue = async (key) => ({
-    WHATSAPP_CLOUD_ACCESS_TOKEN: 'token-ficticio',
-    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
+    WHATSAPP_CLOUD_ACCESS_TOKEN: '  Bearer token-ficticio  ',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1999999999999999',
     WHATSAPP_CLOUD_API_VERSION: 'v25.0'
   })[key] || null;
   logsManager.create = async () => ({});
   let providerRequest;
   global.fetch = async (url, options) => {
-    providerRequest = { url, body: JSON.parse(options.body) };
+    providerRequest = { url, headers: options.headers, body: JSON.parse(options.body) };
     return { ok: true, json: async () => ({ messages: [{ id: 'wamid.outbound-ficticio' }] }) };
   };
 
@@ -134,6 +134,7 @@ test('resposta livre usa Graph v25, persiste outbound e nao renova a janela inbo
   );
 
   assert.equal(providerRequest.url, 'https://graph.facebook.com/v25.0/1000000000000001/messages');
+  assert.equal(providerRequest.headers.authorization, 'Bearer token-ficticio');
   assert.deepEqual(providerRequest.body, {
     type: 'text',
     text: { body: 'Resposta dentro da janela', preview_url: false },

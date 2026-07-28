@@ -307,6 +307,14 @@ test('classificador repete erros transitorios e throttling da Meta mesmo quando 
     statusCode: 502,
     details: { providerErrorCode: 403 }
   }), true);
+  assert.equal(notificationsManager.permanentDeliveryError({
+    statusCode: 503,
+    code: 'WHATSAPP_CLOUD_PHONE_NUMBER_ID_INVALID'
+  }), true);
+  assert.equal(notificationsManager.permanentDeliveryError({
+    statusCode: 503,
+    code: 'WHATSAPP_CLOUD_VERSION_INVALID'
+  }), true);
   assert.equal(notificationsManager.permanentDeliveryError({ responseCode: 450 }), false);
   assert.equal(notificationsManager.permanentDeliveryError({ responseCode: 550 }), true);
 });

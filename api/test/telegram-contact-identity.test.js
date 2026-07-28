@@ -347,6 +347,74 @@ test('telefone Telegram so participa da deduplicacao quando foi verificado', () 
   assert.ok(verified.hashes.includes(searchHash('551131234567')));
 });
 
+test('entrega Telegram prefere o chat_id confirmado pelo webhook ao identificador legado', async (context) => {
+  const original = Contact.findById;
+  context.after(() => { Contact.findById = original; });
+  const contact = new Contact({
+    _id: '507f1f77bcf86cd799439031',
+    displayNameEncrypted: encrypt('Samuel'),
+    displayNameHash: searchHash('samuel'),
+    displayNameSource: 'telegram',
+    channels: [{
+      _id: '507f1f77bcf86cd799439032',
+      channel: 'telegram',
+      addressEncrypted: encrypt('998877'),
+      addressHash: searchHash('998877'),
+      authorized: true,
+      consentStatus: 'granted',
+      source: 'telegram_webhook',
+      metadataEncrypted: encrypt({ chatId: '445566', userId: '998877' })
+    }],
+    channelAvatars: [],
+    pendingWhatsappConsents: [],
+    tags: [],
+    active: true,
+    notificationDisabled: false
+  });
+  Contact.findById = () => ({ select: async () => contact });
+
+  const serialized = contactsManager.serialize(contact);
+  assert.equal(serialized.channels[0].address, '998877');
+  assert.equal(serialized.channels[0].deliveryAddress, '445566');
+  const destination = await contactsManager.getDestination(contact._id, 'telegram');
+  assert.equal(destination.address, '445566');
+});
+
+test('entrega Telegram rejeita username legado sem chat_id numerico confirmado', async (context) => {
+  const original = Contact.findById;
+  context.after(() => { Contact.findById = original; });
+  const contact = new Contact({
+    _id: '507f1f77bcf86cd799439033',
+    displayNameEncrypted: encrypt('Contato legado'),
+    displayNameHash: searchHash('contato legado'),
+    displayNameSource: 'telegram',
+    channels: [{
+      _id: '507f1f77bcf86cd799439034',
+      channel: 'telegram',
+      addressEncrypted: encrypt('@usuario_legado'),
+      addressHash: searchHash('@usuario_legado'),
+      authorized: true,
+      consentStatus: 'granted',
+      source: 'legacy_import',
+      metadataEncrypted: encrypt({})
+    }],
+    channelAvatars: [],
+    pendingWhatsappConsents: [],
+    tags: [],
+    active: true,
+    notificationDisabled: false
+  });
+  Contact.findById = () => ({ select: async () => contact });
+
+  const serialized = contactsManager.serialize(contact);
+  assert.equal(serialized.channels[0].deliveryAddress, null);
+  assert.equal(serialized.channels[0].addressUnavailableReason, 'TELEGRAM_CHAT_UNAVAILABLE');
+  await assert.rejects(
+    contactsManager.getDestination(contact._id, 'telegram'),
+    (error) => error.code === 'TELEGRAM_CHAT_UNAVAILABLE'
+  );
+});
+
 test('Telegram-only e consolidado no contato WhatsApp do mesmo telefone sem perder consentimento ou avatar', async (context) => {
   const sourceId = '507f1f77bcf86cd799439021';
   const targetId = '507f1f77bcf86cd799439022';

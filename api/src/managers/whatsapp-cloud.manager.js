@@ -30,18 +30,72 @@ const DEFAULT_CLOUD_MESSAGE_LABELS = Object.freeze({
 });
 const BACKUP_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
 
+function unwrapCredential(value) {
+  let normalized = String(value || '').trim();
+  if (normalized.length >= 2) {
+    const first = normalized[0];
+    const last = normalized.at(-1);
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      normalized = normalized.slice(1, -1).trim();
+    }
+  }
+  return normalized;
+}
+
+function normalizeAccessToken(value) {
+  return unwrapCredential(value).replace(/^Bearer\s+/i, '').trim();
+}
+
+function trustedPhoneNumberId(value) {
+  const normalized = unwrapCredential(value);
+  return /^\d{5,30}$/.test(normalized) ? normalized : null;
+}
+
+function exposedChannelError(statusCode, message, details, code) {
+  const error = new ApiError(statusCode, message, details, code);
+  error.expose = true;
+  return error;
+}
+
 async function sendConfiguration() {
   const [accessToken, phoneNumberId, version] = await Promise.all([
     settingsManager.getValue('WHATSAPP_CLOUD_ACCESS_TOKEN'),
     settingsManager.getValue('WHATSAPP_CLOUD_PHONE_NUMBER_ID'),
     settingsManager.getValue('WHATSAPP_CLOUD_API_VERSION')
   ]);
-  if (!accessToken || !phoneNumberId) {
-    throw new ApiError(503, 'Envio do WhatsApp Cloud nao configurado', {
-      missing: [!accessToken && 'accessToken', !phoneNumberId && 'phoneNumberId'].filter(Boolean)
+  const normalizedAccessToken = normalizeAccessToken(accessToken);
+  const rawPhoneNumberId = unwrapCredential(phoneNumberId);
+  const normalizedPhoneNumberId = trustedPhoneNumberId(rawPhoneNumberId);
+  const normalizedVersion = unwrapCredential(version || env.whatsappCloudApiVersion);
+  if (!normalizedAccessToken || !rawPhoneNumberId) {
+    throw exposedChannelError(503, 'Envio do WhatsApp Cloud nao configurado', {
+      missing: [
+        !normalizedAccessToken && 'accessToken',
+        !rawPhoneNumberId && 'phoneNumberId'
+      ].filter(Boolean)
     }, 'CHANNEL_NOT_CONFIGURED');
   }
-  return { accessToken, phoneNumberId, version: version || env.whatsappCloudApiVersion };
+  if (!normalizedPhoneNumberId) {
+    throw exposedChannelError(
+      503,
+      'Phone Number ID invalido; informe somente o identificador numerico fornecido pela Meta',
+      null,
+      'WHATSAPP_CLOUD_PHONE_NUMBER_ID_INVALID'
+    );
+  }
+  if (!/^v\d+\.\d+$/.test(normalizedVersion)) {
+    throw exposedChannelError(
+      503,
+      'Versao da API do WhatsApp Cloud invalida; use o formato v25.0',
+      { apiVersion: normalizedVersion },
+      'WHATSAPP_CLOUD_VERSION_INVALID'
+    );
+  }
+  return {
+    accessToken: normalizedAccessToken,
+    phoneNumberId: normalizedPhoneNumberId,
+    version: normalizedVersion
+  };
 }
 
 async function challengeConfiguration() {
@@ -68,7 +122,12 @@ async function status() {
     settingsManager.getValue('WHATSAPP_CLOUD_APP_SECRET'),
     settingsManager.getValue('WHATSAPP_CLOUD_API_VERSION')
   ]);
-  const sendConfigured = Boolean(accessToken && phoneNumberId);
+  const normalizedVersion = unwrapCredential(version || env.whatsappCloudApiVersion);
+  const sendConfigured = Boolean(
+    normalizeAccessToken(accessToken)
+    && trustedPhoneNumberId(phoneNumberId)
+    && /^v\d+\.\d+$/.test(normalizedVersion)
+  );
   const webhookVerificationConfigured = Boolean(verifyToken);
   const webhookSignatureConfigured = Boolean(appSecret);
   return {
@@ -77,7 +136,7 @@ async function status() {
     webhookVerificationConfigured,
     webhookSignatureConfigured,
     webhookConfigured: webhookVerificationConfigured && webhookSignatureConfigured,
-    apiVersion: version || env.whatsappCloudApiVersion
+    apiVersion: normalizedVersion
   };
 }
 
@@ -481,9 +540,62 @@ function normalizeMetaDestination(value) {
   return digits;
 }
 
-async function postCloudMessage(destination, message) {
+function contactPhoneNumberId(contact) {
+  const identity = contact?.channels?.find((item) => item.channel === 'whatsapp_cloud');
+  return trustedPhoneNumberId(identity?.metadata?.phoneNumberId);
+}
+
+function sanitizeProviderMessage(value) {
+  return String(value || '')
+    .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer [credencial protegida]')
+    .replace(/\bEAA[A-Za-z0-9_-]{20,}\b/g, '[credencial protegida]')
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim()
+    .slice(0, 500);
+}
+
+function providerFailure(error = {}, providerHttpStatus) {
+  const providerCode = Number(error.code) || null;
+  const providerSubcode = Number(error.error_subcode) || null;
+  let message;
+  if (providerCode === 190) {
+    message = 'Access token da Meta invalido, expirado ou vinculado a um app indisponivel. Gere um token do app atual e salve novamente nas configuracoes.';
+  } else if (providerCode === 100 && providerSubcode === 33) {
+    message = 'Phone Number ID nao encontrado ou sem acesso pelo token salvo. Confira o numero registrado e gere o token na mesma conta WhatsApp Business.';
+  } else if ([10, 200].includes(providerCode)) {
+    message = 'O token da Meta nao possui permissao para enviar mensagens por este numero. Confira whatsapp_business_messaging e a conta WhatsApp Business vinculada.';
+  } else if (providerCode === 131030) {
+    message = 'O destinatario nao esta autorizado para este numero de teste da Meta.';
+  } else if (providerCode === 131047) {
+    message = 'A janela de atendimento da Meta esta fechada; envie um template oficial aprovado.';
+  } else if (providerCode === 132001) {
+    message = 'O template ou idioma informado nao existe ou nao esta aprovado na conta WhatsApp Business configurada.';
+  } else if ([131008, 131009, 132000, 132012].includes(providerCode)) {
+    message = 'Os parametros enviados nao correspondem ao template aprovado na Meta.';
+  } else {
+    message = sanitizeProviderMessage(error.message) || 'Falha na API do WhatsApp Cloud';
+  }
+  return exposedChannelError(
+    502,
+    message,
+    {
+      providerHttpStatus,
+      providerCode,
+      providerSubcode,
+      providerErrorCode: providerCode,
+      providerErrorSubcode: providerSubcode,
+      providerType: sanitizeProviderMessage(error.type) || null,
+      providerMessage: sanitizeProviderMessage(error.message) || null,
+      providerTraceId: sanitizeProviderMessage(error.fbtrace_id) || null
+    },
+    'WHATSAPP_CLOUD_ERROR'
+  );
+}
+
+async function postCloudMessage(destination, message, options = {}) {
   const config = await sendConfiguration();
-  const response = await fetch('https://graph.facebook.com/' + config.version + '/' + config.phoneNumberId + '/messages', {
+  const phoneNumberId = trustedPhoneNumberId(options.phoneNumberId) || config.phoneNumberId;
+  const response = await fetch('https://graph.facebook.com/' + config.version + '/' + encodeURIComponent(phoneNumberId) + '/messages', {
     method: 'POST',
     headers: { authorization: 'Bearer ' + config.accessToken, 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -496,17 +608,12 @@ async function postCloudMessage(destination, message) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new ApiError(
-      502,
-      body.error?.message || 'Falha na API do WhatsApp',
-      { ...(body.error || {}), providerHttpStatus: response.status },
-      'WHATSAPP_CLOUD_ERROR'
-    );
+    throw providerFailure(body.error || {}, response.status);
   }
   return {
     providerMessageId: body.messages?.[0]?.id || null,
     raw: body,
-    phoneNumberId: config.phoneNumberId
+    phoneNumberId
   };
 }
 
@@ -812,14 +919,23 @@ async function sendConversationText(id, text, options = {}) {
   }
   const openConversation = await conversationsManager.requireOpenCloudServiceWindow(id);
   const destination = normalizeMetaDestination(openConversation.externalId);
+  const contactId = openConversation.conversation.contact
+    ? String(openConversation.conversation.contact._id || openConversation.conversation.contact)
+    : null;
+  const resolvedContact = contactId
+    ? await contactsManager.getById(contactId).catch((error) => {
+      if (error.statusCode === 404 || error.status === 404) return null;
+      throw error;
+    })
+    : null;
   const sent = await postCloudMessage(destination, {
     type: 'text',
     text: { body: normalizedText, preview_url: false }
-  });
+  }, { phoneNumberId: contactPhoneNumberId(resolvedContact) });
   const recorded = await conversationsManager.recordOutbound({
     channel: 'whatsapp_cloud',
     externalId: destination,
-    contactId: openConversation.conversation.contact || undefined,
+    contactId: contactId || undefined,
     providerMessageId: sent.providerMessageId,
     body: normalizedText,
     type: 'text',
@@ -837,9 +953,7 @@ async function sendConversationText(id, text, options = {}) {
       ? 'Solicitacao de permissao enviada no chat WhatsApp Cloud'
       : 'Resposta enviada no chat WhatsApp Cloud',
     context: {
-      contactId: openConversation.conversation.contact
-        ? String(openConversation.conversation.contact._id || openConversation.conversation.contact)
-        : null,
+      contactId,
       conversationId: String(openConversation.conversation._id),
       providerMessageId: sent.providerMessageId,
       serviceWindowExpiresAt: openConversation.serviceWindow.expiresAt
@@ -917,7 +1031,9 @@ async function send(input) {
   if (!resolvedContact && input.useCase !== 'profile_auth') {
     resolvedContact = await contactsManager.findByChannelAddress('whatsapp_cloud', destination);
   }
-  const sent = await postCloudMessage(destination, message);
+  const sent = await postCloudMessage(destination, message, {
+    phoneNumberId: contactPhoneNumberId(resolvedContact)
+  });
   const messageId = sent.providerMessageId;
   if (input.useCase !== 'profile_auth') {
     const template = message.template || {};
