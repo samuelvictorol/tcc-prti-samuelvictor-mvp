@@ -1,10 +1,10 @@
 const mongoose = require('mongoose');
-const { DELIVERY_CHANNELS } = require('../enums/channels');
+const { STORED_CHANNELS } = require('../enums/channels');
 
 const inviteLinkSchema = new mongoose.Schema({
   label: { type: String, required: true },
   url: { type: String, required: true },
-  channel: { type: String, enum: [...DELIVERY_CHANNELS, 'other'], default: 'other' },
+  channel: { type: String, enum: [...STORED_CHANNELS, 'other'], default: 'other' },
   active: { type: Boolean, default: true }
 }, { _id: true });
 

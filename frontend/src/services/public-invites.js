@@ -57,7 +57,7 @@ export function defaultInviteActionLink(channel, context = {}) {
       _generated: true,
     }
   }
-  if (normalizedChannel === 'whatsapp_web' || normalizedChannel === 'whatsapp_cloud') {
+  if (normalizedChannel === 'whatsapp_cloud') {
     return {
       label: 'Autorizar WhatsApp',
       url: buildWhatsappInviteUrl(context.whatsappPhoneNumber, context.whatsappPermissionCommand),

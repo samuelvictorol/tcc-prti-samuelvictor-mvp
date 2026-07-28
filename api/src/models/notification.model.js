@@ -1,10 +1,10 @@
 const mongoose = require('mongoose');
-const { CHANNELS, DELIVERY_CHANNELS } = require('../enums/channels');
+const { CHANNELS, STORED_CHANNELS } = require('../enums/channels');
 const { NOTIFICATION_STATUS, DELIVERY_STATUS } = require('../enums/notification');
 
 const deliverySchema = new mongoose.Schema({
   contact: { type: mongoose.Schema.Types.ObjectId, ref: 'Contact', required: true },
-  channel: { type: String, enum: DELIVERY_CHANNELS, required: true },
+  channel: { type: String, enum: STORED_CHANNELS, required: true },
   destinationHash: { type: String },
   status: { type: String, enum: Object.values(DELIVERY_STATUS), default: DELIVERY_STATUS.QUEUED },
   attempts: { type: Number, default: 0 },

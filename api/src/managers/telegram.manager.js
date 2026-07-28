@@ -533,7 +533,7 @@ async function notifyNewContact(contact, channel, context = {}) {
     kind: 'contact_auto_created',
     channel,
     title: 'Novo contato recebido',
-    message: (contact.displayName || 'Um novo contato') + ' foi cadastrado automaticamente pelo ' + (channel === 'telegram' ? 'Telegram' : 'WhatsApp Web') + '.',
+    message: (contact.displayName || 'Um novo contato') + ' foi cadastrado automaticamente pelo ' + (channel === 'telegram' ? 'Telegram' : 'WhatsApp Cloud') + '.',
     contactId: contact.id,
     context
   }).catch(async (error) => {

@@ -4,7 +4,7 @@ const conversationMessageSchema = new mongoose.Schema({
   conversation: { type: mongoose.Schema.Types.ObjectId, ref: 'Conversation', required: true, index: true },
   contact: { type: mongoose.Schema.Types.ObjectId, ref: 'Contact', index: true },
   group: { type: mongoose.Schema.Types.ObjectId, ref: 'ContactGroup', index: true },
-  channel: { type: String, enum: ['telegram', 'whatsapp_web'], required: true, index: true },
+  channel: { type: String, enum: ['telegram', 'whatsapp_web', 'whatsapp_cloud'], required: true, index: true },
   direction: { type: String, enum: ['inbound', 'outbound'], required: true },
   providerMessageIdEncrypted: { type: String, select: false },
   providerMessageIdHash: { type: String },
@@ -12,8 +12,8 @@ const conversationMessageSchema = new mongoose.Schema({
   type: { type: String, default: 'text' },
   hasMedia: { type: Boolean, default: false },
   sentAt: { type: Date, required: true, index: true },
-  // Somente mensagens WhatsApp Web recebem este campo. O indice TTL garante
-  // retencao temporal sem alterar o historico Telegram compartilhado no model.
+  // Mensagens Cloud recebem uma data de expiracao operacional de 30 dias.
+  // O campo tambem preserva a expiracao de documentos legados.
   retentionUntil: { type: Date },
   activityVersion: { type: Number, default: 0, min: 0 },
   tombstonedAt: { type: Date },

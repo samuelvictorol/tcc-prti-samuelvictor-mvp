@@ -245,7 +245,7 @@ test('worker pula contato quando grupo foi removido antes do disparo', async (co
   assert.equal(fake.status, 'failed');
 });
 
-test('monta disparo global sem WhatsApp Web e com skips independentes por canal', async (context) => {
+test('monta disparo global com skips independentes por canal', async (context) => {
   const originals = {
     contacts: contactsManager.getManyByIds,
     telegramStatus: telegramManager.status,
@@ -267,7 +267,7 @@ test('monta disparo global sem WhatsApp Web e com skips independentes por canal'
     id: '507f1f77bcf86cd799439011',
     active: true,
     notificationDisabled: false,
-    channels: ['telegram', 'email', 'whatsapp_cloud', 'whatsapp_web'].map((channel) => ({
+    channels: ['telegram', 'email', 'whatsapp_cloud'].map((channel) => ({
       channel,
       authorized: true,
       consentStatus: 'granted'
@@ -281,21 +281,13 @@ test('monta disparo global sem WhatsApp Web e com skips independentes por canal'
   const deliveries = await notificationsManager.buildDeliveries(
     ['507f1f77bcf86cd799439011'],
     'global',
-    { variants: { telegram: {}, email: {}, whatsapp_cloud: {}, whatsapp_web: {} } }
+    { variants: { telegram: {}, email: {}, whatsapp_cloud: {} } }
   );
   assert.equal(deliveries.length, 3);
   assert.equal(deliveries.find((item) => item.channel === 'telegram').status, 'queued');
   assert.equal(deliveries.find((item) => item.channel === 'email').status, 'queued');
   assert.equal(deliveries.find((item) => item.channel === 'whatsapp_cloud').errorCode, 'CHANNEL_NOT_CONFIGURED');
-  assert.equal(deliveries.some((item) => item.channel === 'whatsapp_web'), false);
   assert.equal(contactQueries, 1);
-});
-
-test('WhatsApp Web e rejeitado no fluxo de notificacoes', async () => {
-  await assert.rejects(
-    () => notificationsManager.buildDeliveries(['507f1f77bcf86cd799439011'], 'whatsapp_web'),
-    (error) => error.code === 'WHATSAPP_WEB_DIRECT_ONLY'
-  );
 });
 
 test('classificador repete erros transitorios e throttling da Meta mesmo quando o HTTP e 400', () => {

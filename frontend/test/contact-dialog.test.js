@@ -21,22 +21,6 @@ describe('autorizações manuais do contato', () => {
     })).toBeNull()
   })
 
-  it('não permite inventar uma identidade do WhatsApp Web', () => {
-    expect(contactAuthorizationValidation({
-      consents: { whatsappWeb: true },
-      hasWhatsappWebIdentity: false,
-    })).toContain('iniciar uma conversa')
-    expect(contactAuthorizationValidation({
-      consents: { whatsappWeb: true },
-      hasWhatsappWebIdentity: true,
-    })).toBeNull()
-    expect(contactAuthorizationValidation({
-      consents: { whatsappWeb: true },
-      hasWhatsappWebIdentity: false,
-      hasPendingWhatsappWeb: true,
-    })).toBeNull()
-  })
-
   it('aceita a decisão automática pendente da Cloud sem inventar um telefone', () => {
     expect(contactAuthorizationValidation({
       phone: '',
@@ -47,24 +31,21 @@ describe('autorizações manuais do contato', () => {
 
   it('expõe a proveniência automática e a última alteração administrativa', () => {
     expect(contactConsentProvenance({
-      channel: 'whatsapp_web',
-      source: 'whatsapp_web_permission_command',
+      channel: 'whatsapp_cloud',
+      source: 'whatsapp_cloud_permission_command',
       consentCommand: '/notify-me',
-      metadata: { sharedWhatsappConsent: true },
     })).toMatchObject({
       automaticCommand: true,
       changedByAdmin: false,
-      permissionChannel: 'whatsapp_web',
-      permissionChannelLabel: 'WhatsApp Web',
-      sharedWhatsappGrant: true,
-      label: 'Autorizado automaticamente via /notify-me recebido pelo WhatsApp Web (WhatsApp Web + Cloud)',
+      permissionChannel: 'whatsapp_cloud',
+      permissionChannelLabel: 'WhatsApp Cloud',
+      label: 'Autorizado automaticamente via /notify-me recebido pelo WhatsApp Cloud',
     })
     expect(contactConsentProvenance({
       consentSource: 'admin_ui',
       consentChangedAt: '2026-07-21T12:00:00.000Z',
     })).toMatchObject({
       changedByAdmin: true,
-      sharedWhatsappGrant: false,
       label: 'Alterado por último pelo administrador',
     })
   })

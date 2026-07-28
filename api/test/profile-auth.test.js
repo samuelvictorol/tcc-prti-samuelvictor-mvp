@@ -317,28 +317,6 @@ test('perfil permite ativar e revogar somente email com confirmacao e auditoria'
   assert.equal(calls[0][3], 'revoked');
 });
 
-test('perfil rejeita LID conhecido como telefone editavel', async (context) => {
-  restoreAfter(context, [[contactsManager, 'getById'], [contactsManager, 'update']]);
-  contactsManager.getById = async () => ({
-    ...profileContact(),
-    phone: '551131234567',
-    channels: [{
-      channel: 'whatsapp_web',
-      address: '123456789012345@lid',
-      authorized: true,
-      consentStatus: 'granted'
-    }]
-  });
-  let updated = false;
-  contactsManager.update = async () => { updated = true; };
-
-  await assert.rejects(
-    () => profileManager.updateOwnProfile('507f1f77bcf86cd799439011', { phone: '123456789012345' }),
-    (error) => error.code === 'PROFILE_PHONE_PROVIDER_IDENTIFIER_INVALID'
-  );
-  assert.equal(updated, false);
-});
-
 test('links de ativacao usam numero runtime e adaptam comando configurado ao deep-link Telegram', async (context) => {
   restoreAfter(context, [
     [contactsManager, 'getById'], [settingsManager, 'getWhatsappPermissionCommand'],

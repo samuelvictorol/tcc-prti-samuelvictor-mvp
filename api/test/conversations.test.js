@@ -3,13 +3,11 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 const Conversation = require('../src/models/conversation.model');
 const ConversationMessage = require('../src/models/conversation-message.model');
-const Contact = require('../src/models/contact.model');
-const ConsentEvent = require('../src/models/consent-event.model');
 const conversationsManager = require('../src/managers/conversations.manager');
 const contactsManager = require('../src/managers/contacts.manager');
 const socketService = require('../src/services/socket.service');
 const { env } = require('../src/config/env');
-const { encrypt, decrypt, searchHash } = require('../src/services/crypto.service');
+const { encrypt, searchHash } = require('../src/services/crypto.service');
 const { createApp } = require('../src/app');
 
 function selected(value) {
@@ -573,108 +571,23 @@ test('remover conversa cria ocultacao duravel ate o proximo inbound', async (con
   assert.deepEqual(events, ['conversation:removed']);
 });
 
-test('avatar do contato prefere WhatsApp e usa Telegram como alternativa', () => {
+test('avatar do contato prefere WhatsApp Cloud e usa Telegram como alternativa', () => {
   const base = {
     _id: '507f1f77bcf86cd799439011',
     displayNameEncrypted: encrypt('Ana'),
     channels: [],
     channelAvatars: [
       { channel: 'telegram', urlEncrypted: encrypt('https://telegram.example/avatar.jpg') },
-      { channel: 'whatsapp_web', urlEncrypted: encrypt('https://whatsapp.example/avatar.jpg') }
+      { channel: 'whatsapp_cloud', urlEncrypted: encrypt('https://whatsapp.example/avatar.jpg') }
     ]
   };
   const preferred = contactsManager.serialize(base);
   assert.equal(preferred.avatarUrl, 'https://whatsapp.example/avatar.jpg');
-  assert.equal(preferred.avatarSource, 'whatsapp_web');
+  assert.equal(preferred.avatarSource, 'whatsapp_cloud');
 
   const fallback = contactsManager.serialize({ ...base, channelAvatars: base.channelAvatars.slice(0, 1) });
   assert.equal(fallback.avatarUrl, 'https://telegram.example/avatar.jpg');
   assert.equal(fallback.avatarSource, 'telegram');
-});
-
-test('Cloud agrega identidade ao contato Web unico pelo telefone sem sobrescrever dados manuais', async (context) => {
-  const originals = {
-    findOne: Contact.findOne,
-    find: Contact.find,
-    consent: ConsentEvent.create
-  };
-  context.after(() => {
-    Contact.findOne = originals.findOne;
-    Contact.find = originals.find;
-    ConsentEvent.create = originals.consent;
-  });
-
-  const contactId = '507f1f77bcf86cd799439011';
-  const webAddress = '5511931234567@c.us';
-  const existing = {
-    _id: contactId,
-    displayNameEncrypted: encrypt('Nome definido manualmente'),
-    displayNameHash: searchHash('nome definido manualmente'),
-    displayNameSource: 'manual',
-    phoneEncrypted: encrypt('5511931234567'),
-    phoneHash: searchHash('5511931234567'),
-    channelAvatars: [{ channel: 'whatsapp_web', urlEncrypted: encrypt('https://web.example/avatar.jpg'), updatedAt: new Date() }],
-    channels: [{
-      _id: '507f1f77bcf86cd799439012',
-      channel: 'whatsapp_web',
-      addressEncrypted: encrypt(webAddress),
-      addressHash: searchHash(webAddress),
-      authorized: true,
-      consentStatus: 'granted',
-      source: 'whatsapp_web_message'
-    }],
-    tags: ['cliente'],
-    active: true,
-    notificationDisabled: false,
-    async save() {},
-    toObject() { return { ...this }; }
-  };
-  Contact.findOne = () => ({ select: async () => null });
-  let phoneFilter;
-  Contact.find = (filter) => {
-    phoneFilter = filter;
-    const query = {
-      select() { return query; },
-      async limit(limit) {
-        assert.equal(limit, 2);
-        return [existing];
-      }
-    };
-    return query;
-  };
-  const audits = [];
-  ConsentEvent.create = async (event) => { audits.push(event); return event; };
-
-  const result = await contactsManager.upsertFromChannel({
-    channel: 'whatsapp_cloud',
-    address: '551131234567',
-    phone: '+55 (11) 3123-4567',
-    displayName: 'Nome retornado pela Meta',
-    avatarUrl: 'https://cloud.example/avatar.jpg',
-    source: 'whatsapp_cloud_webhook',
-    authorize: true,
-    consentStatus: 'granted'
-  });
-
-  assert.equal(result.id, contactId);
-  assert.deepEqual(result.upsertState, { created: false, identityAdded: true });
-  assert.equal(decrypt(existing.displayNameEncrypted), 'Nome definido manualmente');
-  assert.equal(existing.channels.length, 2);
-  assert.equal(decrypt(existing.channels[0].addressEncrypted), webAddress);
-  assert.deepEqual(result.channels.map((identity) => identity.channel), ['whatsapp_web', 'whatsapp_cloud']);
-  assert.equal(result.channels[1].address, '551131234567');
-  assert.equal(result.channels[1].consentStatus, 'granted');
-  assert.equal(result.avatarUrl, 'https://web.example/avatar.jpg');
-  assert.equal(result.avatarSource, 'whatsapp_web');
-  assert.deepEqual(existing.channelAvatars.map((avatar) => avatar.channel), ['whatsapp_web', 'whatsapp_cloud']);
-  for (const alias of ['551131234567', '+551131234567', '5511931234567', '+5511931234567']) {
-    assert.ok(phoneFilter.phoneHash.$in.includes(searchHash(alias)), 'hash ausente para alias BR ' + alias);
-  }
-  assert.equal(audits.length, 1);
-  assert.equal(audits[0].channel, 'whatsapp_cloud');
-  assert.equal(audits[0].status, 'granted');
-  assert.equal(contactsManager.mergePhoneIdentity('telegram', '+55 11 93123-4567'), null);
-  assert.equal(contactsManager.mergePhoneIdentity('whatsapp_cloud', '123'), null);
 });
 
 test('rotas de conversas exigem autenticacao administrativa', async () => {

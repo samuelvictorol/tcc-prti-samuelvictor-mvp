@@ -47,15 +47,16 @@ const identifierTypeOptions = Object.freeze([
 
 const channelMeta = Object.freeze({
   telegram: { label: 'Telegram', icon: 'send_to_mobile', color: 'info' },
-  whatsapp_web: { label: 'WhatsApp Web', icon: 'forum', color: 'primary' },
   whatsapp_cloud: { label: 'WhatsApp Cloud', icon: 'cloud_sync', color: 'positive' },
   email: { label: 'Email', icon: 'mail', color: 'deep-purple' },
 })
 
-const permissionCards = computed(() => (profile.value?.permissions || []).map((permission) => ({
-  ...permission,
-  ...(channelMeta[permission.channel] || { label: permission.channel, icon: 'notifications', color: 'grey-7' }),
-})))
+const permissionCards = computed(() => (profile.value?.permissions || [])
+  .filter((permission) => Boolean(channelMeta[permission.channel]))
+  .map((permission) => ({
+    ...permission,
+    ...channelMeta[permission.channel],
+  })))
 
 const historyColumns = [
   { name: 'date', label: 'Data', field: 'updatedAt', align: 'left' },
@@ -252,7 +253,7 @@ async function saveEmailConsent() {
 
 function activationFor(channel) {
   if (channel === 'telegram') return activationLinks.value?.telegram
-  if (['whatsapp_web', 'whatsapp_cloud'].includes(channel)) return activationLinks.value?.whatsapp
+  if (channel === 'whatsapp_cloud') return activationLinks.value?.whatsapp
   return null
 }
 

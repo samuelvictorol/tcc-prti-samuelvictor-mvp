@@ -1,7 +1,6 @@
 const CHANNEL_META = Object.freeze({
   telegram: Object.freeze({ label: 'Telegram', icon: 'send_to_mobile', color: 'info' }),
   whatsapp_cloud: Object.freeze({ label: 'WhatsApp Cloud', icon: 'cloud_sync', color: 'positive' }),
-  whatsapp_web: Object.freeze({ label: 'WhatsApp Web', icon: 'forum', color: 'primary' }),
   email: Object.freeze({ label: 'Email', icon: 'mail', color: 'grey-7' }),
 })
 
@@ -11,8 +10,6 @@ const AUTOMATIC_SOURCE_LABELS = Object.freeze({
   telegram_start: 'Telegram',
   whatsapp_cloud_webhook: 'WhatsApp Cloud',
   whatsapp_cloud_permission_command: 'WhatsApp Cloud',
-  whatsapp_web_message: 'WhatsApp Web',
-  whatsapp_web_permission_command: 'WhatsApp Web',
 })
 
 export function normalizeContactChannel(value) {
@@ -32,7 +29,7 @@ export function contactIdentity(contact = {}, channel) {
 
 export function pendingWhatsappConsent(contact = {}, channel) {
   const normalized = normalizeContactChannel(channel)
-  if (!['whatsapp_web', 'whatsapp_cloud'].includes(normalized)) return null
+  if (normalized !== 'whatsapp_cloud') return null
   return (Array.isArray(contact?.pendingWhatsappConsents) ? contact.pendingWhatsappConsents : [])
     .find((pending) => normalizeContactChannel(pending?.channel) === normalized
       && (!pending?.status || pending.status === 'granted')) || null
@@ -75,11 +72,6 @@ export function identityIdentifiers(identity = {}) {
     addIdentifier(items, 'waId', 'wa_id', metadataValue(metadata, 'waId', 'wa_id') || address)
     addIdentifier(items, 'userId', 'user_id', metadataValue(metadata, 'userId', 'user_id', 'fromUserId', 'from_user_id'))
     addIdentifier(items, 'phoneNumberId', 'phone_number_id', metadataValue(metadata, 'phoneNumberId', 'phone_number_id'))
-  } else if (channel === 'whatsapp_web') {
-    const serializedId = metadataValue(metadata, 'serializedId', 'serialized_id') || address
-    addIdentifier(items, 'chatId', 'chat_id', metadataValue(metadata, 'chatId', 'chat_id') || serializedId)
-    addIdentifier(items, 'contactId', 'contact_id', metadataValue(metadata, 'contactId', 'contact_id') || serializedId)
-    addIdentifier(items, 'contactUser', 'usuário do contato', metadataValue(metadata, 'contactUser', 'contact_user'))
   }
 
   return items
@@ -156,21 +148,12 @@ export function identityConsentProvenance(identity = {}) {
       || metadata.consent_command_channel
       || metadata.permissionChannel
       || metadata.permission_channel
-      || (/whatsapp_web_permission_command/.test(usable(identity?.source).toLowerCase()) ? 'whatsapp_web' : '')
       || (/whatsapp_cloud_permission_command/.test(usable(identity?.source).toLowerCase()) ? 'whatsapp_cloud' : ''),
   )
-  const permissionChannelLabel = ['whatsapp_web', 'whatsapp_cloud'].includes(permissionChannel)
+  const permissionChannelLabel = permissionChannel === 'whatsapp_cloud'
     ? contactChannelMeta(permissionChannel).label
     : ''
-  const sharedWhatsappGrant = automaticCommand
-    && ['whatsapp_web', 'whatsapp_cloud'].includes(normalizeContactChannel(identity?.channel))
-    && Boolean(
-      identity?.sharedWhatsappConsent === true
-        || consent.sharedWhatsappConsent === true
-        || metadata.sharedWhatsappConsent === true
-        || metadata.shared_whatsapp_consent === true,
-    )
-  const automaticLabel = `Autorizado automaticamente${command ? ` via ${command}` : ' via comando'}${permissionChannelLabel ? ` recebido pelo ${permissionChannelLabel}` : ''}${sharedWhatsappGrant ? ' (WhatsApp Web + Cloud)' : ''}`
+  const automaticLabel = `Autorizado automaticamente${command ? ` via ${command}` : ' via comando'}${permissionChannelLabel ? ` recebido pelo ${permissionChannelLabel}` : ''}`
 
   return {
     source: source || 'unknown',
@@ -180,7 +163,6 @@ export function identityConsentProvenance(identity = {}) {
     changedAt,
     changedByAdmin,
     automaticCommand,
-    sharedWhatsappGrant,
     label: changedByAdmin
       ? 'Alterado por último pelo administrador'
       : automaticCommand

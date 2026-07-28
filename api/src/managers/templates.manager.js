@@ -44,9 +44,6 @@ function clean(input) {
 }
 
 function validateTemplate(input) {
-  if (input.channel === 'whatsapp_web') {
-    throw new ApiError(422, 'WhatsApp Web possui somente chat direto e nao aceita templates', null, 'WHATSAPP_WEB_DIRECT_ONLY');
-  }
   if (input.channel === 'email' && !input.body && !input.html) throw new ApiError(422, 'Template de email exige body ou html');
   if (input.channel !== 'email' && input.html) throw new ApiError(422, 'Somente templates de email aceitam HTML', null, 'HTML_EMAIL_ONLY');
   if (input.channel === 'global' && (!input.variants || typeof input.variants !== 'object')) throw new ApiError(422, 'Template global exige variants por canal');

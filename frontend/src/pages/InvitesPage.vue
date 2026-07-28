@@ -10,7 +10,7 @@ import {
   slugifyInviteTitle,
 } from '../services/public-invites.js'
 import { telegramBotIdentity } from '../services/telegram.js'
-import { DEFAULT_WHATSAPP_PERMISSION_COMMAND } from '../services/whatsapp-web.js'
+import { DEFAULT_WHATSAPP_PERMISSION_COMMAND } from '../services/whatsapp.js'
 
 const $q = useQuasar()
 const loading = ref(false)
@@ -88,7 +88,7 @@ function iconUrlRule(value) {
 
 function actionLinkHint(link) {
   if (link.channel === 'telegram' && !link.url) return 'Bot não identificado. Configure e valide o token do Telegram na tela Início.'
-  if (link._generated && (link.channel === 'whatsapp_cloud' || link.channel === 'whatsapp_web')) {
+  if (link._generated && link.channel === 'whatsapp_cloud') {
     return inviteActionContext.whatsappPhoneNumber
       ? 'Gerada com o número público e o comando de autorização atuais; você pode editar.'
       : 'Sem número público configurado: o link abre o seletor do WhatsApp com o comando preenchido.'
@@ -306,7 +306,7 @@ onMounted(loadInvites)
                   outlined
                   emit-value
                   map-options
-                  :options="[{label:'Telegram',value:'telegram'},{label:'WhatsApp Web',value:'whatsapp_web'},{label:'WhatsApp Cloud',value:'whatsapp_cloud'},{label:'Email',value:'email'},{label:'Outro',value:'other'}]"
+                  :options="[{label:'Telegram',value:'telegram'},{label:'WhatsApp Cloud',value:'whatsapp_cloud'},{label:'Email',value:'email'},{label:'Outro',value:'other'}]"
                   label="Canal"
                   @update:model-value="onLinkChannelChange(link, $event)"
                 />

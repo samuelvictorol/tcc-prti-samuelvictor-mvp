@@ -59,7 +59,7 @@ test('configuracao normal fornece previews sem devolver segredos completos', asy
 
 test('revelacao rejeita canal fora da allowlist e a rota exige autenticacao', async () => {
   await assert.rejects(
-    settingsManager.revealChannel('whatsappWeb'),
+    settingsManager.revealChannel('sms'),
     (error) => error.code === 'SETTING_CHANNEL_NOT_ALLOWED' && error.statusCode === 400
   );
 

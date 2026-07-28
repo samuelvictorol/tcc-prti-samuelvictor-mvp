@@ -252,9 +252,6 @@ function serializeNotification(notification, options = {}) {
 }
 
 function notificationChannels(channel, kind, templateIds = {}) {
-  if (channel === CHANNELS.WHATSAPP_WEB) {
-    throw new ApiError(422, 'WhatsApp Web possui envio apenas na tela de chat', null, 'WHATSAPP_WEB_DIRECT_ONLY');
-  }
   const requestedGlobalChannels = NOTIFICATION_DELIVERY_CHANNELS.filter((selectedChannel) => templateIds?.[selectedChannel]);
   let selectedChannels = channel === 'global'
     ? (kind === 'global' && requestedGlobalChannels.length ? requestedGlobalChannels : [...NOTIFICATION_DELIVERY_CHANNELS])
@@ -324,9 +321,6 @@ async function buildDeliveries(contactIds, channel, template, options = {}) {
 }
 
 async function create(input, actorId) {
-  if (input.channel === CHANNELS.WHATSAPP_WEB) {
-    throw new ApiError(422, 'WhatsApp Web possui envio apenas na tela de chat', null, 'WHATSAPP_WEB_DIRECT_ONLY');
-  }
   if (input.kind === 'quick' && input.channel === CHANNELS.GLOBAL) {
     throw new ApiError(422, 'Disparo global exige um template por canal', null, 'GLOBAL_TEMPLATE_REQUIRED');
   }

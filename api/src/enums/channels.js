@@ -1,6 +1,5 @@
 const CHANNELS = Object.freeze({
   TELEGRAM: 'telegram',
-  WHATSAPP_WEB: 'whatsapp_web',
   WHATSAPP_CLOUD: 'whatsapp_cloud',
   EMAIL: 'email',
   GLOBAL: 'global'
@@ -8,9 +7,12 @@ const CHANNELS = Object.freeze({
 
 const DELIVERY_CHANNELS = Object.freeze([
   CHANNELS.TELEGRAM,
-  CHANNELS.WHATSAPP_WEB,
   CHANNELS.WHATSAPP_CLOUD,
   CHANNELS.EMAIL
 ]);
 
-module.exports = { CHANNELS, DELIVERY_CHANNELS };
+// Aceito somente nos schemas de persistência para que documentos criados por
+// versões anteriores continuem legíveis/editáveis sem reativar o canal removido.
+const STORED_CHANNELS = Object.freeze([...DELIVERY_CHANNELS, 'whatsapp_web']);
+
+module.exports = { CHANNELS, DELIVERY_CHANNELS, STORED_CHANNELS };

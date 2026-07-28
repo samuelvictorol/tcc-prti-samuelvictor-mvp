@@ -16,20 +16,20 @@ const DEFINITIONS = Object.freeze({
   WHATSAPP_CLOUD_VERIFY_TOKEN: { sensitive: true, channel: 'whatsapp_cloud' },
   WHATSAPP_CLOUD_APP_SECRET: { sensitive: true, channel: 'whatsapp_cloud' },
   WHATSAPP_CLOUD_API_VERSION: { sensitive: false, channel: 'whatsapp_cloud' },
+  WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT: { sensitive: false, channel: 'whatsapp_cloud' },
   START_NOTIFY_WHATSAPP_PERMISSION: { sensitive: false, channel: 'whatsapp' },
-  START_VERIFY_TELEGRAM_PERMISSION: { sensitive: false, channel: 'telegram' },
-  WHATSAPP_WEB_AUTHENTICATED_AT: { sensitive: true, internal: true },
-  WHATSAPP_WEB_SESSION_MAX_AGE_DAYS: { sensitive: false, channel: 'whatsapp_web' }
+  START_VERIFY_TELEGRAM_PERMISSION: { sensitive: false, channel: 'telegram' }
 });
 
 const REQUIRED = Object.freeze({
   telegram: ['TELEGRAM_BOT_TOKEN'],
   email: ['GMAIL_USER', 'GMAIL_APP_PASSWORD', 'GMAIL_FROM'],
-  whatsapp_cloud: ['WHATSAPP_CLOUD_ACCESS_TOKEN', 'WHATSAPP_CLOUD_PHONE_NUMBER_ID'],
-  whatsapp_web: []
+  whatsapp_cloud: ['WHATSAPP_CLOUD_ACCESS_TOKEN', 'WHATSAPP_CLOUD_PHONE_NUMBER_ID']
 });
 
 const SENSITIVE_PREVIEW = '••••••••••••';
+
+const DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT = 'Para ativar suas notificações, responda com {command}.';
 
 const CHANNEL_REVEAL_FIELDS = Object.freeze({
   telegram: Object.freeze({
@@ -76,6 +76,17 @@ function assertWritableValue(key, value, config) {
       { key },
       'MASKED_SECRET_NOT_ALLOWED'
     );
+  }
+  if (key === 'WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT') {
+    const normalized = String(value || '').trim();
+    if (!normalized || normalized.length > 1000 || !normalized.includes('{command}')) {
+      throw new ApiError(
+        422,
+        'O texto deve ter ate 1000 caracteres e incluir o marcador {command}',
+        { key },
+        'WHATSAPP_CONSENT_REQUEST_TEXT_INVALID'
+      );
+    }
   }
 }
 
@@ -168,12 +179,6 @@ async function statuses() {
   for (const channel of Object.keys(REQUIRED)) {
     base[channel] = { configured: await channelConfigured(channel) };
   }
-  try {
-    const whatsappWeb = require('./whatsapp-web.manager');
-    base.whatsapp_web = { ...base.whatsapp_web, ...(await whatsappWeb.status()) };
-  } catch (_error) {
-    base.whatsapp_web = { configured: true, ready: false, state: 'not_initialized' };
-  }
   return base;
 }
 
@@ -181,7 +186,6 @@ async function setBulk(input, actorId) {
   const mapping = {
     'telegram.botToken': 'TELEGRAM_BOT_TOKEN',
     'telegram.webhookSecret': 'TELEGRAM_WEBHOOK_SECRET',
-    'whatsappWeb.sessionTtlDays': 'WHATSAPP_WEB_SESSION_MAX_AGE_DAYS',
     'whatsappCloud.accessToken': 'WHATSAPP_CLOUD_ACCESS_TOKEN',
     'whatsappCloud.phoneNumberId': 'WHATSAPP_CLOUD_PHONE_NUMBER_ID',
     'whatsappCloud.displayPhoneNumber': 'WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER',
@@ -190,6 +194,7 @@ async function setBulk(input, actorId) {
     'whatsappCloud.appSecret': 'WHATSAPP_CLOUD_APP_SECRET',
     'whatsappCloud.apiVersion': 'WHATSAPP_CLOUD_API_VERSION',
     'whatsappPermission.command': 'START_NOTIFY_WHATSAPP_PERMISSION',
+    'whatsappPermission.requestText': 'WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT',
     'telegramPermission.command': 'START_VERIFY_TELEGRAM_PERMISSION',
     'email.user': 'GMAIL_USER',
     'email.from': 'GMAIL_FROM',
@@ -222,6 +227,9 @@ async function getStructured() {
   const telegramPermissionCommand = values.START_VERIFY_TELEGRAM_PERMISSION?.value
     || process.env.START_VERIFY_TELEGRAM_PERMISSION
     || '/verify-me';
+  const whatsappConsentRequestText = values.WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT?.value
+    || process.env.WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT
+    || DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT;
   return {
     telegram: {
       configured: channelStatuses.telegram.configured,
@@ -231,11 +239,9 @@ async function getStructured() {
       permissionCommand: telegramPermissionCommand
     },
     telegramPermission: { command: telegramPermissionCommand },
-    whatsappPermission: { command: permissionCommand },
-    whatsappWeb: {
-      ...channelStatuses.whatsapp_web,
-      sessionTtlDays: Number(values.WHATSAPP_WEB_SESSION_MAX_AGE_DAYS?.value || process.env.WHATSAPP_WEB_SESSION_MAX_AGE_DAYS || 90),
-      permissionCommand
+    whatsappPermission: {
+      command: permissionCommand,
+      requestText: whatsappConsentRequestText
     },
     whatsappCloud: {
       configured: channelStatuses.whatsapp_cloud.configured,
@@ -279,6 +285,15 @@ async function isWhatsappPermissionCommand(value) {
   return Boolean(command) && normalizeWhatsappPermissionText(value) === normalizeWhatsappPermissionText(command);
 }
 
+async function getWhatsappConsentRequestText() {
+  const configured = await module.exports.getValue('WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT');
+  return String(
+    configured
+    || process.env.WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT
+    || DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT
+  ).trim();
+}
+
 async function getTelegramPermissionCommand() {
   const configured = await module.exports.getValue('START_VERIFY_TELEGRAM_PERMISSION');
   return String(configured || process.env.START_VERIFY_TELEGRAM_PERMISSION || '/verify-me').trim();
@@ -292,6 +307,7 @@ async function isTelegramPermissionCommand(value) {
 module.exports = {
   DEFINITIONS, getValue, setValue, remove, list, setBulk, getStructured, channelConfigured, statuses,
   getWhatsappPermissionCommand, isWhatsappPermissionCommand, getTelegramPermissionCommand,
-  isTelegramPermissionCommand, normalizeWhatsappPermissionText, CHANNEL_REVEAL_FIELDS,
+  getWhatsappConsentRequestText, isTelegramPermissionCommand, normalizeWhatsappPermissionText, CHANNEL_REVEAL_FIELDS,
+  DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT,
   SENSITIVE_PREVIEW, maskedPreview, isMaskedSentinel, revealChannel
 };

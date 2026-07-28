@@ -83,8 +83,8 @@ const channelGuides = [
     summary: 'Templates aprovados, consentimento e webhooks da Meta.',
     points: [
       'Envios iniciados pela empresa usam templates oficiais aprovados.',
-      'O comando de autorização recebido pelo Cloud ou Web vincula as permissões sem inventar identidades.',
-      'O WhatsApp Web permanece opcional e dedicado ao monitor de conversas diretas.',
+      'O comando de autorização recebido pela API oficial registra o consentimento sem inventar identidades.',
+      'Os chats são construídos com webhooks da Meta e atualizados em tempo real.',
     ],
     to: '/whatsapp-cloud',
   },

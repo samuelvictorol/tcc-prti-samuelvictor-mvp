@@ -53,21 +53,6 @@ const channelSendSchema = z.object({
   })
 });
 
-const whatsappWebSendSchema = z.object({
-  body: z.object({
-    contactId: objectId.optional(),
-    destination: z.string().min(1).max(500).optional(),
-    text: z.string().min(1).max(100000)
-  }).strict().superRefine((body, context) => {
-    if (!body.contactId && !body.destination) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Informe contactId ou destination' });
-    }
-    if (body.contactId && body.destination) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: 'Informe somente um chat direto' });
-    }
-  })
-});
-
 const telegramWebhookSchema = z.object({ body: z.record(z.unknown()) });
 const cloudWebhookSchema = z.object({ body: z.record(z.unknown()) });
 const registerWebhookSchema = z.object({
@@ -106,13 +91,7 @@ const telegramGroupBody = z.object({
 const createTelegramGroupSchema = z.object({ body: telegramGroupBody });
 const updateTelegramGroupSchema = z.object({ params: z.object({ id: objectId }), body: telegramGroupBody.partial().refine((body) => Object.keys(body).length > 0) });
 
-const whatsappWebMessagesSchema = z.object({
-  params: z.object({ chatId: z.string().min(1).max(500) }),
-  query: z.object({ limit: z.coerce.number().int().min(1).max(100).optional() }).passthrough()
-});
-
 module.exports = {
-  channelSendSchema, whatsappWebSendSchema, whatsappOfficialTemplateSchema, telegramWebhookSchema, cloudWebhookSchema, registerWebhookSchema,
-  telegramSendSchema, createTelegramGroupSchema, updateTelegramGroupSchema,
-  whatsappWebMessagesSchema
+  channelSendSchema, whatsappOfficialTemplateSchema, telegramWebhookSchema, cloudWebhookSchema, registerWebhookSchema,
+  telegramSendSchema, createTelegramGroupSchema, updateTelegramGroupSchema
 };

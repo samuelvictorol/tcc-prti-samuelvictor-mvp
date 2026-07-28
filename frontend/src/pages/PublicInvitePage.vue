@@ -37,7 +37,7 @@ const gradient = computed(() => {
 const inviteIcon = computed(() => inviteIconFailed.value ? '' : safeInviteIconUrl(invite.value?.iconeUrl))
 
 function iconFor(type) {
-  return { telegram: 'send_to_mobile', whatsapp_web: 'forum', whatsapp_cloud: 'cloud_sync', email: 'mail' }[type] || 'arrow_outward'
+  return { telegram: 'send_to_mobile', whatsapp_cloud: 'cloud_sync', email: 'mail' }[type] || 'arrow_outward'
 }
 
 async function loadInvite() {

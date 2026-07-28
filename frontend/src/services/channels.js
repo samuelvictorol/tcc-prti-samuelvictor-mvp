@@ -1,6 +1,5 @@
 export const channelCredentialFields = Object.freeze({
   telegram: ['botToken', 'webhookSecret'],
-  whatsappWeb: ['sessionTtlDays'],
   whatsappCloud: ['accessToken', 'phoneNumberId', 'displayPhoneNumber', 'businessAccountId', 'verifyToken', 'appSecret', 'apiVersion'],
   email: ['user', 'from', 'fromName', 'appPassword'],
 })

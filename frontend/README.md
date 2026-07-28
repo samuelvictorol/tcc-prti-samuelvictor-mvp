@@ -31,12 +31,12 @@ As páginas não armazenam credenciais de provedor. Elas chamam serviços HTTP, 
 
 | Rota | Página |
 |---|---|
-| `/` | saúde, configurações independentes dos canais, QR Web e console de logs |
+| `/` | saúde, configurações independentes dos canais e console de logs |
 | `/contacts` | contatos, identidades, consentimentos e grupos |
 | `/templates` | templates por canal e builders amigáveis |
 | `/notifications` | campanhas por template, contatos/grupos e histórico de entregas |
 | `/telegram` | conversas conhecidas, grupos e mensagens realtime |
-| `/whatsapp-web` | inbox local e resposta direta autorizada; ativo somente após `ready` |
+| `/chats` | inbox oficial do WhatsApp Cloud, janela de 24 horas e respostas em tempo real |
 | `/whatsapp-cloud` | eventos do webhook, contatos e teste de template oficial |
 | `/email` | teste/envio Gmail e preview sanitizado |
 | `/invites` | CRUD, slug automático, ícone, links, cores e URL pública |
@@ -73,7 +73,7 @@ O router faz bootstrap da sessão antes de navegar. Rotas administrativas exigem
 | `services/socket.js` | conexão autenticada, reconexão e recuperação de token |
 | `services/channels.js` | status/configuração de provedores |
 | `services/telegram*.js` | chats e templates Telegram |
-| `services/whatsapp-web.js` | normalização do estado QR/ready |
+| `services/whatsapp.js` | normalização do comando de permissão do WhatsApp Cloud |
 | `services/public-invites.js` | termos públicos e links de convite |
 | `services/contact-identities.js` | apresentação segura das identidades |
 
@@ -85,8 +85,7 @@ Socket.IO é criado com o access JWT administrativo e usa `/socket.io`. As telas
 |---|---|
 | `admin_notification:created` | sino do header e atalho para contato/canal |
 | `log:created` | console da página Início e acompanhamento Cloud |
-| `whatsapp_web:qr/status/ready/disconnected` | QR, botões e disponibilidade do menu Web |
-| `conversation:message`, `conversations:updated` | chats Telegram e WhatsApp Web |
+| `conversation:message`, `conversations:updated` | chats Telegram e WhatsApp Cloud |
 | `telegram:chats`, `telegram:webhook` | lista e mensagens Telegram |
 | `whatsapp_cloud:webhook` | banner/resumo do webhook Meta |
 | `contact:auto_upserted` | atualização de contatos reconhecidos |
@@ -103,15 +102,19 @@ A tela faz fetch inicial e usa o socket como atualização incremental; a consis
 
 HTML é permitido apenas para email e documentos legais; nunca é renderizado sem sanitização.
 
-## WhatsApp Web
+## Chats do WhatsApp Cloud
 
-O frontend não pede histórico ao provedor. Depois do QR e `ready`, mostra apenas eventos novos persistidos pela API em `/api/conversations`.
+A inbox é construída somente com mensagens recebidas pelo webhook oficial e
+mensagens enviadas pelo aplicativo. A Meta não fornece uma rota para importar a
+lista de conversas nem o histórico anterior.
 
-- Remetente desconhecido aparece somente para leitura.
-- Responder exige contato e identidade Web autorizada.
-- Não há grupos, templates, campanha ou envio em massa.
-- Os endpoints legados de sync/histórico retornam 410 e não devem ser usados.
-- Logout e regeneração do QR são ações explícitas na tela Início.
+- O Socket.IO atualiza lista, mensagens e janela de atendimento em tempo real.
+- Texto livre pode ser respondido somente dentro das 24 horas renovadas por uma
+  mensagem recebida do cliente.
+- Fora da janela, o chat fica bloqueado para texto livre e o envio deve usar um
+  template oficial aprovado.
+- Mensagens locais são retidas por 30 dias; o administrador pode exportar um
+  backup JSON manual antes da expiração.
 
 ## Variáveis de ambiente
 

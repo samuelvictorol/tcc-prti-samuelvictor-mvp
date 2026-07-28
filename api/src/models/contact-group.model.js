@@ -1,11 +1,11 @@
 const mongoose = require('mongoose');
-const { DELIVERY_CHANNELS } = require('../enums/channels');
+const { STORED_CHANNELS } = require('../enums/channels');
 
 const contactGroupSchema = new mongoose.Schema({
   nameEncrypted: { type: String, required: true, select: false },
   nameHash: { type: String, required: true, index: true },
   descriptionEncrypted: { type: String, select: false },
-  source: { type: String, enum: ['manual', ...DELIVERY_CHANNELS], default: 'manual', index: true },
+  source: { type: String, enum: ['manual', ...STORED_CHANNELS], default: 'manual', index: true },
   externalIdEncrypted: { type: String, select: false },
   externalIdHash: { type: String },
   inviteLinkEncrypted: { type: String, select: false },

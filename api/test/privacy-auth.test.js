@@ -34,16 +34,16 @@ test('alteracao manual de permissao deriva origem administrativa e persiste ator
   let consentContext;
   contactsManager.setChannelConsent = async (_id, _channel, _status, input) => {
     consentContext = input;
-    return { id: contactId, channels: [{ channel: 'whatsapp_web', consentStatus: 'revoked' }] };
+    return { id: contactId, channels: [{ channel: 'whatsapp_cloud', consentStatus: 'revoked' }] };
   };
   ConsentEvent.findOne = () => ({
     sort() { return this; },
     select() { return this; },
-    async lean() { return { channel: 'whatsapp_web', status: 'revoked', source: 'admin_manual', actor: actorId }; }
+    async lean() { return { channel: 'whatsapp_cloud', status: 'revoked', source: 'admin_manual', actor: actorId }; }
   });
 
   const result = await privacyManager.recordConsent(contactId, {
-    channel: 'whatsapp_web',
+    channel: 'whatsapp_cloud',
     status: 'revoked',
     confirmed: true,
     evidence: { reason: 'Solicitacao do cliente' },

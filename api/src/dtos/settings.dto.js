@@ -43,14 +43,18 @@ const whatsappDisplayPhoneNumber = optionalField(
     )
 );
 
+const whatsappConsentRequestText = optionalField(
+  z.string().trim().min(1).max(1000).refine(
+    (value) => value.includes('{command}'),
+    'Inclua {command} no texto para mostrar o comando dinamico'
+  )
+);
+
 const bulkSettingsSchema = z.object({
   body: z.object({
     telegram: z.object({
       botToken: optionalField(z.string().max(500)),
       webhookSecret: optionalField(z.string().max(256))
-    }).optional(),
-    whatsappWeb: z.object({
-      sessionTtlDays: optionalField(z.coerce.number().int().min(1).max(365))
     }).optional(),
     whatsappCloud: z.object({
       accessToken: optionalField(z.string().max(4000)),
@@ -62,7 +66,8 @@ const bulkSettingsSchema = z.object({
       apiVersion: optionalField(z.string().regex(/^v\d+\.\d+$/))
     }).optional(),
     whatsappPermission: z.object({
-      command: whatsappPermissionCommand
+      command: whatsappPermissionCommand,
+      requestText: whatsappConsentRequestText
     }).optional(),
     telegramPermission: z.object({
       command: whatsappPermissionCommand

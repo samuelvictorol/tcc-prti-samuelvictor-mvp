@@ -1,6 +1,6 @@
 # Notify Flow
 
-O **Notify Flow** é um painel de notificações multicanal orientado a consentimento. Ele centraliza contatos, grupos, templates, filas e evidências de entrega para **Telegram Bot API**, **WhatsApp Cloud API oficial** e **Gmail**. A integração opcional com `whatsapp-web.js` funciona somente como monitor de conversas e resposta individual autorizada — ela não participa de campanhas, templates ou disparos em massa.
+O **Notify Flow** é um painel de notificações multicanal orientado a consentimento. Ele centraliza contatos, grupos, templates, filas, conversas e evidências de entrega para **Telegram Bot API**, **WhatsApp Cloud API oficial** e **Gmail**.
 
 O principal problema resolvido é a integração com a API oficial do WhatsApp: mensagens proativas saem por templates aprovados pela Meta, com webhooks de status, rastreabilidade e menor risco operacional do que automações baseadas em uma sessão pessoal. Isso não substitui o cumprimento das políticas da Meta nem garante a entrega de cada mensagem.
 
@@ -28,21 +28,21 @@ flowchart LR
     W --> GM[Gmail SMTP]
     TG -->|webhook| API
     META -->|webhook assinado| API
-    WW[WhatsApp Web opcional\nQR + chat direto] <-->|eventos novos| API
 ```
 
-O backend segue `route -> DTO/middleware -> controller -> manager -> model/service`. MongoDB mantém o estado durável; Redis coordena filas, retries e recursos temporários; Socket.IO atualiza QR, chats, logs e avisos administrativos em tempo real.
+O backend segue `route -> DTO/middleware -> controller -> manager -> model/service`. MongoDB mantém o estado durável; Redis coordena filas, retries e recursos temporários; Socket.IO atualiza chats, logs e avisos administrativos em tempo real.
 
 ## Matriz de canais
 
 | Canal | Campanhas | Conteúdo | Entrada/realtime | Regra principal |
 |---|---|---|---|---|
 | Telegram | Sim | Texto, foto, vídeo e menus/submenus | Webhook + Socket.IO | O usuário precisa iniciar/interagir com o bot; `/stop` revoga. |
-| WhatsApp Cloud | Sim | Somente template oficial aprovado | Webhook Meta + receipts | O comando configurado autoriza Web e Cloud; envios proativos usam template. |
+| WhatsApp Cloud | Sim | Templates oficiais aprovados e respostas em janela de atendimento | Webhook Meta + receipts | Fora da janela de 24 horas, mensagens iniciadas pela empresa usam template. |
 | Gmail | Sim | Texto e HTML sanitizado | Log de envio | Exige endereço conhecido e consentimento para campanhas. |
-| WhatsApp Web | **Não** | Resposta direta em chat individual | Eventos novos após QR/`ready` | Integração não oficial, opcional e fora da fila de notificações. |
 
 Falha ou ausência de um canal não bloqueia os demais. Em um disparo global, o administrador escolhe um template próprio para cada canal selecionado; destinatários sem identidade autorizada ficam como `skipped`, com motivo auditável.
+
+A tela **Chats** representa apenas conversas da API oficial. A Meta não disponibiliza importação da lista ou do histórico do aplicativo: a inbox local é construída por webhooks recebidos e envios feitos pelo Notify Flow, com atualização via Socket.IO. Respostas em texto livre respeitam a janela de atendimento de 24 horas. O histórico local tem ciclo de 30 dias e pode ser exportado manualmente em JSON antes da expiração.
 
 ## Jornadas principais
 
@@ -118,7 +118,6 @@ Use `.env.example` como catálogo e nunca versione `.env`.
 | Meu perfil | `PROFILE_JWT_TTL`, `PROFILE_CODE_TTL_SECONDS`, `PROFILE_CODE_MAX_ATTEMPTS`, limites de solicitação/reenvio |
 | Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_BOT_USERNAME`, `START_VERIFY_TELEGRAM_PERMISSION` |
 | WhatsApp Cloud | `WHATSAPP_CLOUD_ACCESS_TOKEN`, IDs, verify token, app secret, versão e número público |
-| WhatsApp Web | caminho/TTL da sessão, retenção de mensagens, auto init e executável Chromium |
 | Gmail | `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `GMAIL_FROM`, `GMAIL_FROM_NAME` |
 | Consentimento | `START_NOTIFY_WHATSAPP_PERMISSION` (`/notify-me` por padrão) |
 
@@ -145,7 +144,7 @@ o backend usa `PORT` e o frontend recebe a porta automaticamente da plataforma.
 | Contatos e grupos | `/api/contacts`, `/api/contact-groups` |
 | Templates e campanhas | `/api/templates`, `/api/notifications` |
 | Conversas locais | `/api/conversations` |
-| Canais | `/api/telegram`, `/api/whatsapp-cloud`, `/api/whatsapp-web`, `/api/email` |
+| Canais | `/api/telegram`, `/api/whatsapp-cloud`, `/api/email` |
 | Webhooks | `/api/webhooks/telegram`, `/api/webhooks/whatsapp-cloud` |
 | Convites e termos públicos | `/api/public/invites`, `/api/public/terms` |
 | Meu perfil | `/api/my-profile` |
@@ -158,7 +157,6 @@ O arquivo suportado pelo Render é **[`render.yaml`](render.yaml)** — não exi
 - frontend Docker público, que também encaminha `/api` e `/socket.io`;
 - API Docker privada referenciada pelo Blueprint;
 - Render Key Value compatível com Redis;
-- disco persistente pago para `/app/.wwebjs_auth`;
 - `MONGODB_URI` solicitado durante o sync para uma instância MongoDB Atlas.
 
 Antes do primeiro deploy, informe as credenciais administrativas e a URI do
@@ -171,9 +169,7 @@ modelos completos, sem segredos reais, estão em
 
 Os três recursos do Blueprint usam `plan: starter`: é o menor tipo de instância
 pago para o frontend, a API privada e o Render Key Value. Assim, nenhum deles
-usa a modalidade gratuita que hiberna. A API mantém um disco persistente de
-1 GB para a sessão opcional do WhatsApp Web e, por restrição do Render, não
-define `maxShutdownDelaySeconds` enquanto esse disco estiver anexado.
+usa a modalidade gratuita que hiberna.
 
 O frontend usa um template de configuração do Nginx em runtime. No Compose,
 `API_UPSTREAM=api:3000`; no Render, o Blueprint injeta automaticamente o
@@ -183,7 +179,7 @@ não aplica esse sufixo sozinho. A API permanece privada e não recebe subdomín
 `onrender.com`; sua borda pública é
 `https://notify-flow.onrender.com/api`, encaminhada pelo frontend.
 
-O WhatsApp Web impõe restrições importantes no Render: Chromium consome memória/CPU, o [disco persistente](https://render.com/docs/disks) é pago e limita a API a uma instância, deploys interrompem a sessão e o filesystem não garante que o WhatsApp manterá a autenticação. Por isso ele continua opcional. [WebSockets são suportados](https://render.com/docs/websocket), mas o cliente deve reconectar após deploys ou manutenção. Para MongoDB, siga as recomendações de [deploy e backup do Render](https://render.com/docs/deploy-mongodb) ou use Atlas gerenciado.
+[WebSockets são suportados](https://render.com/docs/websocket), mas o cliente deve reconectar após deploys ou manutenção. Para MongoDB, siga as recomendações de [deploy e backup do Render](https://render.com/docs/deploy-mongodb) ou use Atlas gerenciado.
 
 ## Qualidade
 

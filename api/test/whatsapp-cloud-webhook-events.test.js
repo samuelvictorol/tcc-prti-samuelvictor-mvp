@@ -10,6 +10,7 @@ const authManager = require('../src/managers/auth.manager');
 const contactsManager = require('../src/managers/contacts.manager');
 const logsManager = require('../src/managers/logs.manager');
 const adminNotificationsManager = require('../src/managers/admin-notifications.manager');
+const conversationsManager = require('../src/managers/conversations.manager');
 const { decrypt } = require('../src/services/crypto.service');
 const { WEBHOOK_PROCESSING_STATUS } = require('../src/enums/whatsapp-cloud-webhook');
 const { createApp } = require('../src/app');
@@ -434,6 +435,7 @@ test('webhooks concorrentes identicos executam o efeito de mensagem uma unica ve
     [contactsManager, 'upsertFromChannel'],
     [logsManager, 'create'],
     [adminNotificationsManager, 'create'],
+    [conversationsManager, 'recordInbound'],
     [webhookEventsManager, 'persistPayload'],
     [webhookEventsManager, 'claimEvent'],
     [webhookEventsManager, 'markProcessed'],
@@ -456,6 +458,10 @@ test('webhooks concorrentes identicos executam o efeito de mensagem uma unica ve
   };
   logsManager.create = async () => ({});
   adminNotificationsManager.create = async () => ({});
+  conversationsManager.recordInbound = async () => ({
+    conversation: { id: '507f1f77bcf86cd799439188', channel: 'whatsapp_cloud' },
+    message: { id: '507f1f77bcf86cd799439189' }
+  });
 
   const payload = fictitiousMessagePayload();
   const descriptor = webhookEventsManager.extractEvents(payload)[0];

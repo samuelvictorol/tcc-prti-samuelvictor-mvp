@@ -6,15 +6,37 @@ const { encrypt, decrypt, searchHash } = require('../services/crypto.service');
 const { parsePagination, pageResult } = require('../utils/pagination');
 const socketService = require('../services/socket.service');
 
-const CHANNELS = ['telegram', 'whatsapp_web'];
+// `whatsapp_web` e aceito apenas para manutencao/expiracao de documentos
+// legados. Nao existe mais rota ou runtime capaz de criar novas sessoes Web.
+const CHANNELS = ['telegram', 'whatsapp_web', 'whatsapp_cloud'];
 const MAX_MESSAGES_PER_CONVERSATION = 500;
 const MAX_BODY_LENGTH = 10_000;
+const WHATSAPP_CLOUD_SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const WHATSAPP_CLOUD_RETENTION_DAYS = 30;
 const CONVERSATION_SECRET_SELECT = '+externalIdEncrypted +displayNameEncrypted +avatarUrlEncrypted +lastMessagePreviewEncrypted';
 const MESSAGE_SECRET_SELECT = '+providerMessageIdEncrypted +bodyEncrypted +metadataEncrypted';
 
 function safeDecrypt(value, json = false) {
   if (!value) return null;
   try { return decrypt(value, { json }); } catch (_error) { return null; }
+}
+
+function cloudServiceWindow(value, now = Date.now()) {
+  if (value?.channel !== 'whatsapp_cloud') return null;
+  const lastInboundAt = value.lastInboundAt ? new Date(value.lastInboundAt) : null;
+  const persistedExpiry = value.serviceWindowExpiresAt ? new Date(value.serviceWindowExpiresAt) : null;
+  const expiresAt = persistedExpiry && !Number.isNaN(persistedExpiry.getTime())
+    ? persistedExpiry
+    : lastInboundAt && !Number.isNaN(lastInboundAt.getTime())
+      ? new Date(lastInboundAt.getTime() + WHATSAPP_CLOUD_SERVICE_WINDOW_MS)
+      : null;
+  const remainingMs = expiresAt ? Math.max(0, expiresAt.getTime() - Number(now)) : 0;
+  return {
+    open: remainingMs > 0,
+    lastInboundAt,
+    expiresAt,
+    remainingSeconds: Math.ceil(remainingMs / 1000)
+  };
 }
 
 function serializeConversation(conversation) {
@@ -37,6 +59,7 @@ function serializeConversation(conversation) {
     } : null,
     unreadCount: value.unreadCount || 0,
     messageCount: value.messageCount || 0,
+    serviceWindow: cloudServiceWindow(value),
     retentionUntil: value.retentionUntil || null,
     pendingRegistration: value.channel === 'whatsapp_web' && !value.contact,
     createdAt: value.createdAt,
@@ -69,8 +92,13 @@ function normalizeDate(value) {
   return Number.isNaN(date.getTime()) ? new Date() : date;
 }
 
-function whatsappWebRetentionUntil(now = Date.now()) {
-  return new Date(now + env.whatsappWebMessageRetentionDays * 24 * 60 * 60 * 1000);
+function cloudRetentionUntil(sentAt = new Date()) {
+  return new Date(normalizeDate(sentAt).getTime() + WHATSAPP_CLOUD_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+}
+
+function legacyWhatsappWebRetentionUntil(now = Date.now()) {
+  const days = Number(env.whatsappWebMessageRetentionDays || 90);
+  return new Date(now + days * 24 * 60 * 60 * 1000);
 }
 
 function conversationAvatar(value) {
@@ -238,7 +266,11 @@ async function record(input) {
     };
   }
   const activityVersion = Number(reserved.activityVersion || 0);
-  const retentionUntil = normalized.channel === 'whatsapp_web' ? whatsappWebRetentionUntil() : undefined;
+  const retentionUntil = normalized.channel === 'whatsapp_cloud'
+    ? cloudRetentionUntil(normalized.sentAt)
+    : normalized.channel === 'whatsapp_web'
+      ? legacyWhatsappWebRetentionUntil()
+      : undefined;
   const messageValues = {
     conversation: conversation._id,
     contact: normalized.contactId,
@@ -269,8 +301,7 @@ async function record(input) {
       lastMessagePreviewEncrypted: encrypt(normalized.body.slice(0, 240)),
       lastMessageDirection: normalized.direction,
       lastMessageType: normalized.type,
-      lastMessageAt: normalized.sentAt,
-      ...(retentionUntil ? { retentionUntil } : {})
+      lastMessageAt: normalized.sentAt
     },
     $inc: {
       messageCount: 1,
@@ -278,6 +309,18 @@ async function record(input) {
     },
     ...(normalized.direction === 'inbound' ? { $unset: { hiddenAt: 1 } } : {})
   };
+  if (retentionUntil && normalized.channel === 'whatsapp_cloud') {
+    summaryUpdate.$max = { retentionUntil };
+  } else if (retentionUntil) {
+    summaryUpdate.$set.retentionUntil = retentionUntil;
+  }
+  if (normalized.channel === 'whatsapp_cloud' && normalized.direction === 'inbound') {
+    summaryUpdate.$max = {
+      ...(summaryUpdate.$max || {}),
+      lastInboundAt: normalized.sentAt,
+      serviceWindowExpiresAt: new Date(normalized.sentAt.getTime() + WHATSAPP_CLOUD_SERVICE_WINDOW_MS)
+    };
+  }
   const visibilityCondition = normalized.direction === 'inbound' && conversation.hiddenAt
     ? { $or: [{ hiddenAt: new Date(conversation.hiddenAt) }, { hiddenAt: null }] }
     : { hiddenAt: null };
@@ -332,7 +375,7 @@ async function attachContact(channel, externalId, contactId, profile = {}) {
   const set = { contact: contactId };
   if (profile.displayName) set.displayNameEncrypted = encrypt(String(profile.displayName).slice(0, 200));
   if (profile.avatarUrl) set.avatarUrlEncrypted = encrypt(conversationAvatar(profile.avatarUrl));
-  if (normalized.channel === 'whatsapp_web') set.retentionUntil = whatsappWebRetentionUntil();
+  if (normalized.channel === 'whatsapp_web') set.retentionUntil = legacyWhatsappWebRetentionUntil();
   const conversation = await Conversation.findOneAndUpdate(
     { channel: normalized.channel, externalIdHash: searchHash(normalized.externalId) },
     { $set: set },
@@ -355,6 +398,40 @@ async function getRawById(id) {
   const conversation = await Conversation.findById(id).select(CONVERSATION_SECRET_SELECT);
   if (!conversation) throw new ApiError(404, 'Conversa nao encontrada');
   return conversation;
+}
+
+async function getById(id) {
+  return serializeConversation(await getRawById(id));
+}
+
+async function requireOpenCloudServiceWindow(id, now = new Date()) {
+  const conversation = await getRawById(id);
+  if (conversation.channel !== 'whatsapp_cloud') {
+    throw new ApiError(
+      422,
+      'A conversa nao pertence ao WhatsApp Cloud',
+      null,
+      'WHATSAPP_CLOUD_CONVERSATION_REQUIRED'
+    );
+  }
+  const serviceWindow = cloudServiceWindow(conversation, now.getTime());
+  if (!serviceWindow?.open) {
+    throw new ApiError(
+      409,
+      'A janela de atendimento de 24 horas esta fechada; use um template oficial',
+      {
+        lastInboundAt: serviceWindow?.lastInboundAt || null,
+        expiresAt: serviceWindow?.expiresAt || null
+      },
+      'WHATSAPP_CUSTOMER_SERVICE_WINDOW_CLOSED'
+    );
+  }
+  return {
+    conversation,
+    serialized: serializeConversation(conversation),
+    externalId: safeDecrypt(conversation.externalIdEncrypted),
+    serviceWindow
+  };
 }
 
 async function list(query = {}) {
@@ -485,7 +562,9 @@ async function visibleExternalIds(channel, externalIds = []) {
 }
 
 module.exports = {
-  record, recordInbound, recordOutbound, upsertConversation, attachContact, list, listMessages, markRead, clearHistory, remove,
+  record, recordInbound, recordOutbound, upsertConversation, attachContact, getById, list, listMessages, markRead, clearHistory, remove,
+  requireOpenCloudServiceWindow, cloudServiceWindow,
   serializeConversation, serializeMessage, visibleExternalIds, MAX_MESSAGES_PER_CONVERSATION, MAX_BODY_LENGTH,
-  whatsappWebRetentionUntil, _trimHistory: trimHistory
+  WHATSAPP_CLOUD_SERVICE_WINDOW_MS, WHATSAPP_CLOUD_RETENTION_DAYS, cloudRetentionUntil,
+  whatsappWebRetentionUntil: legacyWhatsappWebRetentionUntil, _trimHistory: trimHistory
 };

@@ -2,8 +2,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const Contact = require('../src/models/contact.model');
 const contactsManager = require('../src/managers/contacts.manager');
-const whatsappWebManager = require('../src/managers/whatsapp-web.manager');
-const whatsappCloudManager = require('../src/managers/whatsapp-cloud.manager');
 const { encrypt, decrypt, searchHash } = require('../src/services/crypto.service');
 
 function restoreAfter(context, entries) {
@@ -11,6 +9,8 @@ function restoreAfter(context, entries) {
   context.after(() => originals.forEach(([target, key, value]) => { target[key] = value; }));
 }
 
+// Fixture de compatibilidade: documentos criados por versões anteriores não
+// são apagados durante a migração para o canal oficial.
 function legacyLidContact() {
   return {
     _id: '507f1f77bcf86cd799439011',
@@ -42,14 +42,14 @@ function legacyLidContact() {
   };
 }
 
-test('serializacao e migracao recuperam telefone real sem transformar LID em numero', async (context) => {
+test('migração legada recupera telefone real sem transformar LID em número', async (context) => {
   restoreAfter(context, [[Contact, 'find'], [Contact, 'exists']]);
   const contact = legacyLidContact();
 
   const serialized = contactsManager.serialize(contact);
   assert.equal(serialized.phone, '551131234567');
   assert.equal(serialized.phoneSource, 'verified_provider_identity');
-  assert.equal(serialized.channels[0].address, '123456789012345@lid');
+  assert.deepEqual(serialized.channels, []);
 
   Contact.find = () => ({ select: async () => [contact] });
   Contact.exists = async () => null;
@@ -60,7 +60,7 @@ test('serializacao e migracao recuperam telefone real sem transformar LID em num
   assert.equal(contact.phoneHash, searchHash('551131234567'));
 });
 
-test('identidade sem wa_id ou @c.us sinaliza telefone ausente e Cloud recusa o destino', async (context) => {
+test('identidade sem wa_id sinaliza telefone ausente e Cloud recusa o destino', async (context) => {
   restoreAfter(context, [[Contact, 'findById']]);
   const contact = legacyLidContact();
   contact.channels = [{
@@ -82,69 +82,4 @@ test('identidade sem wa_id ou @c.us sinaliza telefone ausente e Cloud recusa o d
     () => contactsManager.getDestination(contact._id, 'whatsapp_cloud'),
     (error) => error.code === 'WHATSAPP_PHONE_UNAVAILABLE'
   );
-});
-
-test('WhatsApp Web prioriza id @c.us e rejeita contactData.number quando ele e o LID', () => {
-  const real = whatsappWebManager.verifiedContactPhone(
-    {},
-    {
-      id: { _serialized: '551131234567@c.us', user: '551131234567', server: 'c.us' },
-      number: '123456789012345'
-    },
-    '123456789012345@lid',
-    '551131234567@c.us'
-  );
-  assert.equal(real, '551131234567');
-  assert.equal(whatsappWebManager.verifiedContactPhone(
-    {},
-    { id: { _serialized: '123456789012345@lid' }, number: '123456789012345' },
-    '123456789012345@lid',
-    '123456789012345@lid'
-  ), null);
-});
-
-test('Cloud usa somente from/wa_id como telefone e correlaciona from_logical_id ao chat Web', async (context) => {
-  restoreAfter(context, [
-    [contactsManager, 'findByChannelAddress'],
-    [contactsManager, 'findByChannelOrPhone'],
-    [contactsManager, 'upsertFromChannel']
-  ]);
-  assert.equal(whatsappCloudManager.cloudIdentity({ user_id: 'BR.12345678901234567' }), null);
-  assert.equal(whatsappCloudManager.cloudIdentity({ from_logical_id: '123456789012345' }), null);
-  assert.equal(whatsappCloudManager.cloudIdentity({ from: '551131234567' }), '551131234567');
-
-  const lookups = [];
-  contactsManager.findByChannelAddress = async (channel, address) => {
-    lookups.push([channel, address]);
-    if (channel === 'whatsapp_web' && address === '123456789012345@lid') {
-      return { id: '507f1f77bcf86cd799439011', channels: [] };
-    }
-    return null;
-  };
-  contactsManager.findByChannelOrPhone = async () => {
-    throw new Error('nao deve procurar outro contato depois do match por logical id');
-  };
-  let upsertInput;
-  contactsManager.upsertFromChannel = async (input) => {
-    upsertInput = input;
-    return {
-      id: input.matchedContactId,
-      displayName: 'Samuel',
-      channels: [{ channel: 'whatsapp_cloud', authorized: false, consentStatus: 'unknown' }],
-      upsertState: { created: false, identityAdded: true }
-    };
-  };
-
-  const result = await whatsappCloudManager.upsertCloudContact({
-    from: '551131234567',
-    from_user_id: 'BR.12345678901234567',
-    from_logical_id: '123456789012345',
-    type: 'text'
-  }, { metadata: {} });
-
-  assert.ok(lookups.some(([channel, address]) => channel === 'whatsapp_web' && address === '123456789012345@lid'));
-  assert.equal(upsertInput.matchedContactId, '507f1f77bcf86cd799439011');
-  assert.equal(upsertInput.phone, '551131234567');
-  assert.equal(upsertInput.address, '551131234567');
-  assert.equal(result.created, false);
 });

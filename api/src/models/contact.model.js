@@ -1,8 +1,8 @@
 const mongoose = require('mongoose');
-const { DELIVERY_CHANNELS } = require('../enums/channels');
+const { STORED_CHANNELS } = require('../enums/channels');
 
 const channelIdentitySchema = new mongoose.Schema({
-  channel: { type: String, enum: DELIVERY_CHANNELS, required: true },
+  channel: { type: String, enum: STORED_CHANNELS, required: true },
   addressEncrypted: { type: String, required: true, select: false },
   addressHash: { type: String, required: true },
   authorized: { type: Boolean, default: false },
@@ -18,7 +18,7 @@ const channelIdentitySchema = new mongoose.Schema({
 }, { _id: true, timestamps: true });
 
 const channelAvatarSchema = new mongoose.Schema({
-  channel: { type: String, enum: DELIVERY_CHANNELS, required: true },
+  channel: { type: String, enum: STORED_CHANNELS, required: true },
   urlEncrypted: { type: String, required: true, select: false },
   updatedAt: { type: Date, default: Date.now }
 }, { _id: false });
@@ -27,7 +27,7 @@ const inviteOriginSchema = new mongoose.Schema({
   invite: { type: mongoose.Schema.Types.ObjectId, ref: 'Invite', required: true },
   title: { type: String, required: true, maxlength: 200 },
   slug: { type: String, required: true, maxlength: 100 },
-  channels: { type: [String], enum: DELIVERY_CHANNELS, default: [] },
+  channels: { type: [String], enum: STORED_CHANNELS, default: [] },
   firstUsedAt: { type: Date, default: Date.now },
   lastUsedAt: { type: Date, default: Date.now }
 }, { _id: false });

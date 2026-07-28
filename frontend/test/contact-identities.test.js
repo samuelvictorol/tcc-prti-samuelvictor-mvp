@@ -22,7 +22,7 @@ describe('identidades exibidas dos provedores', () => {
     ]))
   })
 
-  it('expõe IDs da Cloud e do WhatsApp Web sem inventar user_id ausente', () => {
+  it('expõe os identificadores oficiais recebidos pelo WhatsApp Cloud', () => {
     expect(identityIdentifiers({
       channel: 'whatsapp_cloud',
       address: '5511931234567',
@@ -31,16 +31,6 @@ describe('identidades exibidas dos provedores', () => {
       expect.objectContaining({ key: 'waId', value: '5511931234567' }),
       expect.objectContaining({ key: 'userId', value: 'BR.123' }),
       expect.objectContaining({ key: 'phoneNumberId', value: 'phone-1' }),
-    ]))
-
-    expect(identityIdentifiers({
-      channel: 'whatsapp_web',
-      address: '5511931234567@c.us',
-      metadata: { contactUser: '5511931234567' },
-    })).toEqual(expect.arrayContaining([
-      expect.objectContaining({ key: 'chatId', value: '5511931234567@c.us' }),
-      expect.objectContaining({ key: 'contactId', value: '5511931234567@c.us' }),
-      expect.objectContaining({ key: 'contactUser', value: '5511931234567' }),
     ]))
   })
 
@@ -57,13 +47,13 @@ describe('identidades exibidas dos provedores', () => {
 
   it('mantém separadas a origem do cadastro e a última decisão de consentimento', () => {
     const identity = {
-      channel: 'whatsapp_web',
-      source: 'whatsapp_web_message',
-      metadata: { autoRegisteredVia: 'whatsapp_web' },
+      channel: 'whatsapp_cloud',
+      source: 'whatsapp_cloud_webhook',
+      metadata: { autoRegisteredVia: 'whatsapp_cloud' },
       consentSource: 'admin_ui',
       consentCommand: '/notify-me',
     }
-    expect(identityRegistrationSource(identity)).toMatchObject({ automatic: true, label: 'WhatsApp Web' })
+    expect(identityRegistrationSource(identity)).toMatchObject({ automatic: true, label: 'WhatsApp Cloud' })
     expect(identityConsentProvenance(identity)).toMatchObject({
       changedByAdmin: true,
       automaticCommand: true,
@@ -71,44 +61,27 @@ describe('identidades exibidas dos provedores', () => {
     })
   })
 
-  it('explica que o comando WhatsApp é compartilhado e preserva o canal em que chegou', () => {
+  it('preserva o canal oficial em que o comando de consentimento chegou', () => {
     expect(identityConsentProvenance({
       channel: 'whatsapp_cloud',
       source: 'whatsapp_cloud_webhook',
       consentSource: 'automatic_permission_command',
       consentCommand: '/notify-me',
-      metadata: {
-        permissionCommandReceivedVia: 'whatsapp_web',
-        sharedWhatsappConsent: true,
-      },
+      metadata: { permissionCommandReceivedVia: 'whatsapp_cloud' },
     })).toMatchObject({
       automaticCommand: true,
       changedByAdmin: false,
-      permissionChannel: 'whatsapp_web',
-      permissionChannelLabel: 'WhatsApp Web',
-      sharedWhatsappGrant: true,
-      label: 'Autorizado automaticamente via /notify-me recebido pelo WhatsApp Web (WhatsApp Web + Cloud)',
+      permissionChannel: 'whatsapp_cloud',
+      permissionChannelLabel: 'WhatsApp Cloud',
+      label: 'Autorizado automaticamente via /notify-me recebido pelo WhatsApp Cloud',
     })
   })
 
-  it('não rotula um consentimento automático legado de canal único como compartilhado', () => {
-    expect(identityConsentProvenance({
-      channel: 'whatsapp_web',
-      source: 'whatsapp_web_permission_command',
-      consentCommand: '/notify-me',
-    })).toMatchObject({
-      automaticCommand: true,
-      permissionChannel: 'whatsapp_web',
-      sharedWhatsappGrant: false,
-      label: 'Autorizado automaticamente via /notify-me recebido pelo WhatsApp Web',
-    })
-  })
-
-  it('localiza apenas a intenção pendente do canal WhatsApp solicitado', () => {
+  it('localiza apenas a intenção pendente do canal oficial solicitado', () => {
     const contact = {
       pendingWhatsappConsents: [{
         channel: 'whatsapp_cloud',
-        sourceChannel: 'whatsapp_web',
+        sourceChannel: 'whatsapp_cloud',
         status: 'granted',
         command: '/notify-me',
       }],
@@ -116,9 +89,8 @@ describe('identidades exibidas dos provedores', () => {
 
     expect(pendingWhatsappConsent(contact, 'whatsapp-cloud')).toMatchObject({
       channel: 'whatsapp_cloud',
-      sourceChannel: 'whatsapp_web',
+      sourceChannel: 'whatsapp_cloud',
     })
-    expect(pendingWhatsappConsent(contact, 'whatsapp_web')).toBeNull()
     expect(pendingWhatsappConsent(contact, 'email')).toBeNull()
     expect(pendingWhatsappConsent({
       pendingWhatsappConsents: [{ channel: 'whatsapp_cloud', status: 'revoked' }],

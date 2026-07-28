@@ -23,8 +23,8 @@ const { parsePagination, pageResult } = require('../utils/pagination');
 const { removeContactArtifacts } = require('../services/contact-artifacts-cleanup.service');
 
 const SECRET_SELECT = '+displayNameEncrypted +emailEncrypted +phoneEncrypted +telegramUsernameEncrypted +avatarUrlEncrypted +channelAvatars.urlEncrypted +metadataEncrypted +channels.addressEncrypted +channels.metadataEncrypted +pendingWhatsappConsents.evidenceEncrypted';
-const AVATAR_PRIORITY = ['whatsapp_web', 'whatsapp_cloud', 'telegram'];
-const WHATSAPP_CHANNELS = ['whatsapp_web', 'whatsapp_cloud'];
+const AVATAR_PRIORITY = ['whatsapp_cloud', 'telegram'];
+const WHATSAPP_CHANNELS = ['whatsapp_cloud'];
 const providerUpsertLocks = new Map();
 const DECIDED_CONSENT_STATUSES = ['granted', 'revoked', 'denied'];
 
@@ -200,7 +200,7 @@ function serialize(contact, options = {}) {
   if (!value) return null;
   const identities = decodedIdentities(value);
   const phoneResolution = contactPhoneResolution(value, identities);
-  const channelAvatars = (value.channelAvatars || []).map((item) => ({
+  const channelAvatars = (value.channelAvatars || []).filter((item) => DELIVERY_CHANNELS.includes(item.channel)).map((item) => ({
     channel: item.channel,
     url: safeDecrypt(item.urlEncrypted),
     updatedAt: item.updatedAt
@@ -222,7 +222,7 @@ function serialize(contact, options = {}) {
     telegramUsername: safeDecrypt(value.telegramUsernameEncrypted),
     avatarUrl: preferredAvatar?.url || (includeInlineAvatar ? safeDecrypt(value.avatarUrlEncrypted) : null),
     avatarSource: preferredAvatar?.channel || (includeInlineAvatar && value.avatarUrlEncrypted ? 'manual' : null),
-    channels: identities.map((identity) => ({
+    channels: identities.filter((identity) => DELIVERY_CHANNELS.includes(identity.raw.channel)).map((identity) => ({
       id: String(identity.raw._id),
       channel: identity.raw.channel,
       address: identity.address,
@@ -243,7 +243,9 @@ function serialize(contact, options = {}) {
       consentChangedBy: identity.raw.consentChangedBy ? String(identity.raw.consentChangedBy._id || identity.raw.consentChangedBy) : null,
       metadata: identity.metadata
     })),
-    pendingWhatsappConsents: (value.pendingWhatsappConsents || []).map((pending) => ({
+    pendingWhatsappConsents: (value.pendingWhatsappConsents || [])
+      .filter((pending) => pending.channel === 'whatsapp_cloud')
+      .map((pending) => ({
       channel: pending.channel,
       sourceChannel: pending.sourceChannel,
       status: pending.status || 'granted',
@@ -261,7 +263,7 @@ function serialize(contact, options = {}) {
       inviteId: String(origin.invite?._id || origin.invite),
       title: origin.title,
       slug: origin.slug,
-      channels: [...new Set((origin.channels || []).filter(Boolean))],
+       channels: [...new Set((origin.channels || []).filter((channel) => DELIVERY_CHANNELS.includes(channel)))],
       firstUsedAt: origin.firstUsedAt,
       lastUsedAt: origin.lastUsedAt
     })),
@@ -782,7 +784,7 @@ async function grantWhatsappConsentFromCommand(id, sourceChannel, context = {}) 
 
 function mergePhoneIdentity(channel, phone, options = {}) {
   const verifiedTelegramPhone = channel === 'telegram' && options.verified === true;
-  if (!['whatsapp_web', 'whatsapp_cloud'].includes(channel) && !verifiedTelegramPhone) return null;
+  if (channel !== 'whatsapp_cloud' && !verifiedTelegramPhone) return null;
   const normalized = normalizeWhatsappE164(phone);
   const digits = String(normalized || '').replace(/\D/g, '');
   if (!/^\d{8,15}$/.test(digits)) return null;

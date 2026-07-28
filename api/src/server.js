@@ -11,6 +11,7 @@ const telegramManager = require('./managers/telegram.manager');
 const contactsManager = require('./managers/contacts.manager');
 const templatesManager = require('./managers/templates.manager');
 const termsManager = require('./managers/terms.manager');
+const conversationBackupScheduler = require('./services/conversation-backup-scheduler.service');
 
 let server;
 let shuttingDown = false;
@@ -46,11 +47,7 @@ async function start() {
 
   telegramManager.refreshWebhookRegistration()
     .catch((error) => console.error('[telegram webhook refresh]', error.message));
-
-  if (env.whatsappWebAutoInit) {
-    const whatsappWebManager = require('./managers/whatsapp-web.manager');
-    whatsappWebManager.resume().catch((error) => console.error('[whatsapp-web resume]', error.message));
-  }
+  conversationBackupScheduler.start();
   return server;
 }
 
@@ -58,8 +55,7 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('[api] encerrando por ' + signal);
-  const whatsappWebManager = require('./managers/whatsapp-web.manager');
-  await whatsappWebManager.shutdown().catch((error) => console.error('[whatsapp-web shutdown]', error.message));
+  conversationBackupScheduler.stop();
   if (server) await new Promise((resolve) => server.close(resolve));
   await queueService.closeQueue();
   await disconnectRedis();

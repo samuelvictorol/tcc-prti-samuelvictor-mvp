@@ -1,12 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { refreshSchema } = require('../src/dtos/auth.dto');
-const { channelSendSchema, telegramSendSchema, whatsappWebSendSchema, registerWebhookSchema } = require('../src/dtos/channels.dto');
+const { channelSendSchema, telegramSendSchema, registerWebhookSchema } = require('../src/dtos/channels.dto');
 const { createContactSchema } = require('../src/dtos/contacts.dto');
-const { createTemplateSchema } = require('../src/dtos/templates.dto');
-const templatesManager = require('../src/managers/templates.manager');
 const settingsManager = require('../src/managers/settings.manager');
-const whatsappWebManager = require('../src/managers/whatsapp-web.manager');
 const Setting = require('../src/models/setting.model');
 const { encrypt } = require('../src/services/crypto.service');
 const { bulkSettingsSchema } = require('../src/dtos/settings.dto');
@@ -70,7 +67,7 @@ test('consentimento manual limita canais e exige confirmacao para remover permis
   const params = { id: '507f1f77bcf86cd799439011' };
   const granted = consentSchema.safeParse({
     params,
-    body: { channel: 'whatsapp_web', status: 'granted', source: 'forjado_pelo_cliente' }
+    body: { channel: 'whatsapp_cloud', status: 'granted', source: 'forjado_pelo_cliente' }
   });
   assert.equal(granted.success, true);
   assert.equal(granted.data.body.source, undefined);
@@ -105,29 +102,10 @@ test('consulta paginada de deliveries aceita filtros de canal e resultado', () =
   }).success, false);
 });
 
-test('WhatsApp Web aceita somente resposta individual e rejeita groupId', () => {
-  const contact = '507f1f77bcf86cd799439011';
-  assert.equal(whatsappWebSendSchema.safeParse({ body: { contactId: contact, text: 'Oi' } }).success, true);
-  assert.equal(whatsappWebSendSchema.safeParse({ body: { destination: '5511999999999@c.us', text: 'Oi' } }).success, true);
-  assert.equal(whatsappWebSendSchema.safeParse({ body: { groupId: contact, text: 'Oi' } }).success, false);
-  assert.equal(whatsappWebSendSchema.safeParse({ body: { destination: '120@g.us', groupId: contact, text: 'Oi' } }).success, false);
-});
-
-test('templates rejeitam WhatsApp Web no contrato HTTP', () => {
-  assert.equal(createTemplateSchema.safeParse({ body: {
-    name: 'Template indevido', channel: 'whatsapp_web', body: 'Oi'
-  } }).success, false);
-  assert.throws(
-    () => templatesManager.validateTemplateInput({ name: 'Template indevido', channel: 'whatsapp_web', body: 'Oi' }),
-    (error) => error.code === 'WHATSAPP_WEB_DIRECT_ONLY' && error.statusCode === 422
-  );
-});
-
 test('settings bulk aceita contrato amigavel do frontend', () => {
   const result = bulkSettingsSchema.safeParse({
     body: {
       telegram: { botToken: '123:token', webhookSecret: 'secret' },
-      whatsappWeb: { sessionTtlDays: 90 },
       email: { user: 'admin@example.com', appPassword: 'app-pass' }
     }
   });
@@ -217,14 +195,12 @@ test('settings bulk salva e serializa o comando Telegram separado', async (conte
   const originals = {
     updateOne: Setting.updateOne,
     find: Setting.find,
-    findOne: Setting.findOne,
-    whatsappStatus: whatsappWebManager.status
+    findOne: Setting.findOne
   };
   context.after(() => {
     Setting.updateOne = originals.updateOne;
     Setting.find = originals.find;
     Setting.findOne = originals.findOne;
-    whatsappWebManager.status = originals.whatsappStatus;
   });
   const stored = new Map();
   Setting.updateOne = async ({ key }, update) => {
@@ -245,7 +221,6 @@ test('settings bulk salva e serializa o comando Telegram separado', async (conte
     };
     return query;
   };
-  whatsappWebManager.status = async () => ({ configured: true, ready: false });
   stored.set('START_NOTIFY_WHATSAPP_PERMISSION', {
     key: 'START_NOTIFY_WHATSAPP_PERMISSION',
     valueEncrypted: encrypt('/notify-me'), sensitive: false
@@ -266,7 +241,6 @@ test('settings bulk ignora campos vazios de canais opcionais', () => {
   const result = bulkSettingsSchema.safeParse({
     body: {
       telegram: { botToken: '123:token', webhookSecret: '' },
-      whatsappWeb: { sessionTtlDays: '' },
       whatsappCloud: { accessToken: '', apiVersion: '' },
       email: { user: '', from: '', appPassword: '' }
     }
@@ -276,7 +250,6 @@ test('settings bulk ignora campos vazios de canais opcionais', () => {
   assert.equal(result.data.body.telegram.webhookSecret, undefined);
   assert.equal(result.data.body.email.user, undefined);
   assert.equal(result.data.body.whatsappCloud.apiVersion, undefined);
-  assert.equal(result.data.body.whatsappWeb.sessionTtlDays, undefined);
 });
 
 test('settings bulk ignora nulls enviados por formularios de outros canais', () => {
@@ -324,12 +297,9 @@ test('notificacao global rejeita envio rapido e exige templates por canal', () =
   assert.equal(global.success, true);
 });
 
-test('notificacoes removem WhatsApp Web e exigem template no Cloud', () => {
+test('notificacoes exigem template no Cloud', () => {
   const contactIds = ['507f1f77bcf86cd799439011'];
   const templateId = '507f1f77bcf86cd799439012';
-  assert.equal(createNotificationSchema.safeParse({ body: {
-    kind: 'quick', channel: 'whatsapp_web', content: { text: 'Oi' }, contactIds, groupIds: []
-  } }).success, false);
   assert.equal(createNotificationSchema.safeParse({ body: {
     kind: 'quick', channel: 'whatsapp_cloud', content: { text: 'Oi' }, contactIds, groupIds: []
   } }).success, false);
@@ -391,7 +361,7 @@ test('detalhes de falhas da fila possuem paginacao e filtros estritos', () => {
   } });
   assert.equal(valid.success, true);
   assert.equal(valid.data.query.limit, 25);
-  assert.equal(listDeliveryIssuesSchema.safeParse({ query: { channel: 'whatsapp_web' } }).success, false);
+  assert.equal(listDeliveryIssuesSchema.safeParse({ query: { channel: 'sms' } }).success, false);
   assert.equal(listDeliveryIssuesSchema.safeParse({ query: { status: 'sent' } }).success, false);
 });
 

@@ -385,14 +385,14 @@ test('Telegram-only e consolidado no contato WhatsApp do mesmo telefone sem perd
     phoneHash: searchHash('551131234567'),
     channels: [{
       _id: '507f1f77bcf86cd799439024',
-      channel: 'whatsapp_web',
-      addressEncrypted: encrypt('551131234567@c.us'),
-      addressHash: searchHash('551131234567@c.us'),
+      channel: 'whatsapp_cloud',
+      addressEncrypted: encrypt('551131234567'),
+      addressHash: searchHash('551131234567'),
       authorized: true,
       consentStatus: 'granted',
-      source: 'whatsapp_web_message'
+      source: 'whatsapp_cloud_webhook'
     }],
-    channelAvatars: [{ channel: 'whatsapp_web', urlEncrypted: encrypt('https://cdn.example/whatsapp.jpg') }],
+    channelAvatars: [{ channel: 'whatsapp_cloud', urlEncrypted: encrypt('https://cdn.example/whatsapp.jpg') }],
     tags: ['cliente'],
     active: true,
     notificationDisabled: false,
@@ -461,10 +461,10 @@ test('Telegram-only e consolidado no contato WhatsApp do mesmo telefone sem perd
   assert.equal(result.id, targetId);
   assert.equal(result.upsertState.merged, true);
   assert.equal(result.upsertState.mergedSourceContactId, sourceId);
-  assert.deepEqual(result.channels.map((identity) => identity.channel), ['whatsapp_web', 'telegram']);
+  assert.deepEqual(result.channels.map((identity) => identity.channel), ['whatsapp_cloud', 'telegram']);
   assert.equal(result.channels.find((identity) => identity.channel === 'telegram').consentStatus, 'granted');
   assert.equal(result.avatarUrl, 'https://cdn.example/whatsapp.jpg');
-  assert.equal(result.avatarSource, 'whatsapp_web');
+  assert.equal(result.avatarSource, 'whatsapp_cloud');
   assert.equal(decrypt(target.displayNameEncrypted), 'Samuel cadastrado');
   assert.equal(source.channels.length, 0);
   assert.ok(source.deletedAt instanceof Date);

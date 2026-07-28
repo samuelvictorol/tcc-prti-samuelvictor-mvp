@@ -6,7 +6,6 @@ import { useAppStore } from '../stores/app.js'
 import { useAuthStore } from '../stores/auth.js'
 import { connectSocket, disconnectSocket, getSocket } from '../services/socket.js'
 import { asList, http, unwrap } from '../services/http.js'
-import { normalizeWhatsappWebStatus } from '../services/whatsapp-web.js'
 
 const $q = useQuasar()
 const router = useRouter()
@@ -24,13 +23,7 @@ const navigation = computed(() => [
   { label: 'Notificações', caption: 'Envios e histórico', icon: 'send', to: '/notifications', available: true },
   { separator: true, label: 'Canais' },
   { label: 'Telegram', icon: 'send_to_mobile', to: '/telegram', available: app.isChannelEnabled('telegram') },
-  {
-    label: 'WhatsApp Web',
-    caption: app.isChannelEnabled('whatsappWeb') ? 'Monitor conectado' : 'Conecte o QR Code no Início',
-    icon: 'forum',
-    to: '/whatsapp-web',
-    available: app.isChannelEnabled('whatsappWeb'),
-  },
+  { label: 'Chats', caption: 'Atendimento oficial · janela de 24 h', icon: 'forum', to: '/chats', available: true },
   { label: 'WhatsApp Cloud', icon: 'cloud_sync', to: '/whatsapp-cloud', available: true },
   { label: 'Gmail', icon: 'mail', to: '/email', available: app.isChannelEnabled('email') },
   { separator: true, label: 'Governança' },
@@ -58,7 +51,6 @@ function notificationChannelMeta(channel) {
   return {
     telegram: { label: 'Telegram', icon: 'send_to_mobile', color: 'info' },
     whatsapp_cloud: { label: 'WhatsApp oficial', icon: 'cloud_sync', color: 'positive' },
-    whatsapp_web: { label: 'WhatsApp Web', icon: 'forum', color: 'primary' },
   }[channel] || { label: 'Sistema', icon: 'notifications', color: 'grey-7' }
 }
 
@@ -93,19 +85,6 @@ function onSocketReady() {
   app.fetchStatus(true)
 }
 
-function onWhatsappWebStatus(payload = {}) {
-  const status = normalizeWhatsappWebStatus(payload, app.channelStatus('whatsappWeb'))
-  app.updateChannelStatus('whatsappWeb', status)
-}
-
-function onWhatsappWebReady(payload = {}) {
-  onWhatsappWebStatus({ ...payload, state: 'ready', ready: true, attemptActive: false, qrCode: '' })
-}
-
-function onWhatsappWebDisconnected(payload = {}) {
-  onWhatsappWebStatus({ ...payload, state: 'disconnected', ready: false, attemptActive: false, qrCode: '' })
-}
-
 async function markNotificationRead(notification) {
   if (!notification?.id || notification.read) return
   try {
@@ -124,8 +103,7 @@ async function openAdminNotification(notification) {
     return
   }
   if (notification.channel === 'telegram') await router.push('/telegram')
-  else if (notification.channel === 'whatsapp_web') await router.push('/whatsapp-web')
-  else if (notification.channel === 'whatsapp_cloud') await router.push('/whatsapp-cloud')
+  else if (notification.channel === 'whatsapp_cloud') await router.push('/chats')
 }
 
 async function markAllAdminNotificationsRead() {
@@ -151,10 +129,6 @@ onMounted(() => {
   socket.on('admin_notification:created', onAdminNotification)
   socket.on('connect', onSocketReady)
   socket.on('system:ready', onSocketReady)
-  socket.on('whatsapp_web:status', onWhatsappWebStatus)
-  socket.on('whatsapp_web:qr', onWhatsappWebStatus)
-  socket.on('whatsapp_web:ready', onWhatsappWebReady)
-  socket.on('whatsapp_web:disconnected', onWhatsappWebDisconnected)
 })
 
 onBeforeUnmount(() => {
@@ -162,10 +136,6 @@ onBeforeUnmount(() => {
   socket.off('admin_notification:created', onAdminNotification)
   socket.off('connect', onSocketReady)
   socket.off('system:ready', onSocketReady)
-  socket.off('whatsapp_web:status', onWhatsappWebStatus)
-  socket.off('whatsapp_web:qr', onWhatsappWebStatus)
-  socket.off('whatsapp_web:ready', onWhatsappWebReady)
-  socket.off('whatsapp_web:disconnected', onWhatsappWebDisconnected)
 })
 </script>
 

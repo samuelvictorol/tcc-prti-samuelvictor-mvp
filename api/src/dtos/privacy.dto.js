@@ -1,5 +1,5 @@
 const { z, idParams } = require('./common.dto');
-const MANUAL_CONSENT_CHANNELS = ['whatsapp_web', 'whatsapp_cloud', 'email'];
+const MANUAL_CONSENT_CHANNELS = ['whatsapp_cloud', 'email'];
 
 const contactPrivacySchema = z.object({ params: idParams });
 const consentSchema = z.object({

@@ -8,9 +8,6 @@ export function contactAuthorizationValidation(value = {}) {
   if (consents.whatsappCloud && !value.hasPendingWhatsappCloud && !String(value.phone || '').trim()) {
     return 'Informe um telefone antes de autorizar WhatsApp Cloud.'
   }
-  if (consents.whatsappWeb && value.hasWhatsappWebIdentity === false && !value.hasPendingWhatsappWeb) {
-    return 'O WhatsApp Web só pode ser autorizado depois que o contato iniciar uma conversa.'
-  }
   return null
 }
 </script>
@@ -38,14 +35,12 @@ const emptyForm = () => ({
   telegramUsername: '',
   notes: '',
   tagsText: '',
-  consents: { email: false, whatsappCloud: false, whatsappWeb: false },
+  consents: { email: false, whatsappCloud: false },
 })
 const form = reactive(emptyForm())
 const originalConsents = reactive(emptyForm().consents)
 const authorizationPhoneError = computed(() => contactAuthorizationValidation({
   ...form,
-  hasWhatsappWebIdentity: hasWhatsappWebIdentity.value,
-  hasPendingWhatsappWeb: Boolean(pendingWhatsappWeb.value),
   hasPendingWhatsappCloud: Boolean(pendingWhatsappCloud.value),
 }))
 
@@ -61,23 +56,10 @@ function identity(contact, channel) {
   return identitiesOf(contact).find((item) => String(item.channel).replaceAll('-', '_') === channel)
 }
 
-const hasWhatsappWebIdentity = computed(() => Boolean(identity(props.contact || props.initial, 'whatsapp_web')))
-const pendingWhatsappWeb = computed(() => pendingWhatsappConsent(props.contact || props.initial, 'whatsapp_web'))
 const pendingWhatsappCloud = computed(() => pendingWhatsappConsent(props.contact || props.initial, 'whatsapp_cloud'))
 const providerIdentitySummaries = computed(() => contactIdentitySummaries(props.contact || props.initial)
-  .filter((item) => ['telegram', 'whatsapp_cloud', 'whatsapp_web'].includes(item.channel)))
+  .filter((item) => ['telegram', 'whatsapp_cloud'].includes(item.channel)))
 const permissionCards = computed(() => [
-  {
-    key: 'whatsappWeb',
-    channel: 'whatsapp_web',
-    label: 'WhatsApp Web',
-    icon: 'forum',
-    color: 'primary',
-    available: Boolean(hasWhatsappWebIdentity.value || pendingWhatsappWeb.value),
-    unavailableText: 'A identidade será criada automaticamente quando a pessoa iniciar uma conversa.',
-    identity: identity(props.contact || props.initial, 'whatsapp_web'),
-    pending: pendingWhatsappWeb.value,
-  },
   {
     key: 'whatsappCloud',
     channel: 'whatsapp_cloud',
@@ -117,19 +99,17 @@ const permissionCards = computed(() => [
 function reset() {
   const source = props.contact || props.initial || {}
   const emailIdentity = identity(source, 'email')
-  const webIdentity = identity(source, 'whatsapp_web')
   const cloudIdentity = identity(source, 'whatsapp_cloud')
   Object.assign(form, emptyForm(), {
     displayName: source.displayName || source.name || source.pushName || '',
     email: source.email || emailIdentity?.address || '',
-    phone: source.phone || cloudIdentity?.address || webIdentity?.address || '',
+    phone: source.phone || cloudIdentity?.address || '',
     telegramUsername: source.telegramUsername || source.telegram_username || source.username || '',
     notes: source.metadata?.notes || source.notes || '',
     tagsText: Array.isArray(source.tags) ? source.tags.join(', ') : '',
     consents: {
       email: Boolean(emailIdentity?.authorized && emailIdentity?.consentStatus === 'granted'),
       whatsappCloud: Boolean(cloudIdentity?.authorized && cloudIdentity?.consentStatus === 'granted') || Boolean(pendingWhatsappCloud.value),
-      whatsappWeb: Boolean(webIdentity?.authorized && webIdentity?.consentStatus === 'granted') || Boolean(pendingWhatsappWeb.value),
     },
   })
   Object.assign(originalConsents, form.consents)
@@ -186,9 +166,7 @@ function confirmRemovePermission(item) {
   $q.dialog({
     title: item.pending ? `Cancelar autorização pendente de ${item.label}?` : `Remover permissão de ${item.label}?`,
     message: item.pending
-      ? 'Somente esta autorização pendente será cancelada. A outra integração WhatsApp continuará autorizada.'
-      : item.channel === 'whatsapp_web'
-      ? 'A conversa continuará visível, mas o administrador não poderá responder até uma nova autorização.'
+      ? 'Esta autorização pendente será cancelada.'
       : 'Novos disparos neste canal serão bloqueados até que a permissão seja concedida novamente.',
     cancel: { flat: true, label: 'Cancelar' },
     ok: { color: 'negative', label: item.pending ? 'Cancelar autorização pendente' : 'Remover permissão' },
@@ -211,8 +189,6 @@ async function persistConsentChanges(contactId, changes) {
 async function save() {
   const validationError = contactAuthorizationValidation({
     ...form,
-    hasWhatsappWebIdentity: hasWhatsappWebIdentity.value,
-    hasPendingWhatsappWeb: Boolean(pendingWhatsappWeb.value),
     hasPendingWhatsappCloud: Boolean(pendingWhatsappCloud.value),
   })
   if (validationError) {
@@ -285,15 +261,7 @@ watch(() => props.modelValue, (open) => open && reset())
                   <strong>Vínculos e IDs dos provedores</strong>
                   <span>Dados recebidos automaticamente são somente leitura e permanecem vinculados ao contato.</span>
                 </div>
-                <div class="row items-center no-wrap q-gutter-xs">
-                  <ContextHelp
-                    v-if="hasWhatsappWebIdentity"
-                    title="Uso da identidade do WhatsApp Web"
-                    tooltip="Entenda a identidade do WhatsApp Web"
-                    text="WhatsApp Web disponível somente para chat direto; a identidade recebida pelo provedor será preservada automaticamente."
-                  />
-                  <q-icon name="verified_user" color="primary" />
-                </div>
+                <q-icon name="verified_user" color="primary" />
               </div>
               <div class="provider-identities__grid">
                 <article v-for="summary in providerIdentitySummaries" :key="summary.identity.id || `${summary.channel}:${summary.identity.address}`" class="provider-identity-card">
@@ -321,9 +289,9 @@ watch(() => props.modelValue, (open) => open && reset())
               <div class="row items-center q-mb-md">
                 <div class="text-weight-bold">Permissões de envio e resposta</div>
                 <ContextHelp
-                  title="Permissões e autorização compartilhada do WhatsApp"
+                  title="Permissões dos canais"
                   tooltip="Entenda como as permissões são aplicadas"
-                  text="O comando configurado, recebido pelo WhatsApp Web ou Cloud, autoriza as duas integrações WhatsApp. A identidade de origem é liberada imediatamente; se a outra ainda não existir, a autorização fica pendente até uma interação real, sem criar um destino artificial. Web, Cloud e Email continuam separados aqui para ajustes individuais; toda remoção exige confirmação."
+                  text="O comando configurado recebido pela API oficial autoriza notificações no WhatsApp Cloud. WhatsApp Cloud e Email permanecem separados para ajustes individuais; toda remoção exige confirmação."
                 />
               </div>
               <div class="permission-grid">
@@ -409,7 +377,7 @@ watch(() => props.modelValue, (open) => open && reset())
 .permission-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .permission-card {

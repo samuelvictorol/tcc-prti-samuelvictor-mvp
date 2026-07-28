@@ -11,6 +11,7 @@ const webhookEventsManager = require('../src/managers/whatsapp-cloud-webhook-eve
 const whatsappCloudController = require('../src/controllers/whatsapp-cloud.controller');
 const templatesManager = require('../src/managers/templates.manager');
 const notificationsManager = require('../src/managers/notifications.manager');
+const conversationsManager = require('../src/managers/conversations.manager');
 const { channelSendSchema } = require('../src/dtos/channels.dto');
 const { createTemplateSchema } = require('../src/dtos/templates.dto');
 const { buildCustomTemplateMessage, normalizeBuilder } = require('../src/utils/whatsapp-cloud-templates');
@@ -27,7 +28,8 @@ function stubWebhookPersistence(context) {
     [webhookEventsManager, 'persistPayload'],
     [webhookEventsManager, 'claimEvent'],
     [webhookEventsManager, 'markProcessed'],
-    [webhookEventsManager, 'markFailed']
+    [webhookEventsManager, 'markFailed'],
+    [conversationsManager, 'recordInbound']
   ]);
   webhookEventsManager.persistPayload = async (payload) => {
     const descriptors = webhookEventsManager.extractEvents(payload);
@@ -52,6 +54,10 @@ function stubWebhookPersistence(context) {
   webhookEventsManager.claimEvent = async (eventId) => ({ id: eventId, token: 'claim-token' });
   webhookEventsManager.markProcessed = async () => true;
   webhookEventsManager.markFailed = async () => true;
+  conversationsManager.recordInbound = async (input) => ({
+    conversation: { id: '507f1f77bcf86cd799439177', channel: input.channel },
+    message: { id: '507f1f77bcf86cd799439178', body: input.body }
+  });
 }
 
 test('canal fica disponivel para envio sem depender das credenciais de webhook', async (context) => {
@@ -155,7 +161,12 @@ test('POST do webhook valida somente com App Secret', async (context) => {
 });
 
 test('envio oficial usa apenas credenciais de envio e normaliza telefone para digitos', async (context) => {
-  restoreAfter(context, [[settingsManager, 'getValue'], [logsManager, 'create']]);
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [logsManager, 'create'],
+    [contactsManager, 'findByChannelAddress'],
+    [conversationsManager, 'recordOutbound']
+  ]);
   const originalFetch = global.fetch;
   context.after(() => { global.fetch = originalFetch; });
   const values = {
@@ -165,6 +176,16 @@ test('envio oficial usa apenas credenciais de envio e normaliza telefone para di
   };
   settingsManager.getValue = async (key) => values[key] || null;
   logsManager.create = async () => ({});
+  contactsManager.findByChannelAddress = async () => ({
+    id: '507f1f77bcf86cd799439012',
+    displayName: 'Contato ficticio',
+    avatarUrl: null
+  });
+  let recorded;
+  conversationsManager.recordOutbound = async (input) => {
+    recorded = input;
+    return { message: { id: '507f1f77bcf86cd799439013' } };
+  };
   let request;
   global.fetch = async (url, options) => {
     request = { url, headers: options.headers, body: JSON.parse(options.body) };
@@ -181,6 +202,11 @@ test('envio oficial usa apenas credenciais de envio e normaliza telefone para di
   });
 
   assert.equal(result.providerMessageId, 'wamid.confirmation');
+  assert.equal(recorded.body, '[Template: jaspers_market_order_confirmation_v1]');
+  assert.equal(recorded.type, 'template');
+  assert.equal(recorded.contactId, '507f1f77bcf86cd799439012');
+  assert.equal(recorded.metadata.template.languageCode, 'en_US');
+  assert.equal(recorded.metadata.template.components.length, 1);
   assert.equal(request.url, 'https://graph.facebook.com/v25.0/1000000000000001/messages');
   assert.equal(request.headers.authorization, 'Bearer access');
   assert.deepEqual(request.body, {
@@ -204,7 +230,12 @@ test('envio oficial usa apenas credenciais de envio e normaliza telefone para di
 });
 
 test('templates oficiais sem parametros omitem components', async (context) => {
-  restoreAfter(context, [[settingsManager, 'getValue'], [logsManager, 'create']]);
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [logsManager, 'create'],
+    [contactsManager, 'findByChannelAddress'],
+    [conversationsManager, 'recordOutbound']
+  ]);
   const originalFetch = global.fetch;
   context.after(() => { global.fetch = originalFetch; });
   settingsManager.getValue = async (key) => ({
@@ -213,6 +244,12 @@ test('templates oficiais sem parametros omitem components', async (context) => {
     WHATSAPP_CLOUD_API_VERSION: 'v25.0'
   })[key] || null;
   logsManager.create = async () => ({});
+  contactsManager.findByChannelAddress = async () => null;
+  const recorded = [];
+  conversationsManager.recordOutbound = async (input) => {
+    recorded.push(input);
+    return { message: { id: String(recorded.length) } };
+  };
   const sent = [];
   global.fetch = async (_url, options) => {
     sent.push(JSON.parse(options.body));
@@ -226,6 +263,10 @@ test('templates oficiais sem parametros omitem components', async (context) => {
     { name: 'jaspers_market_plain_text_v1', language: { code: 'en_US' } },
     { name: 'hello_world', language: { code: 'en_US' } }
   ]);
+  assert.deepEqual(
+    recorded.map((item) => item.body),
+    ['[Template: jaspers_market_plain_text_v1]', '[Template: hello_world]']
+  );
 });
 
 test('contrato amigavel valida os tres presets sem payload JSON manual', () => {
@@ -497,6 +538,14 @@ test('webhook Cloud vincula payload Meta e concede somente ao receber o comando'
   const appSecret = 'cloud-secret';
   settingsManager.getValue = async (key) => key === 'WHATSAPP_CLOUD_APP_SECRET' ? appSecret : null;
   settingsManager.isWhatsappPermissionCommand = async (value) => value === '/notify-me';
+  let recordedInbound;
+  conversationsManager.recordInbound = async (input) => {
+    recordedInbound = input;
+    return {
+      conversation: { id: '507f1f77bcf86cd799439177', channel: input.channel },
+      message: { id: '507f1f77bcf86cd799439178', body: input.body }
+    };
+  };
   contactsManager.findByChannelAddress = async () => null;
   contactsManager.findByChannelOrPhone = async () => null;
   let upsertInput;
@@ -529,7 +578,7 @@ test('webhook Cloud vincula payload Meta e concede somente ao receber o comando'
   assert.equal(upsertInput.consentStatus, 'granted');
   assert.equal(upsertInput.consentSource, 'automatic_permission_command');
   assert.equal(upsertInput.consentCommand, '/notify-me');
-  assert.equal(upsertInput.shareWhatsappConsent, true);
+  assert.equal(upsertInput.shareWhatsappConsent, undefined);
   assert.equal(upsertInput.metadata.permissionCommandReceivedVia, 'whatsapp_cloud');
   assert.equal(upsertInput.metadata.sharedWhatsappConsent, true);
   assert.equal(upsertInput.metadata.userId, 'BR.12345678901234567');
@@ -541,6 +590,13 @@ test('webhook Cloud vincula payload Meta e concede somente ao receber o comando'
   assert.ok(actions.includes('contact.permission_granted'));
   assert.equal(adminNotification.channel, 'whatsapp_cloud');
   assert.equal(adminNotification.contactId, '507f1f77bcf86cd799439011');
+  assert.equal(recordedInbound.channel, 'whatsapp_cloud');
+  assert.equal(recordedInbound.externalId, '551131234567');
+  assert.equal(recordedInbound.contactId, '507f1f77bcf86cd799439011');
+  assert.equal(recordedInbound.providerMessageId, 'wamid.inbound');
+  assert.equal(recordedInbound.body, '/notify-me');
+  assert.equal(recordedInbound.metadata.phoneNumberId, '1000000000000001');
+  assert.equal(recordedInbound.metadata.businessAccountId, '1000000000000002');
 });
 
 test('webhook Cloud salva novo usuario como unknown sem o comando de permissao', async (context) => {
@@ -643,13 +699,13 @@ test('webhook Cloud trata canal anexado por telefone como identidade nova, nao c
   contactsManager.findByChannelAddress = async () => null;
   contactsManager.findByChannelOrPhone = async () => ({
     id: '507f1f77bcf86cd799439011',
-    channels: [{ channel: 'whatsapp_web', address: '551131234567@c.us', authorized: true, consentStatus: 'granted' }]
+    channels: [{ channel: 'email', address: 'contato@example.com', authorized: true, consentStatus: 'granted' }]
   });
   contactsManager.upsertFromChannel = async (input) => ({
     id: '507f1f77bcf86cd799439011',
     displayName: 'Contato Web existente',
     upsertState: { created: false, identityAdded: true },
-    channels: [{ channel: 'whatsapp_web' }, { channel: input.channel }]
+    channels: [{ channel: 'email' }, { channel: input.channel }]
   });
   const actions = [];
   logsManager.create = async (input) => { actions.push(input.action); return {}; };

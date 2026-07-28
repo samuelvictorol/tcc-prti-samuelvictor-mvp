@@ -1,6 +1,6 @@
 # Notify Flow API
 
-Backend multicanal em **Node.js 20**, **Express**, **MongoDB/Mongoose**, **Redis/BullMQ** e **Socket.IO**. A API concentra autenticação, contatos, consentimentos, templates, filas, webhooks e integrações com Telegram Bot API, WhatsApp Cloud API, Gmail e o monitor opcional `whatsapp-web.js`.
+Backend multicanal em **Node.js 20**, **Express**, **MongoDB/Mongoose**, **Redis/BullMQ** e **Socket.IO**. A API concentra autenticação, contatos, consentimentos, templates, filas, webhooks e integrações com Telegram Bot API, WhatsApp Cloud API oficial e Gmail.
 
 ## Estrutura e responsabilidades
 
@@ -14,7 +14,7 @@ src/
 ├── middlewares/  JWT, validação, rate limit e erros
 ├── models/       schemas e índices Mongoose
 ├── routes/       módulos *.routes.js autocarregados
-├── services/     crypto, Redis, BullMQ, Socket.IO e WhatsApp Web
+├── services/     crypto, Redis, BullMQ, Socket.IO e clientes oficiais
 └── utils/        normalização, templates, paginação e mídia segura
 ```
 
@@ -42,9 +42,9 @@ route -> DTO/middleware -> controller -> manager -> model/service/outro manager
 6. conecta ao Redis;
 7. registra o worker BullMQ e recupera notificações pendentes;
 8. inicia Express e Socket.IO;
-9. atualiza o webhook Telegram e, opcionalmente, retoma WhatsApp Web.
+9. atualiza o webhook Telegram.
 
-O shutdown trata `SIGINT`/`SIGTERM`, encerra a sessão Web, HTTP, fila, Redis e MongoDB.
+O shutdown trata `SIGINT`/`SIGTERM` e encerra HTTP, fila, Redis e MongoDB.
 
 ## Execução local
 
@@ -54,7 +54,7 @@ npm ci
 npm run dev
 ```
 
-É necessário ter MongoDB e Redis acessíveis. Para o conjunto completo, prefira `docker compose up --build -d` na raiz. O Dockerfile da API instala Chromium e executa como usuário sem privilégios para suportar o QR opcional.
+É necessário ter MongoDB e Redis acessíveis. Para o conjunto completo, prefira `docker compose up --build -d` na raiz. O Dockerfile da API executa como usuário sem privilégios.
 
 ## Domínios e rotas
 
@@ -81,12 +81,15 @@ O prefixo padrão é `/api`. Rotas administrativas exigem `Authorization: Bearer
 | Telegram webhook | `POST /webhooks/telegram` |
 | WhatsApp Cloud | status, presets e envio em `/whatsapp-cloud` |
 | Meta webhook | `GET/POST /webhooks/whatsapp-cloud` |
-| WhatsApp Web | sessão/QR/status e resposta individual em `/whatsapp-web` |
 | Gmail | status/envio em `/email`; `/gmail` é alias |
 
-### WhatsApp Web: rotas legadas
+### Chats oficiais do WhatsApp
 
-`GET /whatsapp-web/chats`, `GET /whatsapp-web/chats/:chatId/messages` e `POST /whatsapp-web/sync` existem apenas para compatibilidade e retornam **410 `WHATSAPP_WEB_HISTORY_DISABLED`**. A API não importa nem sincroniza o histórico do aparelho e não possui grupos WhatsApp Web. Use `/conversations` para os eventos novos persistidos localmente.
+`/whatsapp-cloud/conversations` lista a inbox construída localmente; a Cloud API não importa chats nem o histórico do aplicativo. Somente mensagens recebidas pelo webhook e envios realizados pela aplicação entram nessa inbox. O Socket.IO publica novas mensagens e atualizações de conversa em tempo real.
+
+Texto livre pode ser enviado apenas durante a janela de atendimento de 24 horas aberta pela última mensagem do cliente. Fora dela, use um template oficial aprovado. As mensagens locais expiram após 30 dias; `POST /whatsapp-cloud/conversations/backup` gera um backup JSON manual sem estender a retenção.
+
+Snapshots manuais e automáticos são criptografados e armazenados em GridFS, evitando o limite de 16 MB de um documento BSON. A retenção padrão dos snapshots é de 90 dias e pode ser ajustada por `CONVERSATION_BACKUP_RETENTION_DAYS` (mínimo de 30 dias). `GET /whatsapp-cloud/conversations/backups` lista os snapshots disponíveis e `GET /whatsapp-cloud/conversations/backups/:backupId/download` baixa qualquer snapshot; ambas as rotas exigem autenticação administrativa.
 
 ## Autenticação e sessões
 
@@ -128,8 +131,7 @@ Email e telefone são únicos. Telefones, IDs `@lid`, chat IDs e aliases passam 
 ### WhatsApp
 
 - WhatsApp Cloud cria/atualiza contato em qualquer mensagem inbound, mas não autoriza campanhas sem o comando configurado.
-- WhatsApp Web mantém remetentes desconhecidos como conversa somente leitura e não cria um novo contato até o comando, salvo correlação com contato já existente.
-- O comando WhatsApp concede Web e Cloud em conjunto. As permissões continuam armazenadas separadamente; se a identidade irmã ainda não existe, uma intenção pendente é consumida somente quando um destino real surgir.
+- O comando WhatsApp concede consentimento ao canal oficial no contato correlacionado.
 - Revogação posterior pode ser feita canal a canal.
 
 `getDestination()` bloqueia contato inativo, `notificationDisabled`, identidade ausente ou sem consentimento.
@@ -167,7 +169,7 @@ Tipos: texto, foto, vídeo e menu hierárquico. Menus usam inline keyboard e ses
 - `template`: `templateId` do mesmo canal;
 - `global`: `channel=global` e `templateIds` separados para Telegram, Cloud e/ou email.
 
-WhatsApp Cloud aceita somente `template`; WhatsApp Web é rejeitado nesse domínio.
+Mensagens iniciadas pela empresa no WhatsApp Cloud usam `template`; respostas em texto livre são restritas à janela de atendimento de 24 horas.
 
 Email e Telegram usam o mesmo contrato para um contato, vários contatos ou grupos. `contactIds`
 e `groupIds` podem ser combinados; a API expande os grupos e remove destinos duplicados:
@@ -258,7 +260,6 @@ O servidor Socket.IO compartilha o HTTP server e exige access JWT administrativo
 | `system:ready` | conexão autenticada pronta |
 | `log:created` | novo log operacional |
 | `admin_notification:created` | sino do administrador |
-| `whatsapp_web:qr/status/ready/disconnected` | ciclo da sessão QR |
 | `conversation:message`, `conversations:updated` | inbox local |
 | `telegram:message`, `telegram:webhook` | updates Telegram |
 | `whatsapp_cloud:message/webhook` | eventos Cloud |
@@ -293,7 +294,6 @@ Outros grupos:
 | Grupo | Variáveis |
 |---|---|
 | Perfil | `PROFILE_JWT_SECRET`, TTL e limites `PROFILE_CODE_*` |
-| Web | `WHATSAPP_WEB_AUTH_PATH`, auto init, TTL da sessão, retenção e Chromium |
 | Telegram | token, webhook secret, username e comando de onboarding |
 | Cloud | access token, IDs, verify token, app secret, versão e número público |
 | Gmail | usuário, App Password, remetente e nome |
@@ -308,11 +308,9 @@ subdomínio público próprio: chamadas externas, webhooks e Socket.IO passam pe
 frontend público em `https://notify-flow.onrender.com/api` e
 `https://notify-flow.onrender.com/socket.io`. No Compose, o frontend recebe
 `API_UPSTREAM=api:3000`; no Render, o mesmo valor é injetado com o `hostport`
-real da rede privada. A sessão Web exige disco persistente em
-`/app/.wwebjs_auth`, o que limita o serviço a uma instância e impede deploy sem
-interrupção. MongoDB é externo (Atlas) e Redis usa Render Key Value.
+real da rede privada. MongoDB é externo (Atlas) e Redis usa Render Key Value.
 
-Para escalar horizontalmente, primeiro separe o worker, isole o cliente WhatsApp Web em um serviço single-instance e adicione um adapter Redis ao Socket.IO.
+Para escalar horizontalmente, separe o worker e adicione um adapter Redis ao Socket.IO.
 
 ## Qualidade
 
@@ -323,4 +321,4 @@ npm run check
 npm audit --omit=dev
 ```
 
-Os testes cobrem arquitetura, DTOs, criptografia, deduplicação de identidade, consentimento, templates, webhooks, filas, recovery, receipts, autenticação de perfil, convites/LGPD e ciclo WhatsApp Web.
+Os testes cobrem arquitetura, DTOs, criptografia, deduplicação de identidade, consentimento, templates, webhooks, filas, recovery, receipts, autenticação de perfil e convites/LGPD.

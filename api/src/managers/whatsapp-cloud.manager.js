@@ -1,16 +1,34 @@
 const crypto = require('node:crypto');
 const settingsManager = require('./settings.manager');
 const contactsManager = require('./contacts.manager');
+const conversationsManager = require('./conversations.manager');
 const invitesManager = require('./invites.manager');
 const logsManager = require('./logs.manager');
 const adminNotificationsManager = require('./admin-notifications.manager');
 const webhookEventsManager = require('./whatsapp-cloud-webhook-events.manager');
-const { timingSafeEqual } = require('../services/crypto.service');
+const ConversationBackup = require('../models/conversation-backup.model');
+const backupStorage = require('../services/conversation-backup-storage.service');
+const { decrypt, timingSafeEqual } = require('../services/crypto.service');
 const { env } = require('../config/env');
 const { emit } = require('../services/socket.service');
 const ApiError = require('../utils/api-error');
 const { buildOfficialTemplateMessage, buildCustomTemplateMessage, listTemplatePresets } = require('../utils/whatsapp-cloud-templates');
 const { normalizeWhatsappE164 } = require('../utils/normalizers');
+const { parsePagination, pageResult } = require('../utils/pagination');
+
+const CLOUD_MESSAGE_TYPES_WITH_MEDIA = new Set(['audio', 'document', 'image', 'sticker', 'video']);
+const DEFAULT_CLOUD_MESSAGE_LABELS = Object.freeze({
+  audio: '[Audio]',
+  contacts: '[Contato]',
+  document: '[Documento]',
+  image: '[Imagem]',
+  interactive: '[Interacao]',
+  location: '[Localizacao]',
+  reaction: '[Reacao]',
+  sticker: '[Sticker]',
+  video: '[Video]'
+});
+const BACKUP_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
 
 async function sendConfiguration() {
   const [accessToken, phoneNumberId, version] = await Promise.all([
@@ -126,19 +144,57 @@ function matchingCloudContact(contacts = [], message = {}) {
   )) || null;
 }
 
+function cloudMessageBody(message = {}) {
+  const type = String(message.type || 'unknown');
+  const candidates = [
+    message.text?.body,
+    message.button?.text,
+    message.button?.payload,
+    message.interactive?.button_reply?.title,
+    message.interactive?.list_reply?.title,
+    message.image?.caption,
+    message.video?.caption,
+    message.document?.caption,
+    message.document?.filename,
+    message.reaction?.emoji,
+    message.location?.name,
+    message.location?.address,
+    message.errors?.[0]?.title
+  ];
+  const body = candidates.find((value) => typeof value === 'string' && value.trim());
+  return String(body || DEFAULT_CLOUD_MESSAGE_LABELS[type] || `[${type}]`).slice(0, conversationsManager.MAX_BODY_LENGTH);
+}
+
+function cloudMessageSentAt(message = {}) {
+  const timestampMs = Number(message.timestamp) * 1000;
+  return Number.isFinite(timestampMs) && timestampMs > 0 ? new Date(timestampMs) : new Date();
+}
+
+function cloudConversationMetadata(message, value, businessAccountId, providerContact = {}) {
+  return {
+    provider: 'meta_whatsapp_cloud',
+    businessAccountId: businessAccountId || null,
+    phoneNumberId: value.metadata?.phone_number_id || null,
+    displayPhoneNumber: value.metadata?.display_phone_number || null,
+    waId: providerContact.wa_id || null,
+    userId: providerContact.user_id || message.from_user_id || null,
+    fromUserId: message.from_user_id || null,
+    logicalId: providerContact.logical_id || null,
+    fromLogicalId: message.from_logical_id || null,
+    context: message.context || null,
+    media: CLOUD_MESSAGE_TYPES_WITH_MEDIA.has(message.type)
+      ? message[message.type] || null
+      : null,
+    interactive: message.interactive || null
+  };
+}
+
 async function upsertCloudContact(source, value, fallback = {}, options = {}) {
   const address = cloudIdentity(source, fallback);
   if (!address) return null;
   const profile = cloudProfile(source);
-  const logicalId = cloudLogicalId(source, fallback);
-  const [existingChannelContact, logicalContact] = await Promise.all([
-    contactsManager.findByChannelAddress('whatsapp_cloud', address),
-    logicalId
-      ? contactsManager.findByChannelAddress('whatsapp_web', logicalId + '@lid')
-      : null
-  ]);
+  const existingChannelContact = await contactsManager.findByChannelAddress('whatsapp_cloud', address);
   const existing = existingChannelContact
-    || logicalContact
     || await contactsManager.findByChannelOrPhone('whatsapp_cloud', address, address);
   const existingIdentity = existing?.channels?.find((item) => item.channel === 'whatsapp_cloud');
   const alreadyGranted = Boolean(existingIdentity?.authorized && existingIdentity?.consentStatus === 'granted');
@@ -156,7 +212,6 @@ async function upsertCloudContact(source, value, fallback = {}, options = {}) {
     consentSource: permissionGranted ? 'automatic_permission_command' : undefined,
     consentCommand: permissionGranted ? options.permissionCommand : undefined,
     consentEvidence: permissionGranted ? { providerMessageId: source.id || fallback.id || null, address } : undefined,
-    shareWhatsappConsent: permissionGranted,
     metadata: {
       waId: source.wa_id || fallback.wa_id || null,
       userId: source.user_id || fallback.user_id || null,
@@ -202,7 +257,7 @@ async function upsertCloudContact(source, value, fallback = {}, options = {}) {
       channel: 'whatsapp_cloud',
       title: 'Novo contato no WhatsApp Cloud',
       message: (contact.displayName || 'Contato') + (permissionGranted
-        ? ' foi cadastrado e autorizou WhatsApp Web e Cloud ao enviar o comando de permissão.'
+        ? ' foi cadastrado e autorizou notificacoes pelo WhatsApp Cloud.'
         : ' foi cadastrado pelo webhook e aguarda permissão para notificações.'),
       contactId: contact.id,
       context
@@ -269,26 +324,39 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
     });
   }
   const { contact } = result;
+  const sentAt = cloudMessageSentAt(message);
+  await conversationsManager.recordInbound({
+    channel: 'whatsapp_cloud',
+    externalId: address,
+    contactId: contact.id,
+    displayName: cloudProfile({ ...matchedProviderContact, ...message }).displayName || contact.displayName || address,
+    avatarUrl: cloudProfile({ ...matchedProviderContact, ...message }).avatarUrl || contact.avatarUrl || null,
+    providerMessageId: message.id || null,
+    body: cloudMessageBody(message),
+    type: message.type || 'unknown',
+    hasMedia: CLOUD_MESSAGE_TYPES_WITH_MEDIA.has(message.type),
+    sentAt,
+    metadata: cloudConversationMetadata(message, value, businessAccountId, matchedProviderContact)
+  });
   if (result.created) resultSummary.createdContacts += 1;
   else resultSummary.updatedContacts += 1;
   await logsManager.create({
     channel: 'whatsapp_cloud',
     action: permissionGranted ? 'contact.permission_granted' : 'message.received',
     message: permissionGranted
-      ? 'Permissao de notificacao para WhatsApp Web e Cloud recebida pelo WhatsApp Cloud'
+      ? 'Permissao de notificacao recebida pelo WhatsApp Cloud'
       : 'Mensagem WhatsApp Cloud recebida',
     context: {
       contactId: contact.id,
       providerMessageId: message.id,
       type: message.type,
       ...(permissionGranted ? {
-        permissionChannels: ['whatsapp_web', 'whatsapp_cloud'],
+        permissionChannels: ['whatsapp_cloud'],
         permissionCommand,
         permissionReceivedVia: 'whatsapp_cloud'
       } : {})
     }
   });
-  const timestampMs = Number(message.timestamp) * 1000;
   emit('whatsapp_cloud:message', {
     contactId: contact.id,
     providerMessageId: message.id || null,
@@ -299,9 +367,7 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
       text: permissionCommand,
       inviteAttributed: Boolean(invitationAttribution)
     } : {}),
-    sentAt: Number.isFinite(timestampMs) && timestampMs > 0
-      ? new Date(timestampMs).toISOString()
-      : new Date().toISOString()
+    sentAt: sentAt.toISOString()
   });
   return resultSummary;
 }
@@ -415,6 +481,395 @@ function normalizeMetaDestination(value) {
   return digits;
 }
 
+async function postCloudMessage(destination, message) {
+  const config = await sendConfiguration();
+  const response = await fetch('https://graph.facebook.com/' + config.version + '/' + config.phoneNumberId + '/messages', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + config.accessToken, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...message,
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: normalizeMetaDestination(destination)
+    }),
+    signal: AbortSignal.timeout(20_000)
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new ApiError(
+      502,
+      body.error?.message || 'Falha na API do WhatsApp',
+      { ...(body.error || {}), providerHttpStatus: response.status },
+      'WHATSAPP_CLOUD_ERROR'
+    );
+  }
+  return {
+    providerMessageId: body.messages?.[0]?.id || null,
+    raw: body,
+    phoneNumberId: config.phoneNumberId
+  };
+}
+
+function cloudContactConsent(contact) {
+  const identity = contact?.channels?.find((item) => item.channel === 'whatsapp_cloud') || null;
+  const authorized = Boolean(
+    contact
+    && contact.active !== false
+    && !contact.notificationDisabled
+    && identity?.authorized
+    && identity?.consentStatus === 'granted'
+  );
+  return {
+    authorized,
+    status: identity?.consentStatus || 'unknown',
+    source: identity?.consentSource || identity?.source || null,
+    command: identity?.consentCommand || null,
+    changedAt: identity?.consentChangedAt || identity?.consentedAt || null
+  };
+}
+
+function cloudContactSummary(contact) {
+  if (!contact) return null;
+  const identity = contact.channels?.find((item) => item.channel === 'whatsapp_cloud') || null;
+  return {
+    id: contact.id,
+    displayName: contact.displayName,
+    avatarUrl: contact.avatarUrl,
+    phone: contact.phone || identity?.deliveryAddress || identity?.address || null,
+    provider: {
+      address: identity?.address || null,
+      deliveryAddress: identity?.deliveryAddress || null,
+      waId: identity?.metadata?.waId || null,
+      userId: identity?.metadata?.userId || identity?.metadata?.fromUserId || null,
+      logicalId: identity?.metadata?.logicalId || identity?.metadata?.fromLogicalId || null,
+      phoneNumberId: identity?.metadata?.phoneNumberId || null,
+      businessAccountId: identity?.metadata?.businessAccountId || null
+    }
+  };
+}
+
+function enrichCloudConversation(conversation, contact) {
+  return {
+    ...conversation,
+    contact: cloudContactSummary(contact),
+    consent: cloudContactConsent(contact),
+    canReply: Boolean(conversation.serviceWindow?.open)
+  };
+}
+
+async function cloudConversationWithContact(id) {
+  const conversation = await conversationsManager.getById(id);
+  if (conversation.channel !== 'whatsapp_cloud') {
+    throw new ApiError(
+      422,
+      'A conversa nao pertence ao WhatsApp Cloud',
+      null,
+      'WHATSAPP_CLOUD_CONVERSATION_REQUIRED'
+    );
+  }
+  const contact = conversation.contactId
+    ? await contactsManager.getById(conversation.contactId).catch((error) => {
+      if (error.status === 404) return null;
+      throw error;
+    })
+    : null;
+  return enrichCloudConversation(conversation, contact);
+}
+
+async function listConversations(query = {}) {
+  const result = await conversationsManager.list({ ...query, channel: 'whatsapp_cloud' });
+  const contacts = await contactsManager.getManyByIds(result.items.map((item) => item.contactId).filter(Boolean));
+  const byId = new Map(contacts.map((contact) => [String(contact.id), contact]));
+  return {
+    ...result,
+    items: result.items.map((conversation) => (
+      enrichCloudConversation(conversation, byId.get(String(conversation.contactId)) || null)
+    ))
+  };
+}
+
+async function getConversation(id) {
+  return cloudConversationWithContact(id);
+}
+
+async function listConversationMessages(id, query = {}) {
+  await cloudConversationWithContact(id);
+  return conversationsManager.listMessages(id, query);
+}
+
+async function markConversationRead(id) {
+  await cloudConversationWithContact(id);
+  await conversationsManager.markRead(id);
+  return cloudConversationWithContact(id);
+}
+
+async function clearConversation(id) {
+  await cloudConversationWithContact(id);
+  return conversationsManager.clearHistory(id);
+}
+
+async function exportConversations() {
+  const conversations = [];
+  let page = 1;
+  let pages = 1;
+  do {
+    const batch = await listConversations({ page, limit: 100 });
+    pages = batch.pages || 1;
+    for (const conversation of batch.items) {
+      const messages = [];
+      let messagePage = 1;
+      let messagePages = 1;
+      do {
+        const messageBatch = await conversationsManager.listMessages(
+          conversation.id,
+          { page: messagePage, limit: 100 }
+        );
+        messagePages = messageBatch.pages || 1;
+        messages.push(...messageBatch.items);
+        messagePage += 1;
+      } while (messagePage <= messagePages);
+      conversations.push({ ...conversation, messages });
+    }
+    page += 1;
+  } while (page <= pages);
+  return {
+    format: 'notify-flow.whatsapp-cloud-conversations',
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    source: 'local_webhook_history',
+    historyImportedFromMeta: false,
+    retentionDays: conversationsManager.WHATSAPP_CLOUD_RETENTION_DAYS,
+    conversations
+  };
+}
+
+function backupPeriod(now = new Date()) {
+  const timestamp = now.getTime();
+  const periodNumber = Math.floor(timestamp / BACKUP_PERIOD_MS);
+  return {
+    key: String(periodNumber),
+    startedAt: new Date(periodNumber * BACKUP_PERIOD_MS),
+    endsAt: new Date((periodNumber + 1) * BACKUP_PERIOD_MS)
+  };
+}
+
+function backupSummary(backup) {
+  if (!backup) return null;
+  return {
+    id: String(backup._id),
+    trigger: backup.trigger,
+    periodKey: backup.periodKey,
+    periodStartedAt: backup.periodStartedAt,
+    periodEndsAt: backup.periodEndsAt,
+    generatedAt: backup.generatedAt,
+    conversationCount: backup.conversationCount,
+    messageCount: backup.messageCount,
+    filename: backup.filename || null,
+    contentType: backup.contentType || 'application/json',
+    storageBytes: backup.storageBytes || null,
+    plaintextBytes: backup.plaintextBytes || null,
+    expiresAt: backup.expiresAt || null,
+    downloadable: Boolean(backup.gridFsFileId || backup.payloadEncrypted)
+  };
+}
+
+function backupExpiresAt(now = new Date()) {
+  return new Date(
+    now.getTime() + env.conversationBackupRetentionDays * 24 * 60 * 60 * 1000
+  );
+}
+
+async function pruneExpiredBackups(now = new Date()) {
+  const expired = await ConversationBackup.find({ expiresAt: { $lte: now } })
+    .select('gridFsFileId')
+    .lean();
+  let removed = 0;
+  for (const backup of expired) {
+    if (backup.gridFsFileId) await backupStorage.remove(backup.gridFsFileId);
+    const result = await ConversationBackup.deleteOne({ _id: backup._id, expiresAt: { $lte: now } });
+    removed += Number(result.deletedCount || 0);
+  }
+  return { removed };
+}
+
+async function createStoredBackup(trigger = 'manual', now = new Date()) {
+  await pruneExpiredBackups(now);
+  const exported = await exportConversations();
+  const period = backupPeriod(now);
+  const messageCount = exported.conversations.reduce(
+    (total, conversation) => total + conversation.messages.length,
+    0
+  );
+  const filename = `notify-flow-whatsapp-cloud-${trigger}-${now.toISOString().replace(/[:.]/g, '-')}.enc`;
+  const storedFile = await backupStorage.upload(exported, { filename });
+  try {
+    const backup = await ConversationBackup.create({
+      channel: 'whatsapp_cloud',
+      trigger,
+      periodKey: period.key,
+      periodStartedAt: period.startedAt,
+      periodEndsAt: period.endsAt,
+      generatedAt: new Date(exported.generatedAt),
+      conversationCount: exported.conversations.length,
+      messageCount,
+      gridFsFileId: storedFile.fileId,
+      filename: storedFile.filename,
+      contentType: storedFile.contentType,
+      storageBytes: storedFile.storageBytes,
+      plaintextBytes: storedFile.plaintextBytes,
+      checksumSha256: storedFile.checksumSha256,
+      expiresAt: backupExpiresAt(now)
+    });
+    return {
+      created: true,
+      ...backupSummary(backup),
+      export: { ...exported, backupId: String(backup._id), trigger }
+    };
+  } catch (error) {
+    await backupStorage.remove(storedFile.fileId).catch(() => undefined);
+    if (error.code !== 11000 || trigger !== 'automatic') throw error;
+    const existing = await ConversationBackup.findOne({
+      channel: 'whatsapp_cloud',
+      trigger: 'automatic',
+      periodKey: period.key
+    }).lean();
+    return { created: false, ...backupSummary(existing), export: null };
+  }
+}
+
+async function createAutomaticBackupIfDue(now = new Date()) {
+  await pruneExpiredBackups(now);
+  const latest = await ConversationBackup.findOne({
+    channel: 'whatsapp_cloud',
+    trigger: 'automatic'
+  }).sort({ generatedAt: -1 }).lean();
+  if (latest && now.getTime() - new Date(latest.generatedAt).getTime() < BACKUP_PERIOD_MS) {
+    return { created: false, reason: 'not_due', ...backupSummary(latest) };
+  }
+  const created = await createStoredBackup('automatic', now);
+  return { ...created, export: undefined };
+}
+
+async function listStoredBackups(query = {}, now = new Date()) {
+  await pruneExpiredBackups(now);
+  const { page, limit, skip } = parsePagination(query);
+  const filter = {
+    channel: 'whatsapp_cloud',
+    $or: [
+      { expiresAt: { $gt: now } },
+      { expiresAt: { $exists: false } }
+    ]
+  };
+  const [items, total] = await Promise.all([
+    ConversationBackup.find(filter)
+      .select('+payloadEncrypted')
+      .sort({ generatedAt: -1, _id: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+    ConversationBackup.countDocuments(filter)
+  ]);
+  return pageResult(items.map(backupSummary), total, page, limit);
+}
+
+async function getStoredBackupExport(id, now = new Date()) {
+  await pruneExpiredBackups(now);
+  const backup = await ConversationBackup.findById(id).select('+payloadEncrypted').lean();
+  if (!backup) {
+    throw new ApiError(404, 'Backup nao encontrado', null, 'CONVERSATION_BACKUP_NOT_FOUND');
+  }
+  if (backup.expiresAt && new Date(backup.expiresAt) <= now) {
+    throw new ApiError(410, 'Backup expirado', null, 'CONVERSATION_BACKUP_EXPIRED');
+  }
+  let exported;
+  if (backup.gridFsFileId) {
+    exported = await backupStorage.download(backup.gridFsFileId, backup.checksumSha256);
+  } else if (backup.payloadEncrypted) {
+    exported = decrypt(backup.payloadEncrypted, { json: true });
+  } else {
+    throw new ApiError(
+      500,
+      'Arquivo do backup indisponivel',
+      null,
+      'CONVERSATION_BACKUP_FILE_MISSING'
+    );
+  }
+  return {
+    backup: backupSummary(backup),
+    export: { ...exported, backupId: String(backup._id), trigger: backup.trigger }
+  };
+}
+
+async function sendConversationText(id, text, options = {}) {
+  const normalizedText = String(text || '').trim();
+  if (!normalizedText || normalizedText.length > 4096) {
+    throw new ApiError(
+      422,
+      'A mensagem deve ter entre 1 e 4096 caracteres',
+      null,
+      'WHATSAPP_CLOUD_TEXT_INVALID'
+    );
+  }
+  const openConversation = await conversationsManager.requireOpenCloudServiceWindow(id);
+  const destination = normalizeMetaDestination(openConversation.externalId);
+  const sent = await postCloudMessage(destination, {
+    type: 'text',
+    text: { body: normalizedText, preview_url: false }
+  });
+  const recorded = await conversationsManager.recordOutbound({
+    channel: 'whatsapp_cloud',
+    externalId: destination,
+    contactId: openConversation.conversation.contact || undefined,
+    providerMessageId: sent.providerMessageId,
+    body: normalizedText,
+    type: 'text',
+    sentAt: new Date(),
+    metadata: {
+      provider: 'meta_whatsapp_cloud',
+      phoneNumberId: sent.phoneNumberId,
+      useCase: options.useCase || 'customer_service'
+    }
+  });
+  await logsManager.create({
+    channel: 'whatsapp_cloud',
+    action: options.useCase === 'consent_request' ? 'consent.request_sent' : 'chat.message_sent',
+    message: options.useCase === 'consent_request'
+      ? 'Solicitacao de permissao enviada no chat WhatsApp Cloud'
+      : 'Resposta enviada no chat WhatsApp Cloud',
+    context: {
+      contactId: openConversation.conversation.contact
+        ? String(openConversation.conversation.contact._id || openConversation.conversation.contact)
+        : null,
+      conversationId: String(openConversation.conversation._id),
+      providerMessageId: sent.providerMessageId,
+      serviceWindowExpiresAt: openConversation.serviceWindow.expiresAt
+    }
+  });
+  return {
+    providerMessageId: sent.providerMessageId,
+    conversation: await cloudConversationWithContact(id),
+    message: recorded.message
+  };
+}
+
+async function sendConsentRequest(id) {
+  const conversation = await cloudConversationWithContact(id);
+  if (conversation.consent.authorized) {
+    throw new ApiError(
+      409,
+      'O contato ja autorizou notificacoes pelo WhatsApp Cloud',
+      null,
+      'WHATSAPP_CONSENT_ALREADY_GRANTED'
+    );
+  }
+  const [template, command] = await Promise.all([
+    settingsManager.getWhatsappConsentRequestText(),
+    settingsManager.getWhatsappPermissionCommand()
+  ]);
+  const text = String(template).replaceAll('{command}', command);
+  return sendConversationText(id, text, { useCase: 'consent_request' });
+}
+
 async function send(input) {
   const destinationCount = [input.contactId, input.groupId, input.destination].filter(Boolean).length;
   if (destinationCount !== 1) {
@@ -423,8 +878,11 @@ async function send(input) {
   if (input.groupId) throw new ApiError(422, 'Envio direto do WhatsApp Cloud nao aceita groupId', null, 'GROUP_DESTINATION_UNSUPPORTED');
 
   let destination;
+  let resolvedContact = null;
   if (input.contactId) {
-    destination = (await contactsManager.getDestination(input.contactId, 'whatsapp_cloud')).address;
+    const resolvedDestination = await contactsManager.getDestination(input.contactId, 'whatsapp_cloud');
+    destination = resolvedDestination.address;
+    resolvedContact = resolvedDestination.contact;
   } else {
     destination = input.destination;
   }
@@ -432,6 +890,7 @@ async function send(input) {
     const known = await contactsManager.findByChannelAddress('whatsapp_cloud', destination);
     if (!known) throw new ApiError(403, 'Destino WhatsApp nao cadastrado/autorizado', null, 'UNKNOWN_DESTINATION');
     destination = (await contactsManager.getDestination(known.id, 'whatsapp_cloud')).address;
+    resolvedContact = known;
   }
   if (!destination) throw new ApiError(422, 'Destino WhatsApp obrigatorio');
   destination = normalizeMetaDestination(destination);
@@ -455,27 +914,53 @@ async function send(input) {
       'WHATSAPP_CLOUD_TEMPLATE_ONLY'
     );
   }
-  const config = await sendConfiguration();
-  const response = await fetch('https://graph.facebook.com/' + config.version + '/' + config.phoneNumberId + '/messages', {
-    method: 'POST',
-    headers: { authorization: 'Bearer ' + config.accessToken, 'content-type': 'application/json' },
-    body: JSON.stringify({ ...message, messaging_product: 'whatsapp', recipient_type: 'individual', to: destination }),
-    signal: AbortSignal.timeout(20_000)
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new ApiError(
-      502,
-      body.error?.message || 'Falha na API do WhatsApp',
-      { ...(body.error || {}), providerHttpStatus: response.status },
-      'WHATSAPP_CLOUD_ERROR'
-    );
+  if (!resolvedContact && input.useCase !== 'profile_auth') {
+    resolvedContact = await contactsManager.findByChannelAddress('whatsapp_cloud', destination);
   }
-  const messageId = body.messages?.[0]?.id;
+  const sent = await postCloudMessage(destination, message);
+  const messageId = sent.providerMessageId;
   if (input.useCase !== 'profile_auth') {
+    const template = message.template || {};
+    const templateName = String(template.name || input.templateName || 'template_oficial');
+    try {
+      await conversationsManager.recordOutbound({
+        channel: 'whatsapp_cloud',
+        externalId: destination,
+        contactId: resolvedContact?.id || input.contactId || undefined,
+        displayName: resolvedContact?.displayName || destination,
+        avatarUrl: resolvedContact?.avatarUrl || null,
+        providerMessageId: messageId,
+        body: `[Template: ${templateName}]`,
+        type: 'template',
+        sentAt: new Date(),
+        metadata: {
+          provider: 'meta_whatsapp_cloud',
+          phoneNumberId: sent.phoneNumberId,
+          useCase: input.useCase || 'notification',
+          template: {
+            name: templateName,
+            languageCode: template.language?.code || input.languageCode || null,
+            components: template.components || []
+          }
+        }
+      });
+    } catch (error) {
+      await logsManager.create({
+        level: 'error',
+        channel: 'whatsapp_cloud',
+        action: 'chat.template_history_failed',
+        message: 'Template enviado pela Meta, mas o espelho local do chat falhou',
+        context: {
+          contactId: resolvedContact?.id || input.contactId || null,
+          providerMessageId: messageId,
+          templateName,
+          error: String(error.message || error).slice(0, 500)
+        }
+      }).catch(() => undefined);
+    }
     await logsManager.create({ channel: 'whatsapp_cloud', action: 'message.sent', message: 'Mensagem WhatsApp Cloud enviada', context: { contactId: input.contactId, providerMessageId: messageId } });
   }
-  return { providerMessageId: messageId, raw: body };
+  return { providerMessageId: messageId, raw: sent.raw };
 }
 
 module.exports = {
@@ -484,7 +969,23 @@ module.exports = {
   verifyChallenge,
   webhook,
   send,
+  listConversations,
+  getConversation,
+  listConversationMessages,
+  markConversationRead,
+  clearConversation,
+  exportConversations,
+  createStoredBackup,
+  createAutomaticBackupIfDue,
+  listStoredBackups,
+  getStoredBackupExport,
+  pruneExpiredBackups,
+  sendConversationText,
+  sendConsentRequest,
   normalizeMetaDestination,
+  cloudMessageBody,
+  cloudMessageSentAt,
+  cloudContactConsent,
   cloudIdentity,
   cloudLogicalId,
   cloudProfile,

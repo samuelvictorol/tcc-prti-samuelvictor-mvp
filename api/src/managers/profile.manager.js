@@ -17,8 +17,7 @@ const { searchHash } = require('../services/crypto.service');
 const {
   normalizeEmail,
   normalizePhone,
-  normalizeWhatsappE164,
-  whatsappLidDigits
+  normalizeWhatsappE164
 } = require('../utils/normalizers');
 const { parsePagination, pageResult } = require('../utils/pagination');
 const { registerSecurityStrike } = require('../middlewares/security');
@@ -78,7 +77,7 @@ function contactLookupFilter(identifier, excludeId) {
           {
             channels: {
               $elemMatch: {
-                channel: { $in: ['whatsapp_web', 'whatsapp_cloud'] },
+                channel: 'whatsapp_cloud',
                 addressHash: { $in: identifier.contactHashes }
               }
             }
@@ -390,7 +389,7 @@ function publicProfile(contact) {
     phoneUnavailableReason: contact.phoneUnavailableReason,
     telegramUsername: contact.telegramUsername,
     avatarUrl: contact.avatarUrl,
-    permissions: ['telegram', 'whatsapp_web', 'whatsapp_cloud', 'email']
+    permissions: ['telegram', 'whatsapp_cloud', 'email']
       .map((channel) => permissionState(contact, channel)),
     updatedAt: contact.updatedAt
   };
@@ -423,11 +422,7 @@ async function updateOwnProfile(contactId, input) {
   }
   if (input.phone) {
     const inputDigits = normalizeWhatsappE164(input.phone);
-    const lidIdentifiers = (current.channels || [])
-      .filter((identity) => identity.channel === 'whatsapp_web')
-      .map((identity) => whatsappLidDigits(identity.address))
-      .filter(Boolean);
-    if (!inputDigits || lidIdentifiers.includes(inputDigits)) {
+    if (!inputDigits) {
       throw new ApiError(
         422,
         'Informe um telefone E.164 real; LID/chat_id nao pode ser usado como telefone',
@@ -534,7 +529,7 @@ async function activationLinks(contactId) {
     whatsapp: {
       command,
       url: whatsappUrl,
-      appliesTo: ['whatsapp_web', 'whatsapp_cloud'],
+      appliesTo: ['whatsapp_cloud'],
       unavailableReason: whatsappUrl ? null : 'Numero empresarial do WhatsApp ainda nao identificado'
     }
   };

@@ -358,11 +358,11 @@ async function track(slug, linkId, token, meta = {}) {
   const link = invite.links.id(linkId);
   if (!link || !link.active) throw new ApiError(404, 'Link de convite nao encontrado');
   const permissionCommand = await settingsManager.getWhatsappPermissionCommand();
-  const supportsAttribution = ['telegram', 'whatsapp_web', 'whatsapp_cloud'].includes(link.channel);
+  const supportsAttribution = ['telegram', 'whatsapp_cloud'].includes(link.channel);
   const attributionMarker = supportsAttribution ? createAttributionMarker(invite._id) : null;
   const redirectUrl = link.channel === 'telegram'
     ? telegramInviteRedirectUrlWithAttribution(link.url, permissionCommand, attributionMarker)
-    : ['whatsapp_web', 'whatsapp_cloud'].includes(link.channel)
+    : link.channel === 'whatsapp_cloud'
       ? whatsappInviteRedirectUrl(link.url, permissionCommand, attributionMarker)
       : link.url;
   if (!isAllowedInviteUrl(redirectUrl)) throw new ApiError(400, 'Protocolo de link de convite nao permitido', null, 'UNSAFE_INVITE_URL');

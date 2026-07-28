@@ -3,7 +3,6 @@ import { http, unwrap } from '../services/http.js'
 
 const aliases = {
   telegram: ['telegram'],
-  whatsappWeb: ['whatsappWeb', 'whatsapp_web', 'whatsapp-web'],
   whatsappCloud: ['whatsappCloud', 'whatsapp_cloud', 'whatsapp-cloud', 'meta'],
   email: ['email', 'gmail'],
 }
@@ -28,9 +27,6 @@ export const useAppStore = defineStore('app', {
       const value = findChannel(state.status, channel)
       if (typeof value === 'boolean') return value
       if (!value) return false
-      if (channel === 'whatsappWeb') {
-        return Boolean(value.connected || value.authenticated || value.ready || value.status === 'ready')
-      }
       return Boolean(value.enabled ?? value.configured ?? value.active ?? value.ready ?? value.status === 'ready')
     },
     channelStatus: (state) => (channel) => findChannel(state.status, channel) || {},

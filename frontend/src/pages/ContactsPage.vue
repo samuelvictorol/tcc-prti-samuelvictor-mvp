@@ -117,9 +117,6 @@ function normalizeConsents(contact) {
     return {
       email: source.some((item) => (typeof item === 'string' ? item === 'email' : item.channel === 'email' && item.authorized && item.consentStatus === 'granted')),
       telegram: source.some((item) => (typeof item === 'string' ? item === 'telegram' : item.channel === 'telegram' && item.authorized && item.consentStatus === 'granted')),
-      whatsappWeb: source.some((item) => typeof item === 'string'
-        ? ['whatsappWeb', 'whatsapp-web', 'whatsapp_web'].includes(item)
-        : ['whatsappWeb', 'whatsapp-web', 'whatsapp_web'].includes(item.channel) && item.authorized && item.consentStatus === 'granted'),
       whatsappCloud: source.some((item) => typeof item === 'string'
         ? ['whatsappCloud', 'whatsapp-cloud', 'whatsapp_cloud'].includes(item)
         : ['whatsappCloud', 'whatsapp-cloud', 'whatsapp_cloud'].includes(item.channel) && item.authorized && item.consentStatus === 'granted'),
@@ -128,7 +125,6 @@ function normalizeConsents(contact) {
   return {
     email: Boolean(source.email?.granted ?? source.email),
     telegram: Boolean(source.telegram?.granted ?? source.telegram),
-    whatsappWeb: Boolean(source.whatsappWeb?.granted ?? source.whatsappWeb ?? source.whatsapp_web),
     whatsappCloud: Boolean(source.whatsappCloud?.granted ?? source.whatsappCloud ?? source.whatsapp_cloud),
   }
 }
@@ -137,20 +133,9 @@ function channelLabels(contact) {
   const consent = normalizeConsents(contact)
   return [
     ['telegram', 'Telegram'],
-    ['whatsappWeb', 'WhatsApp Web'],
     ['whatsappCloud', 'WhatsApp Cloud'],
     ['email', 'Email'],
   ].filter(([key]) => consent[key]).map(([, label]) => label)
-}
-
-function hasWhatsappWebChat(contact) {
-  const channels = Array.isArray(contact?.channels) ? contact.channels : []
-  return channels.some((item) => String(typeof item === 'string' ? item : item?.channel).replaceAll('-', '_') === 'whatsapp_web')
-}
-
-function whatsappWebIdentity(contact) {
-  const channels = Array.isArray(contact?.channels) ? contact.channels : []
-  return channels.find((item) => String(item?.channel || '').replaceAll('-', '_') === 'whatsapp_web') || null
 }
 
 function isIdentityAuthorized(identity) {
@@ -159,7 +144,7 @@ function isIdentityAuthorized(identity) {
 
 function visibleIdentitySummaries(contact) {
   return contactIdentitySummaries(contact)
-    .filter((summary) => ['telegram', 'whatsapp_cloud', 'whatsapp_web'].includes(summary.channel))
+    .filter((summary) => ['telegram', 'whatsapp_cloud'].includes(summary.channel))
     .map((summary) => ({ ...summary, consent: identityConsentProvenance(summary.identity) }))
 }
 
@@ -494,15 +479,7 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
               <q-td :props="props">
                 <div class="channel-badges">
                   <q-badge v-for="channel in channelLabels(props.row)" :key="channel" outline color="primary" :label="channel" />
-                  <q-badge
-                    v-if="hasWhatsappWebChat(props.row) && !isIdentityAuthorized(whatsappWebIdentity(props.row))"
-                    outline
-                    color="warning"
-                    text-color="dark"
-                    icon="visibility"
-                    label="WhatsApp Web: somente leitura"
-                  />
-                  <span v-if="!channelLabels(props.row).length && !hasWhatsappWebChat(props.row)" class="text-muted">Nenhuma autorização</span>
+                  <span v-if="!channelLabels(props.row).length" class="text-muted">Nenhuma autorização</span>
                 </div>
                 <div v-if="visibleIdentitySummaries(props.row).length" class="provider-id-list">
                   <div

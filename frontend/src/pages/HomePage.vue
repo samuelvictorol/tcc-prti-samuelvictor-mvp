@@ -24,10 +24,10 @@ import {
 } from '../services/telegram.js'
 import {
   DEFAULT_WHATSAPP_PERMISSION_COMMAND,
-  normalizeWhatsappWebStatus,
-  shouldShowOperationalLog,
   whatsappPermissionCommandFromSettings,
-} from '../services/whatsapp-web.js'
+} from '../services/whatsapp.js'
+
+const DEFAULT_WHATSAPP_CONSENT_REQUEST_TEXT = 'Para ativar suas notificações, responda com {command}.'
 
 const $q = useQuasar()
 const app = useAppStore()
@@ -36,14 +36,10 @@ const savingChannel = reactive({ telegram: false, whatsappCloud: false, email: f
 const registeringWebhook = ref(false)
 const savingWhatsappPermission = ref(false)
 const savingTelegramPermission = ref(false)
-const connectingWhatsappWeb = ref(false)
-const regeneratingWhatsappWeb = ref(false)
-const disconnectingWhatsappWeb = ref(false)
 const revealingCredentials = reactive({ telegram: false, whatsappCloud: false, email: false })
 const channelCredentialsVisible = reactive({ telegram: false, whatsappCloud: false, email: false })
 const savedCredentialPreviews = reactive({ telegram: {}, whatsappCloud: {}, email: {} })
 const revealedCredentialBaselines = reactive({ telegram: {}, whatsappCloud: {}, email: {} })
-const whatsappWebStatus = ref(normalizeWhatsappWebStatus())
 const logItems = ref([])
 const logLoading = ref(false)
 const logPage = ref(1)
@@ -52,24 +48,22 @@ const stats = reactive({ contacts: 0, deliveries: 0, failed: 0 })
 const settings = reactive({
   telegram: { botToken: '', webhookSecret: '', webhookUrl: '', bot: null },
   whatsappCloud: { accessToken: '', phoneNumberId: '', displayPhoneNumber: '', businessAccountId: '', verifyToken: '', appSecret: '', apiVersion: 'v25.0' },
-  whatsappPermission: { command: DEFAULT_WHATSAPP_PERMISSION_COMMAND },
+  whatsappPermission: {
+    command: DEFAULT_WHATSAPP_PERMISSION_COMMAND,
+    requestText: DEFAULT_WHATSAPP_CONSENT_REQUEST_TEXT,
+  },
   telegramPermission: { command: DEFAULT_TELEGRAM_PERMISSION_COMMAND },
   email: { user: '', appPassword: '', from: '', fromName: '' },
 })
 
-let whatsappWebPollTimer
-let whatsappWebPollDeadline = 0
-
 const channels = computed(() => [
   { key: 'telegram', name: 'Telegram', icon: 'send_to_mobile', description: 'Bot e conversas autorizadas' },
-  { key: 'whatsappWeb', name: 'WhatsApp Web', icon: 'forum', description: 'Monitor de conversas diretas' },
   { key: 'whatsappCloud', name: 'WhatsApp Cloud', icon: 'cloud_sync', description: 'API oficial da Meta' },
   { key: 'email', name: 'Gmail', icon: 'mail', description: 'SMTP ou senha de app' },
 ])
 
 const channelNames = {
   telegram: 'Telegram',
-  whatsappWeb: 'WhatsApp Web',
   whatsappCloud: 'WhatsApp Cloud',
   email: 'Gmail',
 }
@@ -93,18 +87,7 @@ const telegramBot = computed(() => telegramBotIdentity({
 
 const telegramBotUsername = computed(() => telegramBot.value?.username ? `@${telegramBot.value.username}` : '')
 
-const whatsappWebReady = computed(() => Boolean(whatsappWebStatus.value.ready))
-const whatsappWebQr = computed(() => whatsappWebStatus.value.qrCode || '')
-const whatsappWebAttemptActive = computed(() => Boolean(whatsappWebStatus.value.attemptActive))
-const visibleLogItems = computed(() => logItems.value.filter((log) => shouldShowOperationalLog(log, whatsappWebReady.value)))
-
-const whatsappWebStateLabel = computed(() => {
-  if (whatsappWebReady.value) return 'Conectado em tempo real'
-  if (whatsappWebQr.value) return 'Aguardando leitura do QR Code'
-  if (whatsappWebAttemptActive.value) return 'Preparando QR Code'
-  if (whatsappWebStatus.value.lastError) return 'Falha na última tentativa'
-  return 'Desconectado'
-})
+const visibleLogItems = computed(() => logItems.value)
 
 const whatsappCloudCallbackUrl = computed(() => {
   const origin = typeof window !== 'undefined' ? window.location.origin.replace(/\/$/, '') : ''
@@ -198,6 +181,9 @@ function applySettings(value = {}) {
     channelCredentialsVisible[channel] = false
   }
   settings.whatsappPermission.command = whatsappPermissionCommandFromSettings(value)
+  settings.whatsappPermission.requestText = source.whatsappPermission?.requestText
+    || value.whatsappPermission?.requestText
+    || DEFAULT_WHATSAPP_CONSENT_REQUEST_TEXT
   settings.telegramPermission.command = telegramPermissionCommandFromSettings(value)
 }
 
@@ -242,111 +228,30 @@ async function toggleChannelCredentials(channel) {
   }
 }
 
-function stopWhatsappWebPolling() {
-  if (whatsappWebPollTimer) window.clearInterval(whatsappWebPollTimer)
-  whatsappWebPollTimer = undefined
-  whatsappWebPollDeadline = 0
-}
-
-function applyWhatsappWebStatus(payload = {}) {
-  const status = normalizeWhatsappWebStatus(payload, whatsappWebStatus.value)
-  whatsappWebStatus.value = status
-  app.updateChannelStatus('whatsappWeb', status)
-  if (status.ready || !status.attemptActive) stopWhatsappWebPolling()
-  return status
-}
-
-async function loadWhatsappWebStatus({ quiet = false } = {}) {
-  try {
-    const status = applyWhatsappWebStatus(unwrap(await http.get('/whatsapp-web/status')) || {})
-    return status
-  } catch (error) {
-    if (!quiet) $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível consultar a sessão do WhatsApp Web.') })
-    return whatsappWebStatus.value
-  }
-}
-
-function startWhatsappWebPolling() {
-  if (whatsappWebPollTimer) return
-  if (!whatsappWebPollDeadline) whatsappWebPollDeadline = Date.now() + 120_000
-  whatsappWebPollTimer = window.setInterval(async () => {
-    const status = await loadWhatsappWebStatus({ quiet: true })
-    if (status.ready || !status.attemptActive || Date.now() >= whatsappWebPollDeadline) stopWhatsappWebPolling()
-  }, 2500)
-}
-
-async function generateWhatsappWebQr({ regenerate = false, confirmed = false } = {}) {
-  if (regenerate && whatsappWebReady.value && !confirmed) {
-    $q.dialog({
-      title: 'Gerar um novo QR Code?',
-      message: 'A sessão atual será encerrada. Depois, leia o novo QR Code para reativar o monitor.',
-      cancel: { flat: true, label: 'Cancelar' },
-      ok: { color: 'primary', label: 'Gerar novo QR' },
-      persistent: true,
-    }).onOk(() => generateWhatsappWebQr({ regenerate: true, confirmed: true }))
-    return
-  }
-
-  const isRegenerate = regenerate
-  if (isRegenerate) regeneratingWhatsappWeb.value = true
-  else connectingWhatsappWeb.value = true
-  try {
-    whatsappWebPollDeadline = Date.now() + 120_000
-    const path = isRegenerate ? '/whatsapp-web/session/regenerate' : '/whatsapp-web/session'
-    const status = applyWhatsappWebStatus(unwrap(await http.post(path)) || { state: 'initializing', attemptActive: true })
-    if (!status.ready) {
-      applyWhatsappWebStatus({ ...status, attemptActive: true })
-      startWhatsappWebPolling()
-    }
-    $q.notify({
-      type: status.ready ? 'positive' : 'info',
-      message: status.ready ? 'WhatsApp Web já está conectado.' : 'Sessão iniciada. O QR Code aparecerá automaticamente.',
-    })
-  } catch (error) {
-    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível gerar o QR Code do WhatsApp Web.') })
-    await loadWhatsappWebStatus({ quiet: true })
-  } finally {
-    connectingWhatsappWeb.value = false
-    regeneratingWhatsappWeb.value = false
-  }
-}
-
-function confirmDisconnectWhatsappWeb() {
-  $q.dialog({
-    title: 'Desconectar WhatsApp Web?',
-    message: 'A sessão autenticada será encerrada e o monitor ficará indisponível até a leitura de um novo QR Code.',
-    cancel: { flat: true, label: 'Cancelar' },
-    ok: { color: 'negative', label: 'Desconectar' },
-    persistent: true,
-  }).onOk(disconnectWhatsappWeb)
-}
-
-async function disconnectWhatsappWeb() {
-  disconnectingWhatsappWeb.value = true
-  try {
-    const status = unwrap(await http.delete('/whatsapp-web/session')) || { state: 'disconnected', ready: false, attemptActive: false, qrCode: '' }
-    applyWhatsappWebStatus({ ...status, state: 'disconnected', ready: false, attemptActive: false, qrCode: '' })
-    $q.notify({ type: 'positive', message: 'WhatsApp Web desconectado.' })
-  } catch (error) {
-    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível desconectar o WhatsApp Web.') })
-  } finally {
-    disconnectingWhatsappWeb.value = false
-  }
-}
-
 async function saveWhatsappPermission() {
   const command = String(settings.whatsappPermission.command || '').trim()
+  const requestText = String(settings.whatsappPermission.requestText || '').trim()
   if (!command) {
     $q.notify({ type: 'warning', message: 'Informe o texto que o contato deverá enviar para autorizar as notificações.' })
     return
   }
+  if (!requestText) {
+    $q.notify({ type: 'warning', message: 'Informe a mensagem que o atendimento enviará para solicitar a autorização.' })
+    return
+  }
+  if (!requestText.includes('{command}')) {
+    $q.notify({ type: 'warning', message: 'Inclua {command} na mensagem para acompanhar automaticamente o comando configurado.' })
+    return
+  }
   savingWhatsappPermission.value = true
   try {
-    const result = await app.saveSettings({ whatsappPermission: { command } })
+    const result = await app.saveSettings({ whatsappPermission: { command, requestText } })
     settings.whatsappPermission.command = whatsappPermissionCommandFromSettings(result)
-    $q.notify({ type: 'positive', message: 'Comando de autorização do WhatsApp salvo.' })
+    const source = result.configuration || result.settings || result
+    settings.whatsappPermission.requestText = source.whatsappPermission?.requestText || requestText
+    $q.notify({ type: 'positive', message: 'Comando e mensagem de solicitação do WhatsApp salvos.' })
   } catch (error) {
-    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível salvar o comando de autorização.') })
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível salvar a autorização do WhatsApp.') })
   } finally {
     savingWhatsappPermission.value = false
   }
@@ -401,18 +306,13 @@ async function loadLogs() {
 
 async function loadDashboard() {
   loading.value = true
-  const [settingsResult, statusResult, whatsappWebResult, statsResult, contactsResult] = await Promise.allSettled([
+  const [settingsResult, statusResult, statsResult, contactsResult] = await Promise.allSettled([
     app.fetchSettings(),
     app.fetchStatus(true),
-    http.get('/whatsapp-web/status'),
     http.get('/notifications/stats'),
     http.get('/contacts', { params: { active: true, page: 1, limit: 1 } }),
   ])
   if (settingsResult.status === 'fulfilled') applySettings(settingsResult.value)
-  if (whatsappWebResult.status === 'fulfilled') {
-    const status = applyWhatsappWebStatus(unwrap(whatsappWebResult.value) || {})
-    if (status.attemptActive && !status.ready) startWhatsappWebPolling()
-  }
   if (telegramTokenConfigured.value && !telegramBot.value) refreshTelegramIdentity()
   if (statsResult.status === 'fulfilled') {
     const result = unwrap(statsResult.value) || {}
@@ -498,27 +398,7 @@ async function registerTelegramWebhook() {
 
 function addRealtimeLog(log) {
   if (!log || logPage.value !== 1) return
-  if (!shouldShowOperationalLog(log, whatsappWebReady.value)) return
   logItems.value = [log, ...logItems.value].slice(0, 12)
-}
-
-function onWhatsappWebQr(payload = {}) {
-  applyWhatsappWebStatus({ ...payload, state: 'qr', ready: false, attemptActive: true })
-  whatsappWebPollDeadline = Date.now() + 120_000
-  startWhatsappWebPolling()
-}
-
-function onWhatsappWebStatus(payload = {}) {
-  const status = applyWhatsappWebStatus(payload)
-  if (status.attemptActive && !status.ready) startWhatsappWebPolling()
-}
-
-function onWhatsappWebReady(payload = {}) {
-  applyWhatsappWebStatus({ ...payload, state: 'ready', ready: true, attemptActive: false, qrCode: '' })
-}
-
-function onWhatsappWebDisconnected(payload = {}) {
-  applyWhatsappWebStatus({ ...payload, state: 'disconnected', ready: false, attemptActive: false, qrCode: '' })
 }
 
 function severityColor(level = '') {
@@ -538,10 +418,6 @@ onMounted(() => {
   socket.on('logs:new', addRealtimeLog)
   socket.on('log:created', addRealtimeLog)
   socket.on('channels:status', () => app.fetchStatus(true))
-  socket.on('whatsapp_web:qr', onWhatsappWebQr)
-  socket.on('whatsapp_web:status', onWhatsappWebStatus)
-  socket.on('whatsapp_web:ready', onWhatsappWebReady)
-  socket.on('whatsapp_web:disconnected', onWhatsappWebDisconnected)
 })
 
 onBeforeUnmount(() => {
@@ -551,11 +427,6 @@ onBeforeUnmount(() => {
   socket.off('logs:new', addRealtimeLog)
   socket.off('log:created', addRealtimeLog)
   socket.off('channels:status')
-  socket.off('whatsapp_web:qr', onWhatsappWebQr)
-  socket.off('whatsapp_web:status', onWhatsappWebStatus)
-  socket.off('whatsapp_web:ready', onWhatsappWebReady)
-  socket.off('whatsapp_web:disconnected', onWhatsappWebDisconnected)
-  stopWhatsappWebPolling()
 })
 </script>
 
@@ -611,7 +482,7 @@ onBeforeUnmount(() => {
       </article>
     </section>
 
-    <section class="page-grid page-grid--2 q-mb-lg">
+    <section class="q-mb-lg">
       <q-card flat class="glass-card section-card">
         <div class="toolbar-row">
           <div class="row items-center q-gutter-xs">
@@ -850,98 +721,6 @@ onBeforeUnmount(() => {
         </q-expansion-item>
       </q-card>
 
-      <q-card flat class="glass-card section-card direct-chat-card">
-        <div class="direct-chat-card__heading">
-          <div class="direct-chat-card__icon"><q-icon name="forum" /></div>
-          <div>
-            <div class="row items-center q-gutter-xs">
-              <h2 class="section-title">WhatsApp Web: conexão do monitor</h2>
-              <ContextHelp
-                title="Conexão e privacidade do monitor"
-                tooltip="Como funciona o QR Code e o monitor"
-                :text="[
-                  'Leia o QR Code aqui. O menu de conversas será liberado somente depois da autenticação.',
-                  'O WhatsApp Web mostra somente mensagens novas recebidas após a conexão. Interações sem permissão ficam em uma inbox temporária e somente para leitura; não há importação de chats ou histórico.',
-                ]"
-              />
-            </div>
-          </div>
-        </div>
-
-        <div class="direct-chat-card__status" aria-live="polite">
-          <StatusBadge :value="whatsappWebReady" />
-          <span>{{ whatsappWebStateLabel }}</span>
-          <q-spinner-dots v-if="whatsappWebAttemptActive && !whatsappWebQr" color="primary" size="20px" />
-        </div>
-
-        <div class="whatsapp-web-auth-stage" :class="{ 'whatsapp-web-auth-stage--ready': whatsappWebReady }">
-          <img
-            v-if="whatsappWebQr"
-            :src="whatsappWebQr"
-            alt="QR Code para autenticar o WhatsApp Web"
-            class="whatsapp-web-qr"
-          />
-          <template v-else-if="whatsappWebReady">
-            <q-icon name="phonelink_lock" />
-            <div><strong>Sessão autenticada</strong><span>Novas mensagens autorizadas aparecem em tempo real.</span></div>
-          </template>
-          <template v-else-if="whatsappWebAttemptActive">
-            <q-spinner color="primary" size="48px" />
-            <div><strong>Preparando o QR Code…</strong><span>A tela será atualizada automaticamente.</span></div>
-          </template>
-          <template v-else>
-            <q-icon name="qr_code_2" />
-            <div><strong>Nenhuma sessão ativa</strong><span>Gere um QR Code e leia-o em Aparelhos conectados no WhatsApp.</span></div>
-          </template>
-        </div>
-
-        <div v-if="whatsappWebStatus.lastError && !whatsappWebReady" class="whatsapp-web-error">
-          <q-icon name="error_outline" />
-          <span>{{ whatsappWebStatus.lastError }}</span>
-        </div>
-
-        <div class="whatsapp-web-actions">
-          <q-btn
-            v-if="!whatsappWebReady && !whatsappWebAttemptActive && !whatsappWebQr"
-            color="primary"
-            unelevated
-            no-caps
-            icon="qr_code_2"
-            label="Gerar QR Code"
-            :loading="connectingWhatsappWeb"
-            @click="generateWhatsappWebQr()"
-          />
-          <q-btn
-            v-if="whatsappWebAttemptActive || whatsappWebQr || whatsappWebReady"
-            outline
-            color="primary"
-            no-caps
-            icon="refresh"
-            :label="whatsappWebReady ? 'Gerar novo QR Code' : 'Gerar novamente'"
-            :loading="regeneratingWhatsappWeb"
-            @click="generateWhatsappWebQr({ regenerate: true })"
-          />
-          <q-btn
-            v-if="whatsappWebReady || whatsappWebStatus.initialized || whatsappWebAttemptActive"
-            flat
-            color="negative"
-            no-caps
-            icon="link_off"
-            label="Desconectar"
-            :loading="disconnectingWhatsappWeb"
-            @click="confirmDisconnectWhatsappWeb"
-          />
-          <q-btn
-            color="primary"
-            unelevated
-            no-caps
-            icon="open_in_new"
-            label="Abrir monitor"
-            to="/whatsapp-web"
-            :disable="!whatsappWebReady"
-          />
-        </div>
-      </q-card>
     </section>
 
     <q-card flat class="glass-card section-card whatsapp-permission-card q-mb-lg">
@@ -981,7 +760,7 @@ onBeforeUnmount(() => {
       />
     </q-card>
 
-    <q-card flat class="glass-card section-card whatsapp-permission-card q-mb-lg">
+    <q-card flat class="glass-card section-card whatsapp-permission-card whatsapp-permission-card--cloud q-mb-lg">
       <div class="whatsapp-permission-card__icon"><q-icon name="how_to_reg" /></div>
       <div class="whatsapp-permission-card__copy">
         <div class="row items-center q-gutter-xs">
@@ -990,8 +769,9 @@ onBeforeUnmount(() => {
             title="Quando um contato do WhatsApp é cadastrado"
             tooltip="Entenda a autorização automática"
             :text="[
-              'No WhatsApp Web, mensagens comuns de um remetente desconhecido aparecem temporariamente no monitor, sem criar contato, consentimento ou aviso de novo usuário. O contato só é cadastrado automaticamente quando envia este texto exato. Quando o comando chega pelo Web ou Cloud, a conversa pendente é associada sem duplicar mensagens e o sistema autoriza as duas integrações para o mesmo contato. A integração já identificada é liberada imediatamente; a outra é liberada quando sua identidade real existir. As permissões continuam separadas para ajustes e revogações individuais.',
-              'O comando recebido no WhatsApp Web ou Cloud autoriza as duas integrações, sem criar um destino que ainda não foi identificado.',
+              'Mensagens recebidas pelo webhook oficial cadastram ou atualizam o contato e abrem a janela móvel de atendimento por 24 horas.',
+              'Quando o contato envia este comando exato, a permissão de notificações pela API oficial é concedida e auditada.',
+              'O botão Solicitar autorização, dentro de Chats, usa o texto configurado abaixo e só funciona enquanto a janela de atendimento estiver aberta.',
             ]"
           />
         </div>
@@ -1004,15 +784,26 @@ onBeforeUnmount(() => {
         placeholder="/notify-me"
         maxlength="100"
         counter
-        class="whatsapp-permission-card__input"
+        class="whatsapp-permission-card__input whatsapp-permission-card__input--command"
         @keydown.enter.prevent="saveWhatsappPermission"
+      />
+      <q-input
+        v-model="settings.whatsappPermission.requestText"
+        outlined
+        type="textarea"
+        autogrow
+        label="Mensagem para solicitar autorização no chat"
+        hint="Use {command}; o sistema substituirá pelo comando configurado acima."
+        maxlength="1000"
+        counter
+        class="whatsapp-permission-card__input whatsapp-permission-card__input--message"
       />
       <q-btn
         color="primary"
         unelevated
         no-caps
         icon="save"
-        label="Salvar comando"
+        label="Salvar autorização"
         :loading="savingWhatsappPermission"
         @click="saveWhatsappPermission"
       />
@@ -1231,104 +1022,6 @@ onBeforeUnmount(() => {
   font-size: 17px;
 }
 
-.direct-chat-card {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.direct-chat-card__heading {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-}
-
-.direct-chat-card__icon {
-  display: grid;
-  width: 52px;
-  height: 52px;
-  flex: 0 0 52px;
-  border-radius: 17px;
-  background: rgba(53, 188, 164, 0.14);
-  color: #137d6c;
-  font-size: 27px;
-  place-items: center;
-}
-
-.direct-chat-card__status {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: #5d7470;
-}
-
-.whatsapp-web-auth-stage {
-  display: grid;
-  min-height: 260px;
-  align-content: center;
-  justify-items: center;
-  gap: 14px;
-  padding: 22px;
-  border: 1px dashed rgba(19, 125, 108, 0.28);
-  border-radius: 18px;
-  background: rgba(243, 252, 250, 0.72);
-  color: #506d68;
-  text-align: center;
-}
-
-.whatsapp-web-auth-stage--ready {
-  min-height: 190px;
-  border-style: solid;
-  border-color: rgba(27, 158, 130, 0.24);
-  background: linear-gradient(135deg, rgba(218, 249, 240, 0.74), rgba(255, 255, 255, 0.72));
-}
-
-.whatsapp-web-auth-stage > .q-icon {
-  color: #1a9f83;
-  font-size: 58px;
-}
-
-.whatsapp-web-auth-stage strong,
-.whatsapp-web-auth-stage span {
-  display: block;
-}
-
-.whatsapp-web-auth-stage span {
-  max-width: 360px;
-  margin-top: 4px;
-  font-size: 0.8rem;
-  line-height: 1.45;
-}
-
-.whatsapp-web-qr {
-  width: min(280px, 100%);
-  border: 10px solid #fff;
-  border-radius: 16px;
-  box-shadow: 0 14px 34px rgba(3, 62, 55, 0.12);
-}
-
-.whatsapp-web-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.whatsapp-web-actions .q-btn:last-child {
-  margin-left: auto;
-}
-
-.whatsapp-web-error {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(224, 68, 94, 0.08);
-  color: #9d2d41;
-  font-size: 0.78rem;
-  overflow-wrap: anywhere;
-}
-
 .whatsapp-permission-card {
   display: grid;
   grid-template-columns: auto minmax(260px, 1fr) minmax(260px, 0.85fr) auto;
@@ -1359,6 +1052,18 @@ onBeforeUnmount(() => {
 
 .whatsapp-permission-card__input {
   min-width: 0;
+}
+
+.whatsapp-permission-card--cloud {
+  align-items: start;
+}
+
+.whatsapp-permission-card--cloud .whatsapp-permission-card__icon {
+  grid-row: 1 / 3;
+}
+
+.whatsapp-permission-card--cloud .whatsapp-permission-card__input--message {
+  grid-column: 2 / 5;
 }
 
 .log-list {
@@ -1412,6 +1117,10 @@ onBeforeUnmount(() => {
     grid-column: 3;
     justify-self: end;
   }
+
+  .whatsapp-permission-card--cloud .whatsapp-permission-card__input--message {
+    grid-column: 2 / 4;
+  }
 }
 
 @media (max-width: 650px) {
@@ -1432,19 +1141,6 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 
-  .direct-chat-card__heading {
-    align-items: center;
-  }
-
-  .whatsapp-web-actions {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .whatsapp-web-actions .q-btn:last-child {
-    margin-left: 0;
-  }
-
   .whatsapp-permission-card {
     grid-template-columns: 1fr;
   }
@@ -1457,6 +1153,12 @@ onBeforeUnmount(() => {
   .whatsapp-permission-card > .q-btn {
     grid-column: auto;
     justify-self: stretch;
+  }
+
+  .whatsapp-permission-card--cloud .whatsapp-permission-card__icon,
+  .whatsapp-permission-card--cloud .whatsapp-permission-card__input--message {
+    grid-row: auto;
+    grid-column: auto;
   }
 }
 </style>

@@ -39,7 +39,7 @@ describe('configuração de deploy do frontend', () => {
     expect(render.match(/^\s+region:\s+oregon\s*$/gm)).toHaveLength(3)
   })
 
-  it('usa somente os menores planos pagos e nao combina shutdown customizado com disco', () => {
+  it('usa somente os menores planos pagos e dispensa disco de sessão de navegador', () => {
     const render = rootFile('render.yaml')
     const plans = [...render.matchAll(/^\s+plan:\s+(\S+)\s*$/gm)].map((match) => match[1])
     const apiService = render.match(
@@ -48,7 +48,8 @@ describe('configuração de deploy do frontend', () => {
 
     expect(plans).toEqual(['starter', 'starter', 'starter'])
     expect(render).not.toMatch(/^\s+plan:\s+free\s*$/m)
-    expect(apiService).toContain('disk:')
-    expect(apiService).not.toContain('maxShutdownDelaySeconds')
+    expect(apiService).not.toContain('disk:')
+    expect(render).not.toContain('.wwebjs_auth')
+    expect(render).not.toContain('PUPPETEER_EXECUTABLE_PATH')
   })
 })

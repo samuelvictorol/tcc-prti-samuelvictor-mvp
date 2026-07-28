@@ -21,7 +21,7 @@ Referências oficiais: [introdução a bots](https://core.telegram.org/bots#how-
 ## Orquestração multicanal
 
 - Cada provedor pode permanecer vazio e ser configurado/testado isoladamente.
-- O envio rápido aceita somente um canal específico compatível. O modo global exige um template escolhido separadamente para Telegram, WhatsApp Cloud e/ou e-mail; WhatsApp Web não participa desse conjunto.
+- O envio rápido aceita somente um canal específico compatível. O modo global exige um template escolhido separadamente para Telegram, WhatsApp Cloud e/ou e-mail.
 - “Disponível” significa configurado e autorizado no momento do lote. Consentimento e disponibilidade são revalidados antes de cada chamada.
 - Combinações sem configuração, sessão pronta, autorização ou variante de template são registradas como `skipped` e não impedem as demais. Uma falha real em um provedor produz resultado `partial` quando outro canal foi enviado com sucesso.
 
@@ -31,22 +31,13 @@ Referências oficiais: [introdução a bots](https://core.telegram.org/bots#how-
 - Texto livre, mídia e templates são payloads diferentes. Iniciações proativas podem exigir um template criado e aprovado pela Meta; o painel não transforma texto livre em um template aprovado.
 - A API cria entregas individuais. IDs e estados posteriores chegam pelo webhook e devem ser correlacionados com a entrega registrada.
 - O webhook de produção precisa de HTTPS público. O desafio `GET` usa o verify token; requisições `POST` devem ter sua assinatura verificada com o app secret antes de atualizar contatos ou consentimentos.
-- No WhatsApp Cloud, o webhook continua identificando mensagens inbound. No WhatsApp Web, um remetente desconhecido só é cadastrado ao enviar exatamente o comando configurado em `START_NOTIFY_WHATSAPP_PERMISSION` (`/notify-me` por padrão); antes disso, mensagens comuns geram apenas conversa, log e eventos realtime temporários, criptografados e somente para leitura, sem `Contact`, consentimento ou aviso de novo usuário. O comando recebido pela Cloud ou pelo WhatsApp Web autoriza **ambas** as integrações WhatsApp no contato correlacionado: a origem e uma contraparte já existente são concedidas e auditadas imediatamente; uma contraparte ainda inexistente ganha somente uma intenção pendente, consumida quando aquela identidade real aparecer. Nenhum destino sintético é criado. Web e Cloud continuam como estados separados e podem ser revogados individualmente pelo administrador.
+- No WhatsApp Cloud, o webhook identifica mensagens inbound, cria ou atualiza a conversa e correlaciona o contato sem duplicar identidades. O comando configurado em `START_NOTIFY_WHATSAPP_PERMISSION` (`/notify-me` por padrão) registra o consentimento para notificações oficiais. Respostas em texto livre são permitidas somente dentro da janela de atendimento de 24 horas aberta pela última mensagem do cliente; fora dela, a empresa precisa usar um template aprovado.
+- A Cloud API não fornece importação da lista de chats nem do histórico do aplicativo. A inbox do Notify Flow é construída somente com webhooks recebidos e mensagens enviadas pelo próprio sistema, atualizada por Socket.IO.
+- Mensagens locais da inbox seguem um ciclo de retenção de 30 dias. Antes da expiração, o administrador pode gerar manualmente um backup JSON em **Chats**; o backup não altera nem estende a retenção. Snapshots manuais e automáticos ficam criptografados em GridFS por 90 dias por padrão, com expiração configurável por ambiente.
 - No Telegram, tanto o comando de notificações configurado em `START_NOTIFY_WHATSAPP_PERMISSION` quanto o comando próprio `START_VERIFY_TELEGRAM_PERMISSION` (`/verify-me` por padrão) autorizam o contato e abrem o onboarding. O menu oferece vínculo de telefone, acesso a `/meu-perfil` usando `PUBLIC_APP_URL` e ajuda. O telefone só é aceito pelo botão nativo `request_contact` em conversa privada quando `contact.user_id` corresponde ao remetente; depois dessa validação, contatos Telegram e WhatsApp do mesmo telefone são consolidados.
 - A aplicação correlaciona `from`, `wa_id`, `user_id`/`from_user_id` e aliases brasileiros de telefone, atualiza um contato existente quando possível e preserva esses identificadores criptografados como metadata da identidade. A origem e o instante da última concessão ou revogação também ficam registrados.
 
 Referências oficiais: [início da WhatsApp Business Platform](https://developers.facebook.com/documentation/business-messaging/whatsapp/get-started), [coleção oficial da Meta](https://www.postman.com/meta/whatsapp-business-platform/overview), [endpoint de mensagens](https://www.postman.com/meta/whatsapp-business-platform/folder/13382743-ba8d099d-007e-4b52-b9f2-3cf3c60e4fbc) e [payload de webhook](https://www.postman.com/meta/whatsapp-business-platform/folder/tduohwq/webhook-payload-reference).
-
-## WhatsApp Web (`whatsapp-web.js`)
-
-- É uma automação **não oficial** do cliente Web, sujeita a mudanças, desconexões e medidas do WhatsApp. Para operações críticas, prefira a Cloud API oficial.
-- Nesta aplicação, ela serve **somente** para acompanhar eventos novos recebidos depois do `ready` e responder chats diretos autorizados. Não existe importação ou sincronização de chats/histórico do aparelho. Uma interação desconhecida entra em uma inbox temporária criptografada, sem criar `Contact`, consentimento ou aviso de novo usuário, e permanece somente para leitura até o comando configurado em `START_NOTIFY_WHATSAPP_PERMISSION`. O comando pelo Web ou pela Cloud associa a conversa pendente ao contato sem duplicar mensagens e concede as duas permissões WhatsApp. Não é um canal de templates, notificações ou disparos em massa.
-- A sessão só libera o menu após o evento real de autenticação/ready. `WHATSAPP_WEB_SESSION_MAX_AGE_DAYS` controla a sessão e `WHATSAPP_WEB_MESSAGE_RETENTION_DAYS` controla a retenção temporal das mensagens/conversas Web (90 dias por padrão); essas políticas não garantem que a sessão remota permanecerá válida durante todo o período.
-- Apenas uma instância deve controlar a mesma sessão. O Compose mantém um volume persistente e a integração é inicializada sob demanda para evitar abrir o Chromium antes do QR.
-- QR, estado, mensagens e desconexão são publicados por Socket.IO. O QR fica na tela **Início**; o menu WhatsApp Web permanece bloqueado até o evento `ready`.
-- Remover uma conversa limpa o histórico local e a oculta do monitor; uma nova mensagem real pode reabri-la. Remover o contato também elimina os artefatos locais relacionados.
-
-Referência do projeto: [`whatsapp-web.js`](https://github.com/pedroslopez/whatsapp-web.js).
 
 ## Gmail
 

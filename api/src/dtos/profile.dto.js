@@ -24,7 +24,7 @@ const updateOwnProfileSchema = z.object({
 
 const revokeOwnConsentSchema = z.object({
   body: z.object({
-    channel: z.enum(['telegram', 'whatsapp_web', 'whatsapp_cloud', 'email']),
+    channel: z.enum(['telegram', 'whatsapp_cloud', 'email']),
     confirmed: z.literal(true)
   })
 });

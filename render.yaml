@@ -32,10 +32,6 @@ services:
     dockerContext: ./api
     dockerfilePath: ./api/Dockerfile
     autoDeployTrigger: commit
-    disk:
-      name: whatsapp-web-session
-      mountPath: /app/.wwebjs_auth
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
@@ -60,6 +56,8 @@ services:
         sync: false
       - key: MONGODB_ENSURE_INDEXES
         value: "true"
+      - key: CONVERSATION_BACKUP_RETENTION_DAYS
+        value: "90"
       - key: REDIS_URL
         fromService:
           name: notify-flow-redis
@@ -108,17 +106,6 @@ services:
         value: /verify-me
       - key: WHATSAPP_CLOUD_API_VERSION
         value: v25.0
-      - key: WHATSAPP_WEB_AUTH_PATH
-        value: /app/.wwebjs_auth
-      - key: WHATSAPP_WEB_AUTO_INIT
-        value: "false"
-      - key: WHATSAPP_WEB_SESSION_MAX_AGE_DAYS
-        value: "90"
-      - key: WHATSAPP_WEB_MESSAGE_RETENTION_DAYS
-        value: "90"
-      - key: PUPPETEER_EXECUTABLE_PATH
-        value: /usr/bin/chromium
-
       - key: RATE_LIMIT_WINDOW_MS
         value: "60000"
       - key: AUTH_RATE_LIMIT_MAX

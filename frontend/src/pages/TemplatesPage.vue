@@ -287,7 +287,7 @@ const filteredTemplates = computed(() => {
   const needle = search.value.toLowerCase().trim()
   return templates.value.filter((template) => {
     const channel = normalizedChannel(template.channel || template.type)
-    if (channel === 'whatsapp_web') return false
+    if (!channelOptions.some((option) => option.value === channel)) return false
     const matchesTab = tab.value === 'all' || channel === tab.value
     const matchesSearch = !needle || [template.name, template.subject, template.body]
       .some((value) => String(value || '').toLowerCase().includes(needle))
@@ -320,7 +320,6 @@ function recordId(record) {
 
 function normalizedChannel(value = '') {
   const key = String(value).toLowerCase().replaceAll('-', '_')
-  if (key === 'whatsappweb') return 'whatsapp_web'
   if (['whatsappcloud', 'meta', 'whatsapp_official'].includes(key)) return 'whatsapp_cloud'
   if (key === 'gmail') return 'email'
   return key
