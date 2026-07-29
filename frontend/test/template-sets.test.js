@@ -89,6 +89,14 @@ describe('conjuntos de templates', () => {
     expect(source).toContain('Vínculo parcial:')
     expect(source).toContain('templateSets.value.length === 1 && templateSetPagination.value.page > 1')
     expect(source).toContain('v-model:pagination="templateSetPagination"')
+    const setsPanelEnd = source.indexOf('</q-card>', source.indexOf('template-sets-panel'))
+    const libraryHeading = source.indexOf('class="template-library-heading"')
+    const templatesTable = source.indexOf(':rows="filteredTemplates"')
+    expect(libraryHeading).toBeGreaterThan(setsPanelEnd)
+    expect(libraryHeading).toBeLessThan(templatesTable)
+    expect(source.slice(libraryHeading, templatesTable)).toContain('label="Novo template"')
+    expect(source).toContain('Biblioteca por canal')
+    expect(source).toContain('Templates por canal')
     const setColumns = source.slice(
       source.indexOf('const templateSetColumns'),
       source.indexOf('const inviteOptions'),

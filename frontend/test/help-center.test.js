@@ -36,6 +36,9 @@ describe('Central de Ajuda', () => {
   it('usa meuperfil.png quando disponível e oferece fallback acessível', () => {
     const page = source('pages/HelpPage.vue')
     expect(page).toContain('src="/meuperfil.png"')
+    expect(page).toContain('loading="lazy"')
+    expect(page).toContain('decoding="async"')
+    expect(page).toContain('fetchpriority="low"')
     expect(page).toContain('@error="profileImageAvailable = false"')
     expect(page).toContain('Espaço reservado para a imagem da tela Meu perfil')
   })

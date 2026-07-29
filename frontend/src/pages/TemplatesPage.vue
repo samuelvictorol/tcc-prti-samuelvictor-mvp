@@ -933,11 +933,7 @@ onMounted(loadPageData)
       title="Templates por canal"
       description="Modele cada payload de acordo com as capacidades e políticas do canal de destino."
       icon="dashboard_customize"
-    >
-      <template #actions>
-        <q-btn color="primary" unelevated no-caps icon="add" label="Novo template" @click="openCreate()" />
-      </template>
-    </PageHeader>
+    />
 
     <q-card flat class="glass-card section-card template-sets-panel q-mb-lg">
       <div class="template-sets-heading">
@@ -1049,6 +1045,17 @@ onMounted(loadPageData)
     </q-card>
 
     <q-card flat class="glass-card section-card">
+      <div class="template-library-heading">
+        <div>
+          <div class="text-overline text-primary">Biblioteca por canal</div>
+          <h2 class="section-title">Templates por canal</h2>
+          <p class="section-copy">
+            Crie mensagens para WhatsApp Cloud, Telegram ou Email e reutilize cada template em um ou mais conjuntos.
+          </p>
+        </div>
+        <q-btn color="primary" unelevated no-caps icon="add" label="Novo template" @click="openCreate()" />
+      </div>
+
       <div class="toolbar-row">
         <div class="template-tabs-row">
           <q-tabs v-model="tab" dense no-caps outside-arrows mobile-arrows active-color="primary" indicator-color="transparent">
@@ -1657,6 +1664,7 @@ onMounted(loadPageData)
 }
 
 .template-sets-heading,
+.template-library-heading,
 .template-set-dialog__header {
   display: flex;
   align-items: flex-start;
@@ -1664,16 +1672,19 @@ onMounted(loadPageData)
   gap: 18px;
 }
 
-.template-sets-heading {
+.template-sets-heading,
+.template-library-heading {
   margin-bottom: 18px;
 }
 
 .template-sets-heading h2,
+.template-library-heading h2,
 .template-set-dialog__header h2 {
   margin: 0;
 }
 
 .template-sets-heading p,
+.template-library-heading p,
 .template-set-dialog__header p {
   margin: 4px 0 0;
   color: #637875;
@@ -2363,6 +2374,7 @@ onMounted(loadPageData)
 
 @media (max-width: 600px) {
   .template-sets-heading,
+  .template-library-heading,
   .template-set-dialog__header {
     align-items: stretch;
     flex-direction: column;

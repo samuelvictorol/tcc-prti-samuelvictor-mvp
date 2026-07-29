@@ -207,6 +207,11 @@ const operationalSignals = [
             v-if="profileImageAvailable"
             src="/meuperfil.png"
             alt="Prévia da tela Meu perfil do Notify Flow"
+            width="1456"
+            height="1054"
+            loading="lazy"
+            decoding="async"
+            fetchpriority="low"
             @error="profileImageAvailable = false"
           />
           <div v-else class="profile-help__placeholder" role="img" aria-label="Espaço reservado para a imagem da tela Meu perfil">
