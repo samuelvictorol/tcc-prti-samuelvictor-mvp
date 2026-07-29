@@ -21,6 +21,7 @@ const Invite = require('../src/models/invite.model');
 const InviteClick = require('../src/models/invite-click.model');
 const Notification = require('../src/models/notification.model');
 const ProfileAuthChallenge = require('../src/models/profile-auth-challenge.model');
+const ChatEmailChallenge = require('../src/models/chat-email-challenge.model');
 const { env } = require('../src/config/env');
 
 function telegramUpdate(updateId, overrides = {}) {
@@ -117,7 +118,8 @@ function stubTelegramInbound(context, options = {}) {
   const logs = [];
   logsManager.create = async (entry) => { logs.push(entry); return entry; };
   adminNotificationsManager.create = async () => ({});
-  socketService.emit = () => undefined;
+  const socketEvents = [];
+  socketService.emit = (event, payload) => { socketEvents.push({ event, payload }); };
   const providerCalls = [];
   global.fetch = options.fetch || (async (_url, request) => {
     providerCalls.push(JSON.parse(request.body));
@@ -127,7 +129,8 @@ function stubTelegramInbound(context, options = {}) {
     input: () => upsertInput,
     recordedInbound: () => recordedInbound,
     logs,
-    providerCalls
+    providerCalls,
+    socketEvents
   };
 }
 
@@ -400,6 +403,40 @@ test('/meu-perfil responde com os dados do proprio contato e link publico', asyn
   assert.doesNotMatch(response.text, /507f1f77bcf86cd799439011/);
 });
 
+test('codigo de verificacao de email e redigido do historico e do websocket do Telegram', async (context) => {
+  const state = stubTelegramInbound(context);
+  const originalSafeInboundText = chatProfileFlow.safeInboundText;
+  const originalHandleInbound = chatProfileFlow.handleInbound;
+  context.after(() => {
+    chatProfileFlow.safeInboundText = originalSafeInboundText;
+    chatProfileFlow.handleInbound = originalHandleInbound;
+  });
+  chatProfileFlow.safeInboundText = async (_contactId, text) => (
+    text === '483921' ? chatProfileFlow.EMAIL_VERIFICATION_CODE_PLACEHOLDER : text
+  );
+  chatProfileFlow.handleInbound = async (input) => {
+    assert.equal(input.text, '483921');
+    return {
+      handled: true,
+      kind: 'email_updated',
+      text: 'Email verificado com sucesso.'
+    };
+  };
+
+  await telegramManager.webhook(telegramUpdate(2_026_072_217, {
+    text: '483921'
+  }), 'webhook-secret');
+
+  assert.equal(
+    state.recordedInbound().body,
+    chatProfileFlow.EMAIL_VERIFICATION_CODE_PLACEHOLDER
+  );
+  const realtime = state.socketEvents.find((entry) => entry.event === 'telegram:message');
+  assert.equal(realtime.payload.text, chatProfileFlow.EMAIL_VERIFICATION_CODE_PLACEHOLDER);
+  assert.doesNotMatch(JSON.stringify(state.socketEvents), /483921/);
+  assert.doesNotMatch(JSON.stringify(state.logs), /483921/);
+});
+
 test('/login direto no Telegram emite link temporario e explica como gerar outro acesso', async (context) => {
   const state = stubTelegramInbound(context, {
     publicAppUrl: 'https://notify.example',
@@ -669,7 +706,8 @@ test('Telegram-only e consolidado no contato WhatsApp do mesmo telefone sem perd
     invite: Invite.updateMany,
     click: InviteClick.updateMany,
     notification: Notification.updateMany,
-    challenge: ProfileAuthChallenge.updateMany
+    challenge: ProfileAuthChallenge.updateMany,
+    emailChallenge: ChatEmailChallenge.updateMany
   };
   context.after(() => {
     Contact.findOne = originals.findOne;
@@ -684,6 +722,7 @@ test('Telegram-only e consolidado no contato WhatsApp do mesmo telefone sem perd
     InviteClick.updateMany = originals.click;
     Notification.updateMany = originals.notification;
     ProfileAuthChallenge.updateMany = originals.challenge;
+    ChatEmailChallenge.updateMany = originals.emailChallenge;
   });
   Contact.findOne = () => ({ select: async () => source });
   Contact.find = () => {
@@ -697,7 +736,7 @@ test('Telegram-only e consolidado no contato WhatsApp do mesmo telefone sem perd
   const referenceUpdates = [];
   for (const model of [
     ContactGroup, ConsentEvent, AdminNotification, Conversation, ConversationMessage,
-    Invite, InviteClick, Notification, ProfileAuthChallenge
+    Invite, InviteClick, Notification, ProfileAuthChallenge, ChatEmailChallenge
   ]) {
     model.updateMany = async (...args) => { referenceUpdates.push({ model: model.modelName, args }); return {}; };
   }

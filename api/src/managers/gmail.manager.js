@@ -68,7 +68,7 @@ async function send(input) {
     text: input.text || undefined,
     html: input.html || undefined
   });
-  if (input.useCase !== 'profile_auth') {
+  if (!['profile_auth', 'chat_email_verification'].includes(input.useCase)) {
     await logsManager.create({
       channel: 'email',
       action: 'message.sent',

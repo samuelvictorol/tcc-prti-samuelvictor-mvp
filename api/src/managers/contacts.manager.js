@@ -9,6 +9,7 @@ const Invite = require('../models/invite.model');
 const InviteClick = require('../models/invite-click.model');
 const Notification = require('../models/notification.model');
 const ProfileAuthChallenge = require('../models/profile-auth-challenge.model');
+const ChatEmailChallenge = require('../models/chat-email-challenge.model');
 const ApiError = require('../utils/api-error');
 const { DELIVERY_CHANNELS } = require('../enums/channels');
 const { encrypt, decrypt, searchHash } = require('../services/crypto.service');
@@ -892,6 +893,10 @@ async function migrateMergedContactReferences(sourceId, targetId) {
     Invite.updateMany({ recipientContact: source }, { $set: { recipientContact: target } }),
     InviteClick.updateMany({ contact: source }, { $set: { contact: target } }),
     ProfileAuthChallenge.updateMany({ contact: source }, { $set: { contact: target } }),
+    ChatEmailChallenge.updateMany(
+      { contact: source, status: { $in: ['pending_delivery', 'active', 'verifying'] } },
+      { $set: { status: 'revoked', revokedAt: new Date() } }
+    ),
     ConsentEvent.updateMany(
       { contact: source },
       { $set: { contact: target, contactReferenceHash: searchHash(target) } }
@@ -1425,7 +1430,10 @@ async function setEmailFromChat(id, value, context = {}) {
   const operationId = context.operationId || crypto.randomUUID();
   const evidence = {
     sourceChannel,
-    interaction: 'email_submitted_after_consent_prompt',
+    interaction: context.verificationMethod === 'chat_email_code'
+      ? 'email_verified_by_chat_code'
+      : 'email_submitted_after_consent_prompt',
+    ...(context.verificationMethod ? { verificationMethod: context.verificationMethod } : {}),
     addressReferenceHash: emailHash,
     operationId
   };

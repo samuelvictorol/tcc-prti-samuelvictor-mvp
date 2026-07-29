@@ -11,6 +11,7 @@ router.use(requireAuth);
 router.get('/', validate(listAdminNotificationsSchema), asyncHandler(controller.list));
 router.get('/unread-count', asyncHandler(controller.unreadCount));
 router.post('/read-all', asyncHandler(controller.markAllRead));
+router.get('/:id', validate(adminNotificationIdSchema), asyncHandler(controller.getById));
 router.post('/:id/read', validate(adminNotificationIdSchema), asyncHandler(controller.markRead));
 
 module.exports = { basePath: env.apiPrefix + '/admin-notifications', router };

@@ -10,6 +10,7 @@ const ContactGroup = require('../src/models/contact-group.model');
 const Conversation = require('../src/models/conversation.model');
 const ConversationMessage = require('../src/models/conversation-message.model');
 const AdminNotification = require('../src/models/admin-notification.model');
+const ChatEmailChallenge = require('../src/models/chat-email-challenge.model');
 const RefreshToken = require('../src/models/refresh-token.model');
 const Admin = require('../src/models/admin.model');
 const contactsManager = require('../src/managers/contacts.manager');
@@ -101,7 +102,8 @@ test('remocao direta de contato apaga historico e atalhos pessoais sem deixar re
     updateConversations: Conversation.updateMany,
     distinctMessageConversations: ConversationMessage.distinct,
     deleteMessages: ConversationMessage.deleteMany,
-    deleteAdminNotifications: AdminNotification.deleteMany
+    deleteAdminNotifications: AdminNotification.deleteMany,
+    deleteEmailChallenges: ChatEmailChallenge.deleteMany
   };
   context.after(() => {
     Contact.findById = originals.findContact;
@@ -113,6 +115,7 @@ test('remocao direta de contato apaga historico e atalhos pessoais sem deixar re
     ConversationMessage.distinct = originals.distinctMessageConversations;
     ConversationMessage.deleteMany = originals.deleteMessages;
     AdminNotification.deleteMany = originals.deleteAdminNotifications;
+    ChatEmailChallenge.deleteMany = originals.deleteEmailChallenges;
   });
   const contactId = '507f1f77bcf86cd799439011';
   const conversationId = '507f1f77bcf86cd799439021';
@@ -143,6 +146,10 @@ test('remocao direta de contato apaga historico e atalhos pessoais sem deixar re
     return { modifiedCount: 1 };
   };
   AdminNotification.deleteMany = async (filter) => { adminFilter = filter; return { deletedCount: 2 }; };
+  ChatEmailChallenge.deleteMany = async (filter) => {
+    assert.deepEqual(filter, { contact: contactId });
+    return { deletedCount: 1 };
+  };
 
   const result = await contactsManager.remove(contactId);
 
@@ -159,6 +166,7 @@ test('remocao direta de contato apaga historico e atalhos pessoais sem deixar re
   assert.equal(result.removedConversations, 1);
   assert.equal(result.removedConversationMessages, 5);
   assert.equal(result.removedAdminNotifications, 2);
+  assert.equal(result.removedEmailChallenges, 1);
   assert.equal(result.sanitizedConversationShortcuts, 1);
 });
 

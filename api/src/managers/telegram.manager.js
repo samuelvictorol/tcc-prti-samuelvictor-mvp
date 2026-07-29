@@ -1084,6 +1084,9 @@ async function webhook(update, providedSecret) {
       if (message.from?.username || chat.username) {
         await contactsManager.update(contact.id, { telegramUsername: message.from?.username || chat.username });
       }
+      const safeInboundText = message.text
+        ? await chatProfileFlow.safeInboundText(contact.id, message.text)
+        : message.caption || (message.contact ? '[Contato compartilhado]' : '');
       await conversationsManager.recordInbound({
         channel: 'telegram',
         externalId: String(chat.id),
@@ -1094,7 +1097,7 @@ async function webhook(update, providedSecret) {
         providerMessageId: message.message_id,
         body: permissionInvocation.inviteAttributionMarker
           ? permissionInvocation.command
-          : message.text || message.caption || (message.contact ? '[Contato compartilhado]' : ''),
+          : safeInboundText,
         type: messageType(message),
         hasMedia: Boolean(message.photo || message.video || message.audio || message.voice || message.document || message.sticker || message.animation),
         sentAt: Number(message.date) * 1000,
@@ -1117,7 +1120,9 @@ async function webhook(update, providedSecret) {
         update,
         permissionInvocation.inviteAttributionMarker
           ? { ...message, text: permissionInvocation.command }
-          : message,
+          : message.text
+            ? { ...message, text: safeInboundText }
+            : message,
         { contactId: contact.id, inviteAttributed: Boolean(invitationAttribution) }
       );
       let chatProfileHandled = false;

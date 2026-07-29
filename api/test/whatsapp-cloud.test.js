@@ -13,6 +13,7 @@ const templatesManager = require('../src/managers/templates.manager');
 const notificationsManager = require('../src/managers/notifications.manager');
 const conversationsManager = require('../src/managers/conversations.manager');
 const profileManager = require('../src/managers/profile.manager');
+const chatProfileFlow = require('../src/services/chat-profile-flow.service');
 const { channelSendSchema } = require('../src/dtos/channels.dto');
 const { createTemplateSchema } = require('../src/dtos/templates.dto');
 const { buildCustomTemplateMessage, normalizeBuilder } = require('../src/utils/whatsapp-cloud-templates');
@@ -893,6 +894,83 @@ test('/meu-perfil no WhatsApp responde com resumo privado e link publico', async
   assert.match(response.text.body, /samuel@example\.test/);
   assert.match(response.text.body, /https:\/\/notify\.example\/meu-perfil/);
   assert.doesNotMatch(response.text.body, /507f1f77bcf86cd799439011/);
+});
+
+test('codigo de verificacao de email e redigido antes de salvar o chat do WhatsApp', async (context) => {
+  stubWebhookPersistence(context);
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [settingsManager, 'isWhatsappPermissionCommand'],
+    [contactsManager, 'findByChannelAddress'],
+    [contactsManager, 'findByChannelOrPhone'],
+    [contactsManager, 'upsertFromChannel'],
+    [logsManager, 'create'],
+    [adminNotificationsManager, 'create'],
+    [chatProfileFlow, 'safeInboundText'],
+    [chatProfileFlow, 'handleInbound'],
+    [global, 'fetch']
+  ]);
+  const appSecret = 'cloud-secret';
+  settingsManager.getValue = async (key) => ({
+    WHATSAPP_CLOUD_APP_SECRET: appSecret,
+    WHATSAPP_CLOUD_ACCESS_TOKEN: 'test-access-token',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
+    WHATSAPP_CLOUD_API_VERSION: 'v25.0'
+  })[key] || null;
+  settingsManager.isWhatsappPermissionCommand = async () => false;
+  contactsManager.findByChannelAddress = async () => null;
+  contactsManager.findByChannelOrPhone = async () => null;
+  contactsManager.upsertFromChannel = async () => ({
+    id: '507f1f77bcf86cd799439011',
+    displayName: 'Samuel',
+    upsertState: { created: false, identityAdded: false }
+  });
+  let recordedInbound;
+  conversationsManager.recordInbound = async (input) => {
+    recordedInbound = input;
+    return { conversation: { id: '507f1f77bcf86cd799439177' } };
+  };
+  chatProfileFlow.safeInboundText = async (_contactId, text) => (
+    text === '483921' ? chatProfileFlow.EMAIL_VERIFICATION_CODE_PLACEHOLDER : text
+  );
+  chatProfileFlow.handleInbound = async (input) => {
+    assert.equal(input.text, '483921');
+    return {
+      handled: true,
+      kind: 'email_updated',
+      text: 'Email verificado com sucesso.'
+    };
+  };
+  const logs = [];
+  logsManager.create = async (entry) => { logs.push(entry); return entry; };
+  adminNotificationsManager.create = async () => ({});
+  global.fetch = async () => ({
+    ok: true,
+    json: async () => ({ messages: [{ id: 'wamid.email-code-response' }] })
+  });
+  const payload = {
+    entry: [{ changes: [{ value: {
+      contacts: [{ wa_id: '551131234567', profile: { name: 'Samuel' } }],
+      messages: [{
+        id: 'wamid.email-code',
+        from: '551131234567',
+        type: 'text',
+        text: { body: '483921' }
+      }]
+    } }] }]
+  };
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256='
+    + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+  await whatsappCloudManager.webhook(payload, rawBody, signature);
+
+  assert.equal(
+    recordedInbound.body,
+    chatProfileFlow.EMAIL_VERIFICATION_CODE_PLACEHOLDER
+  );
+  assert.doesNotMatch(JSON.stringify(recordedInbound), /483921/);
+  assert.doesNotMatch(JSON.stringify(logs), /483921/);
 });
 
 test('/login sem parametro no WhatsApp emite link temporario direto sem alterar o fluxo assinado', async (context) => {

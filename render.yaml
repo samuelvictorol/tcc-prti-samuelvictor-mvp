@@ -94,6 +94,16 @@ services:
         value: "3600"
       - key: PROFILE_CODE_RESEND_SECONDS
         value: "30"
+      - key: CHAT_EMAIL_CODE_TTL_SECONDS
+        value: "900"
+      - key: CHAT_EMAIL_CODE_RESEND_SECONDS
+        value: "120"
+      - key: CHAT_EMAIL_CODE_MAX_ATTEMPTS
+        value: "5"
+      - key: CHAT_EMAIL_CODE_MAX_REQUESTS
+        value: "5"
+      - key: CHAT_EMAIL_CODE_WINDOW_SECONDS
+        value: "3600"
 
       - key: ADMIN1_EMAIL
         sync: false

@@ -11,6 +11,7 @@ const contactsManager = require('../src/managers/contacts.manager');
 const logsManager = require('../src/managers/logs.manager');
 const adminNotificationsManager = require('../src/managers/admin-notifications.manager');
 const conversationsManager = require('../src/managers/conversations.manager');
+const chatProfileFlow = require('../src/services/chat-profile-flow.service');
 const { decrypt } = require('../src/services/crypto.service');
 const { WEBHOOK_PROCESSING_STATUS } = require('../src/enums/whatsapp-cloud-webhook');
 const { createApp } = require('../src/app');
@@ -210,6 +211,69 @@ test('persiste payload completo criptografado e deduplica retries pelo corpo can
   assert.equal(duplicate.workItems.length, 1);
   assert.equal(stored.receiptCount, 2);
   assert.equal(duplicate.events[0].duplicateCount, 1);
+});
+
+test('detalhe persiste codigo de email redigido sem alterar dedupe nem descriptor de processamento', async (context) => {
+  restoreAfter(context, [
+    [WhatsappCloudWebhookEvent, 'updateOne'],
+    [WhatsappCloudWebhookEvent, 'findOne'],
+    [WhatsappCloudWebhookEvent, 'findById']
+  ]);
+  let stored;
+  WhatsappCloudWebhookEvent.updateOne = async (_filter, update, options = {}) => {
+    const created = !stored && options.upsert;
+    if (created) {
+      stored = {
+        _id: '507f1f77bcf86cd799439011',
+        ...update.$setOnInsert,
+        receiptCount: 0,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+    }
+    if (update.$set) Object.assign(stored, update.$set);
+    stored.receiptCount += Number(update.$inc?.receiptCount || 0);
+    return { matchedCount: created ? 0 : 1, upsertedCount: created ? 1 : 0 };
+  };
+  WhatsappCloudWebhookEvent.findOne = () => ({ lean: async () => ({ ...stored }) });
+  WhatsappCloudWebhookEvent.findById = () => {
+    const chain = {
+      select() { return chain; },
+      async lean() { return { ...stored }; }
+    };
+    return chain;
+  };
+  const payload = fictitiousMessagePayload();
+  payload.entry[0].changes[0].value.messages[0].text.body = '483921';
+  const rawBody = Buffer.from(JSON.stringify(payload));
+
+  const persisted = await webhookEventsManager.persistPayload(payload, rawBody, {
+    redactedMessageIds: ['wamid.fictitious-message'],
+    redactionText: chatProfileFlow.EMAIL_VERIFICATION_CODE_PLACEHOLDER
+  });
+
+  assert.equal(
+    persisted.workItems[0].descriptor.value.messages[0].text.body,
+    '483921'
+  );
+  const originalHash = stored.payloadHash;
+  const detail = await webhookEventsManager.getById(stored._id);
+  assert.equal(
+    detail.payload.entry[0].changes[0].value.messages[0].text.body,
+    chatProfileFlow.EMAIL_VERIFICATION_CODE_PLACEHOLDER
+  );
+  assert.doesNotMatch(JSON.stringify(detail), /483921/);
+
+  await webhookEventsManager.persistPayload(payload, rawBody, {
+    redactedMessageIds: ['wamid.fictitious-message'],
+    redactionText: chatProfileFlow.EMAIL_VERIFICATION_CODE_PLACEHOLDER
+  });
+  assert.equal(stored.payloadHash, originalHash);
+  assert.equal(stored.receiptCount, 2);
+  assert.doesNotMatch(
+    JSON.stringify(decrypt(stored.payloadEncrypted, { json: true })),
+    /483921/
+  );
 });
 
 test('claim atomico bloqueia concorrencia e permite retry apos falha ou lease stale', async (context) => {
@@ -424,6 +488,53 @@ test('webhook assinado persiste campo Meta desconhecido e o marca como processad
   assert.equal(result.persistedEvents, 1);
   assert.equal(result.receivedMessages, 0);
   assert.equal(result.receivedStatuses, 0);
+});
+
+test('webhook identifica desafio ativo e pede redacao do codigo antes da persistencia', async (context) => {
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [contactsManager, 'findByChannelAddress'],
+    [chatProfileFlow, 'shouldRedactEmailVerificationCode'],
+    [webhookEventsManager, 'persistPayload']
+  ]);
+  const appSecret = 'segredo-ficticio-da-meta';
+  settingsManager.getValue = async (key) => (
+    key === 'WHATSAPP_CLOUD_APP_SECRET' ? appSecret : null
+  );
+  contactsManager.findByChannelAddress = async (channel, address) => {
+    assert.equal(channel, 'whatsapp_cloud');
+    assert.equal(address, '5511931234567');
+    return { id: '507f1f77bcf86cd799439011' };
+  };
+  chatProfileFlow.shouldRedactEmailVerificationCode = async (contactId, text) => {
+    assert.equal(contactId, '507f1f77bcf86cd799439011');
+    assert.equal(text, '483921');
+    return true;
+  };
+  let persistenceOptions;
+  webhookEventsManager.persistPayload = async (_payload, _rawBody, options) => {
+    persistenceOptions = options;
+    return {
+      events: [],
+      workItems: [],
+      createdCount: 0,
+      duplicateCount: 0
+    };
+  };
+  const payload = fictitiousMessagePayload();
+  payload.entry[0].changes[0].value.messages[0].text.body = '483921';
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256='
+    + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+  const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
+
+  assert.deepEqual(persistenceOptions.redactedMessageIds, ['wamid.fictitious-message']);
+  assert.equal(
+    persistenceOptions.redactionText,
+    chatProfileFlow.EMAIL_VERIFICATION_CODE_PLACEHOLDER
+  );
+  assert.equal(result.received, true);
 });
 
 test('webhooks concorrentes identicos executam o efeito de mensagem uma unica vez', async (context) => {

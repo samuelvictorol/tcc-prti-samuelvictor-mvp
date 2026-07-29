@@ -409,6 +409,9 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
   }
   const { contact } = result;
   const sentAt = cloudMessageSentAt(message);
+  const safeInboundText = profileLoginRequested
+    ? '/login'
+    : await chatProfileFlow.safeInboundText(contact.id, inboundText);
   const recordedInbound = await conversationsManager.recordInbound({
     channel: 'whatsapp_cloud',
     externalId: address,
@@ -416,7 +419,7 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
     displayName: cloudProfile({ ...matchedProviderContact, ...message }).displayName || contact.displayName || address,
     avatarUrl: cloudProfile({ ...matchedProviderContact, ...message }).avatarUrl || contact.avatarUrl || null,
     providerMessageId: message.id || null,
-    body: profileLoginRequested ? '/login' : cloudMessageBody(message),
+    body: message.type === 'text' ? safeInboundText : cloudMessageBody(message),
     type: message.type || 'unknown',
     hasMedia: CLOUD_MESSAGE_TYPES_WITH_MEDIA.has(message.type),
     sentAt,
@@ -446,10 +449,8 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
     providerMessageId: message.id || null,
     from: address,
     type: message.type || 'unknown',
-    text: profileLoginRequested
-      ? '/login'
-      : message.text?.body
-        ? String(message.text.body).slice(0, 2000)
+    text: message.text?.body
+      ? String(safeInboundText).slice(0, 2000)
         : null,
     ...(invitationInvocation ? {
       text: permissionCommand,
@@ -658,9 +659,38 @@ async function processCloudWebhookDescriptor(descriptor) {
   return summary;
 }
 
+async function sensitiveEmailCodeMessageIds(payload) {
+  const ids = [];
+  for (const descriptor of webhookEventsManager.extractEvents(payload)) {
+    for (const message of Array.isArray(descriptor.value?.messages)
+      ? descriptor.value.messages
+      : []) {
+      const text = String(message?.text?.body || '').normalize('NFKC').trim();
+      if (!/^\d{6}$/.test(text) || !message?.id) continue;
+      const address = cloudIdentity(message);
+      if (!address) continue;
+      const contact = await contactsManager.findByChannelAddress(
+        'whatsapp_cloud',
+        address
+      );
+      if (contact && await chatProfileFlow.shouldRedactEmailVerificationCode(
+        contact.id,
+        text
+      )) {
+        ids.push(String(message.id));
+      }
+    }
+  }
+  return [...new Set(ids)];
+}
+
 async function webhook(payload, rawBody, signature) {
   await verifySignature(rawBody, signature);
-  const persisted = await webhookEventsManager.persistPayload(payload, rawBody);
+  const redactedMessageIds = await sensitiveEmailCodeMessageIds(payload);
+  const persisted = await webhookEventsManager.persistPayload(payload, rawBody, {
+    redactedMessageIds,
+    redactionText: chatProfileFlow.EMAIL_VERIFICATION_CODE_PLACEHOLDER
+  });
   const summary = {
     receivedMessages: 0,
     receivedStatuses: 0,

@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 
+const ADMIN_NOTIFICATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
 const readSchema = new mongoose.Schema({
   admin: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', required: true },
   readAt: { type: Date, default: Date.now }
@@ -13,10 +15,15 @@ const adminNotificationSchema = new mongoose.Schema({
   contact: { type: mongoose.Schema.Types.ObjectId, ref: 'Contact', index: true },
   context: { type: mongoose.Schema.Types.Mixed },
   reads: { type: [readSchema], default: [] },
-  retentionUntil: { type: Date, index: { expires: 0 } }
+  retentionUntil: {
+    type: Date,
+    required: true,
+    default: () => new Date(Date.now() + ADMIN_NOTIFICATION_RETENTION_MS)
+  }
 }, { timestamps: true, versionKey: false });
 
 adminNotificationSchema.index({ createdAt: -1 });
 adminNotificationSchema.index({ 'reads.admin': 1, createdAt: -1 });
+adminNotificationSchema.index({ retentionUntil: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.models.AdminNotification || mongoose.model('AdminNotification', adminNotificationSchema);

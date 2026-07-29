@@ -65,6 +65,26 @@ env.profileCodeMaxAttempts = number('PROFILE_CODE_MAX_ATTEMPTS', 5);
 env.profileCodeMaxRequests = number('PROFILE_CODE_MAX_REQUESTS', 5);
 env.profileCodeWindowSeconds = number('PROFILE_CODE_WINDOW_SECONDS', 3600);
 env.profileCodeResendSeconds = number('PROFILE_CODE_RESEND_SECONDS', 30);
+env.chatEmailCodeTtlSeconds = Math.max(
+  60,
+  Math.trunc(number('CHAT_EMAIL_CODE_TTL_SECONDS', 15 * 60))
+);
+env.chatEmailCodeResendSeconds = Math.max(
+  2 * 60,
+  Math.trunc(number('CHAT_EMAIL_CODE_RESEND_SECONDS', 2 * 60))
+);
+env.chatEmailCodeMaxAttempts = Math.max(
+  1,
+  Math.trunc(number('CHAT_EMAIL_CODE_MAX_ATTEMPTS', 5))
+);
+env.chatEmailCodeMaxRequests = Math.max(
+  1,
+  Math.trunc(number('CHAT_EMAIL_CODE_MAX_REQUESTS', 5))
+);
+env.chatEmailCodeWindowSeconds = Math.max(
+  env.chatEmailCodeResendSeconds,
+  Math.trunc(number('CHAT_EMAIL_CODE_WINDOW_SECONDS', 60 * 60))
+);
 env.profileLinkTtlSeconds = Math.min(
   7 * 24 * 60 * 60,
   Math.max(60, Math.trunc(number('PROFILE_LINK_TTL_SECONDS', 7 * 24 * 60 * 60)))

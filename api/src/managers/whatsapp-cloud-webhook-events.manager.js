@@ -37,6 +37,22 @@ function parseOriginalPayload(payload, rawBody) {
   return payload;
 }
 
+function payloadWithRedactedMessages(payload, messageIds, replacement) {
+  const ids = new Set(Array.from(messageIds || []).map(String).filter(Boolean));
+  if (!ids.size) return payload;
+  const redacted = structuredClone(payload);
+  for (const entry of asArray(redacted?.entry)) {
+    for (const change of asArray(entry?.changes)) {
+      for (const message of asArray(change?.value?.messages)) {
+        if (ids.has(String(message?.id || '')) && message?.text?.body !== undefined) {
+          message.text.body = replacement;
+        }
+      }
+    }
+  }
+  return redacted;
+}
+
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -278,12 +294,18 @@ async function upsertEvent(input) {
   return { record, created: Boolean(result?.upsertedCount) };
 }
 
-async function persistPayload(payload, rawBody) {
+async function persistPayload(payload, rawBody, options = {}) {
   const receivedAt = new Date();
   const originalPayload = parseOriginalPayload(payload, rawBody);
   const canonicalPayload = stableStringify(originalPayload);
   const payloadHash = sha256(canonicalPayload);
-  const payloadEncrypted = encrypt({ payload: originalPayload });
+  const redactedMessageIds = new Set(options.redactedMessageIds || []);
+  const storedPayload = payloadWithRedactedMessages(
+    originalPayload,
+    redactedMessageIds,
+    options.redactionText || '[Codigo de verificacao de email]'
+  );
+  const payloadEncrypted = encrypt({ payload: storedPayload });
   const descriptors = extractEvents(originalPayload);
   const persisted = [];
   const workItems = [];
@@ -309,6 +331,15 @@ async function persistPayload(payload, rawBody) {
         occurredAt: occurredAtFor(descriptor.value, receivedAt)
       }
     });
+    // Um retry de um evento legado pode encontrar um registro criado antes da
+    // protecao de OTP. Nesse caso, substitua somente o payload criptografado;
+    // hash, dedupe e metadados diagnosticos continuam derivados do original.
+    if (redactedMessageIds.size && !result.created) {
+      await WhatsappCloudWebhookEvent.updateOne(
+        { dedupeKey },
+        { $set: { payloadEncrypted } }
+      );
+    }
     const item = toListItem(result.record);
     persisted.push({ ...item, created: result.created });
     workItems.push({ eventId: item.id, descriptor });
@@ -483,5 +514,6 @@ module.exports = {
   dedupeIdentityFor,
   dedupeKeyFor,
   stableStringify,
+  payloadWithRedactedMessages,
   toListItem
 };

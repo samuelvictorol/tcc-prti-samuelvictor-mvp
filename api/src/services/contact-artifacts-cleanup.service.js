@@ -1,6 +1,7 @@
 const Conversation = require('../models/conversation.model');
 const ConversationMessage = require('../models/conversation-message.model');
 const AdminNotification = require('../models/admin-notification.model');
+const ChatEmailChallenge = require('../models/chat-email-challenge.model');
 
 async function removeContactArtifacts(contactId) {
   const [conversationIds, messageConversationIds] = await Promise.all([
@@ -16,7 +17,13 @@ async function removeContactArtifacts(contactId) {
       { 'context.contactId': { $in: contactReferences } }
     ]
   };
-  const [messages, conversations, adminNotifications, sanitizedShortcuts] = await Promise.all([
+  const [
+    messages,
+    conversations,
+    adminNotifications,
+    emailChallenges,
+    sanitizedShortcuts
+  ] = await Promise.all([
     ConversationMessage.deleteMany({
       $or: [
         { contact: contactId },
@@ -25,6 +32,7 @@ async function removeContactArtifacts(contactId) {
     }),
     Conversation.deleteMany({ contact: contactId }),
     AdminNotification.deleteMany(adminReferenceFilter),
+    ChatEmailChallenge.deleteMany({ contact: contactId }),
     sharedConversationIds.length
       ? Conversation.updateMany({ _id: { $in: sharedConversationIds } }, {
           $set: { unreadCount: 0 },
@@ -41,6 +49,7 @@ async function removeContactArtifacts(contactId) {
     removedConversationMessages: messages.deletedCount || 0,
     removedConversations: conversations.deletedCount || 0,
     removedAdminNotifications: adminNotifications.deletedCount || 0,
+    removedEmailChallenges: emailChallenges.deletedCount || 0,
     sanitizedConversationShortcuts: sanitizedShortcuts.modifiedCount || 0
   };
 }

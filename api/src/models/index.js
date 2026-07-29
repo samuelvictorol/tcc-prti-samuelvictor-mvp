@@ -1,6 +1,7 @@
 module.exports = {
   Admin: require('./admin.model'),
   AdminNotification: require('./admin-notification.model'),
+  ChatEmailChallenge: require('./chat-email-challenge.model'),
   ConsentEvent: require('./consent-event.model'),
   ConversationBackup: require('./conversation-backup.model'),
   Conversation: require('./conversation.model'),
