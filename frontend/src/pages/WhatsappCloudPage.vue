@@ -1076,14 +1076,12 @@ onBeforeUnmount(() => {
     <div class="cloud-help-strip q-mb-lg" aria-label="Ajuda das políticas do WhatsApp oficial">
       <span><q-icon name="verified" /> Regras do canal</span>
       <ContextHelp
-        title="Somente templates oficiais"
-        tooltip="Entenda templates, fila e consentimento"
-        text="Esta tela envia exclusivamente templates já aprovados na Meta. O processamento acontece pela fila e respeita consentimento por contato."
-      />
-      <ContextHelp
-        title="Autorização compartilhada entre Cloud e Web"
-        tooltip="Entenda como o comando autoriza o WhatsApp"
-        text="Quando o comando de autorização configurado é recebido pelo WhatsApp Cloud ou Web, o mesmo contato autoriza as duas integrações. Se uma identidade ainda não existir, sua autorização fica pendente até a primeira interação real, sem criar um destino artificial. O administrador ainda pode revisar ou revogar Web e Cloud separadamente."
+        title="Regras do canal"
+        tooltip="Entenda templates, fila e autorização"
+        :text="[
+          '1. Somente templates oficiais: esta tela envia exclusivamente templates já aprovados na Meta. O processamento acontece pela fila e respeita consentimento por contato.',
+          '2. Autorização compartilhada entre Cloud e Web: quando o comando de autorização configurado é recebido pelo WhatsApp Cloud ou Web, o mesmo contato autoriza as duas integrações. Se uma identidade ainda não existir, sua autorização fica pendente até a primeira interação real, sem criar um destino artificial. O administrador ainda pode revisar ou revogar Web e Cloud separadamente.',
+        ]"
       />
     </div>
 

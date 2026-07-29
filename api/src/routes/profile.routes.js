@@ -12,6 +12,9 @@ const {
   revokeOwnConsentSchema,
   setOwnEmailConsentSchema,
   profileHistorySchema,
+  ownGroupMembershipSchema,
+  removeOwnGroupMembershipSchema,
+  removeOwnInviteMembershipSchema,
   profileLoginLogsSchema
 } = require('../dtos/profile.dto');
 const { env } = require('../config/env');
@@ -26,6 +29,10 @@ profileRouter.post('/consents/revoke', validate(revokeOwnConsentSchema), asyncHa
 profileRouter.post('/consents/email', validate(setOwnEmailConsentSchema), asyncHandler(controller.setEmailConsent));
 profileRouter.get('/activation-links', asyncHandler(controller.activations));
 profileRouter.get('/history', validate(profileHistorySchema), asyncHandler(controller.history));
+profileRouter.get('/memberships', asyncHandler(controller.memberships));
+profileRouter.get('/groups/:id', validate(ownGroupMembershipSchema), asyncHandler(controller.groupMembership));
+profileRouter.delete('/groups/:id', validate(removeOwnGroupMembershipSchema), asyncHandler(controller.removeGroupMembership));
+profileRouter.delete('/invites/:id', validate(removeOwnInviteMembershipSchema), asyncHandler(controller.removeInviteMembership));
 
 const adminRouter = express.Router();
 adminRouter.use(requireAuth);

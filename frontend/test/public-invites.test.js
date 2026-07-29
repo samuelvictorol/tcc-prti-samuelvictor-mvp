@@ -79,13 +79,17 @@ describe('convites públicos e documentos LGPD', () => {
     })
   })
 
-  it('bloqueia o convite com diálogo persistente até aceitar e permite reabrir', () => {
+  it('abre os termos somente ao acionar um canal e exige aceite antes do redirecionamento', () => {
     const page = source('pages/PublicInvitePage.vue')
     const dialog = source('components/PublicLegalDialog.vue')
 
-    expect(page).toContain('legalDialog.value = true')
+    expect(page).toContain('const legalDialog = ref(false)')
+    expect(page).toContain('const legalAccepted = ref(false)')
     expect(page).toContain("() => [route.params.slug, route.query.token]")
-    expect(page).toContain('if (legalDialog.value) return')
+    expect(page).toContain('if (!legalAccepted.value)')
+    expect(page).toContain('pendingLink.value = link')
+    expect(page).toContain('@accepted="onLegalAccepted"')
+    expect(page).toContain('window.location.assign(link.trackingUrl)')
     expect(page).toContain('label="Termos e Privacidade"')
     expect(page).toContain('<PublicLegalDialog')
     expect(dialog).toContain('persistent')

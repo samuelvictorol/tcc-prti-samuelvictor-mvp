@@ -37,7 +37,12 @@ const routes = [
       },
       { path: 'whatsapp-cloud', name: 'whatsapp-cloud', component: () => import('../pages/WhatsappCloudPage.vue') },
       { path: 'email', name: 'email', component: () => import('../pages/EmailPage.vue'), meta: { channel: 'email' } },
-      { path: 'invites', name: 'invites', component: () => import('../pages/InvitesPage.vue') },
+      {
+        path: 'invites',
+        name: 'invites',
+        component: () => import('../pages/InvitesPage.vue'),
+        meta: { requiresInviteChannels: true },
+      },
       { path: 'terms', name: 'terms', component: () => import('../pages/TermsPage.vue') },
       { path: 'logins', name: 'profile-logins', component: () => import('../pages/LoginSettingsPage.vue') },
       { path: 'help', name: 'help', component: () => import('../pages/HelpPage.vue') },
@@ -66,6 +71,14 @@ router.beforeEach(async (to) => {
     await app.fetchStatus()
     if (!app.isChannelEnabled(to.meta.channel)) {
       return { name: 'home', query: { unavailable: to.meta.channel } }
+    }
+  }
+
+  if (to.meta.requiresInviteChannels) {
+    const app = useAppStore()
+    await app.fetchStatus()
+    if (!app.canAccessInvites) {
+      return { name: 'home', query: { unavailable: 'invites' } }
     }
   }
 })

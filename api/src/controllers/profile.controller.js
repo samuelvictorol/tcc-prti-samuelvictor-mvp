@@ -1,4 +1,5 @@
 const profileManager = require('../managers/profile.manager');
+const profileMembershipsManager = require('../managers/profile-memberships.manager');
 
 function requestMeta(req) {
   return { ip: req.ip, userAgent: req.get('user-agent') };
@@ -38,6 +39,49 @@ async function history(req, res) {
   res.json({ success: true, data: await profileManager.deliveryHistory(req.profile.contactId, req.validated.query) });
 }
 
+async function memberships(req, res) {
+  res.json({
+    success: true,
+    data: await profileMembershipsManager.listOwn(req.profile.contactId)
+  });
+}
+
+async function groupMembership(req, res) {
+  res.json({
+    success: true,
+    data: await profileMembershipsManager.ownGroupDetails(
+      req.profile.contactId,
+      req.validated.params.id
+    )
+  });
+}
+
+async function removeGroupMembership(req, res) {
+  res.json({
+    success: true,
+    data: await profileMembershipsManager.removeOwnGroupMembership(
+      req.profile.contactId,
+      req.validated.params.id,
+      { requestId: req.id }
+    )
+  });
+}
+
+async function removeInviteMembership(req, res) {
+  res.json({
+    success: true,
+    data: await profileMembershipsManager.removeInviteMembership(
+      req.profile.contactId,
+      req.validated.params.id,
+      {
+        requestId: req.id,
+        source: 'profile_self_service',
+        selfService: true
+      }
+    )
+  });
+}
+
 async function loginOverview(req, res) {
   res.json({ success: true, data: await profileManager.loginOverview(req.validated.query) });
 }
@@ -51,5 +95,9 @@ module.exports = {
   setEmailConsent,
   activations,
   history,
+  memberships,
+  groupMembership,
+  removeGroupMembership,
+  removeInviteMembership,
   loginOverview
 };

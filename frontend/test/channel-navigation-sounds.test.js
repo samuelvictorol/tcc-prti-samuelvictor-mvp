@@ -6,6 +6,7 @@ import {
   resetAppSoundsForTests,
   soundFile,
 } from '../src/services/sounds.js'
+import { invitesAreAvailable } from '../src/stores/app.js'
 
 function source(relativePath) {
   return readFileSync(fileURLToPath(new URL(`../src/${relativePath}`, import.meta.url)), 'utf8')
@@ -30,6 +31,31 @@ describe('canais e alertas sonoros', () => {
     expect(layout).toContain("playAppSound('notify')")
     expect(layout).toContain('nav-item--telegram')
     expect(layout).toContain('nav-item--gmail')
+  })
+
+  it('libera Convites somente com WhatsApp Cloud e Gmail configurados', () => {
+    expect(invitesAreAvailable({
+      whatsapp_cloud: { configured: true },
+      email: { configured: true },
+    })).toBe(true)
+    expect(invitesAreAvailable({
+      whatsapp_cloud: { configured: true },
+      email: { configured: false },
+    })).toBe(false)
+    expect(invitesAreAvailable({
+      channels: {
+        whatsappCloud: { ready: true },
+        gmail: { enabled: true },
+      },
+    })).toBe(true)
+
+    const layout = source('layouts/MainLayout.vue')
+    const router = source('router/index.js')
+    expect(layout).toContain('available: app.canAccessInvites')
+    expect(layout).toContain('Para liberar Convites, configure o WhatsApp Cloud e o Gmail')
+    expect(layout).toContain('<q-tooltip v-if="item.tooltip"')
+    expect(router).toContain('requiresInviteChannels: true')
+    expect(router).toContain('if (!app.canAccessInvites)')
   })
 
   it('mapeia os três arquivos públicos e ignora falhas de reprodução', async () => {

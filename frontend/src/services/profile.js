@@ -129,4 +129,24 @@ export async function fetchProfileHistory(params = {}) {
   return data(await profileHttp.get('/my-profile/history', { params }))
 }
 
+export async function fetchProfileMemberships() {
+  return data(await profileHttp.get('/my-profile/memberships'))
+}
+
+export async function fetchOwnGroupDetails(groupId) {
+  return data(await profileHttp.get(`/my-profile/groups/${encodeURIComponent(groupId)}`))
+}
+
+export async function leaveOwnContactGroup(groupId) {
+  return data(await profileHttp.delete(`/my-profile/groups/${encodeURIComponent(groupId)}`, {
+    data: { confirmed: true },
+  }))
+}
+
+export async function removeOwnInviteMembership(inviteId) {
+  return data(await profileHttp.delete(`/my-profile/invites/${encodeURIComponent(inviteId)}`, {
+    data: { confirmed: true },
+  }))
+}
+
 if (typeof window !== 'undefined' && localStorage.getItem(PROFILE_TOKEN_KEY)) scheduleExpiry()

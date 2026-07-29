@@ -16,7 +16,9 @@ const $q = useQuasar()
 const loading = ref(true)
 const error = ref('')
 const invite = ref(null)
-const legalDialog = ref(true)
+const legalDialog = ref(false)
+const legalAccepted = ref(false)
+const pendingLink = ref(null)
 const legalLoading = ref(true)
 const legalDocuments = ref(PUBLIC_LEGAL_TYPES.map((item) => fallbackLegalDocument(item.type)))
 const inviteIconFailed = ref(false)
@@ -70,15 +72,33 @@ async function loadLegalDocuments() {
 }
 
 async function loadPublicRoute() {
-  legalDialog.value = true
+  legalDialog.value = false
+  legalAccepted.value = false
+  pendingLink.value = null
   await Promise.all([loadInvite(), loadLegalDocuments()])
 }
 
 async function follow(link) {
-  if (legalDialog.value) return
   const url = link.trackingUrl
   if (!url) return
+  if (!legalAccepted.value) {
+    pendingLink.value = link
+    legalDialog.value = true
+    return
+  }
   window.location.assign(url)
+}
+
+function openLegalDocuments() {
+  pendingLink.value = null
+  legalDialog.value = true
+}
+
+function onLegalAccepted() {
+  legalAccepted.value = true
+  const link = pendingLink.value
+  pendingLink.value = null
+  if (link?.trackingUrl) window.location.assign(link.trackingUrl)
 }
 
 async function openQrDialog() {
@@ -155,12 +175,13 @@ watch(
       no-caps
       icon="policy"
       label="Termos e Privacidade"
-      @click="legalDialog = true"
+      @click="openLegalDocuments"
     />
     <PublicLegalDialog
       v-model="legalDialog"
       :documents="legalDocuments"
       :loading="legalLoading"
+      @accepted="onLegalAccepted"
     />
     <q-dialog v-model="qrDialog">
       <q-card class="public-qr-dialog">

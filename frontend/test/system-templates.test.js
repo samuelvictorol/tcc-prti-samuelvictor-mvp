@@ -33,7 +33,10 @@ describe('templates fixos do sistema', () => {
       templateType: 'approved_template',
       externalTemplateName: '3p_direct_integration_test_template',
     })).toBe('OFICIAL META PROD NUMBER')
+    expect(page).toContain('title="Templates oficiais e número remetente"')
+    expect(page).toContain('tooltip="Entenda quais templates pertencem a cada número"')
     expect(page).toContain('o modelo com o mesmo nome e idioma está disponível e aprovado')
+    expect(page).not.toContain('class="bg-blue-1 text-blue-10 q-mb-md"')
   })
 
   it('oculta a exclusao dos fixos e mostra o cadeado', () => {

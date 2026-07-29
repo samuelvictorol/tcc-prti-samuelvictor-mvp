@@ -74,6 +74,19 @@ describe('Central de Ajuda', () => {
     expect(cloud).not.toContain('<p class="section-copy">Status de entrega')
   })
 
+  it('consolida as duas regras do WhatsApp em uma única ajuda com tópicos', () => {
+    const cloud = source('pages/WhatsappCloudPage.vue')
+    const rulesSection = cloud.slice(
+      cloud.indexOf('aria-label="Ajuda das políticas do WhatsApp oficial"'),
+      cloud.indexOf('<section class="page-grid cloud-layout'),
+    )
+
+    expect(rulesSection.match(/<ContextHelp/g)).toHaveLength(1)
+    expect(rulesSection).toContain('title="Regras do canal"')
+    expect(rulesSection).toContain('1. Somente templates oficiais')
+    expect(rulesSection).toContain('2. Autorização compartilhada entre Cloud e Web')
+  })
+
   it('mantém o segredo do webhook no servidor e expõe somente o callback copiável', () => {
     const home = source('pages/HomePage.vue')
 

@@ -15,6 +15,17 @@ function findChannel(status, channel) {
   return undefined
 }
 
+export function channelValueIsEnabled(value) {
+  if (typeof value === 'boolean') return value
+  if (!value) return false
+  return Boolean(value.enabled ?? value.configured ?? value.active ?? value.ready ?? value.status === 'ready')
+}
+
+export function invitesAreAvailable(status = {}) {
+  return channelValueIsEnabled(findChannel(status, 'whatsappCloud'))
+    && channelValueIsEnabled(findChannel(status, 'email'))
+}
+
 export const useAppStore = defineStore('app', {
   state: () => ({
     status: {},
@@ -25,10 +36,9 @@ export const useAppStore = defineStore('app', {
   getters: {
     isChannelEnabled: (state) => (channel) => {
       const value = findChannel(state.status, channel)
-      if (typeof value === 'boolean') return value
-      if (!value) return false
-      return Boolean(value.enabled ?? value.configured ?? value.active ?? value.ready ?? value.status === 'ready')
+      return channelValueIsEnabled(value)
     },
+    canAccessInvites: (state) => invitesAreAvailable(state.status),
     channelStatus: (state) => (channel) => findChannel(state.status, channel) || {},
   },
   actions: {

@@ -1,4 +1,4 @@
-const { z, paginationQuery } = require('./common.dto');
+const { z, objectId, paginationQuery } = require('./common.dto');
 
 const requestProfileLoginSchema = z.object({
   body: z.object({
@@ -38,6 +38,20 @@ const setOwnEmailConsentSchema = z.object({
 
 const profileHistorySchema = z.object({ query: paginationQuery });
 
+const ownGroupMembershipSchema = z.object({
+  params: z.object({ id: objectId })
+});
+
+const removeOwnGroupMembershipSchema = z.object({
+  params: z.object({ id: objectId }),
+  body: z.object({ confirmed: z.literal(true) })
+});
+
+const removeOwnInviteMembershipSchema = z.object({
+  params: z.object({ id: objectId }),
+  body: z.object({ confirmed: z.literal(true) })
+});
+
 const profileLoginLogsSchema = z.object({
   query: paginationQuery.extend({
     identifierType: z.enum(['email', 'phone']).optional(),
@@ -52,5 +66,8 @@ module.exports = {
   revokeOwnConsentSchema,
   setOwnEmailConsentSchema,
   profileHistorySchema,
+  ownGroupMembershipSchema,
+  removeOwnGroupMembershipSchema,
+  removeOwnInviteMembershipSchema,
   profileLoginLogsSchema
 };

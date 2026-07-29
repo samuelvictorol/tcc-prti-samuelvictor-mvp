@@ -50,6 +50,13 @@ const createContactSchema = z.object({
 });
 const updateContactSchema = z.object({ params: idParams, body: contactBody.partial().refine((body) => Object.keys(body).length > 0) });
 const contactIdSchema = z.object({ params: idParams });
+const removeContactInviteSchema = z.object({
+  params: z.object({
+    id: objectId,
+    inviteId: objectId
+  }),
+  body: z.object({ confirmed: z.literal(true) })
+});
 const listContactsSchema = z.object({
   query: paginationQuery.extend({
     search: z.string().max(254).optional(),
@@ -60,4 +67,12 @@ const listContactsSchema = z.object({
   })
 });
 
-module.exports = { createContactSchema, updateContactSchema, contactIdSchema, listContactsSchema, channelIdentity, manualChannelIdentity };
+module.exports = {
+  createContactSchema,
+  updateContactSchema,
+  contactIdSchema,
+  removeContactInviteSchema,
+  listContactsSchema,
+  channelIdentity,
+  manualChannelIdentity
+};

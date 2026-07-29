@@ -119,6 +119,19 @@ export function notificationGlobalChannelOptions(channels = [], templateIds = {}
     : channels.filter((channel) => channel.enabled)
   return source.filter((channel) => Boolean(templateIds?.[channel.value]))
 }
+
+export function notificationDeliveryDetail(delivery = {}) {
+  const status = String(delivery.status || '').toLowerCase()
+  if (delivery.errorMessage) return delivery.errorMessage
+  if (status === 'read') return 'Mensagem lida pelo contato'
+  if (status === 'delivered') return 'Mensagem entregue ao contato'
+  if (status === 'sent') return 'Envio aceito pelo provedor'
+  if (status === 'processing') return 'Entrega em processamento'
+  if (status === 'queued') return 'Entrega aguardando processamento'
+  if (status === 'skipped') return 'Contato ignorado pelas regras de elegibilidade do canal'
+  if (status === 'failed') return 'O provedor não concluiu esta entrega'
+  return 'Aguardando atualização da fila'
+}
 </script>
 
 <script setup>
@@ -130,6 +143,7 @@ import EmptyState from '../components/EmptyState.vue'
 import { useAppStore } from '../stores/app.js'
 import { notificationChannel, notificationDeliveryCounts } from '../services/channels.js'
 import { asList, errorMessage, fetchAll, http, unwrap } from '../services/http.js'
+import { normalizeDeliveryPage } from '../services/bulk-notifications.js'
 import {
   templateSetChannels,
   templateSetId,
@@ -149,6 +163,18 @@ const templates = ref([])
 const templateSets = ref([])
 const deliveries = ref([])
 const globalSelectionMode = ref('set')
+const dispatchDetailDialog = ref(false)
+const dispatchDetailLoading = ref(false)
+const selectedDispatch = ref(null)
+const dispatchDetailRows = ref([])
+const dispatchDetailChannel = ref(null)
+const dispatchDetailStatus = ref(null)
+const dispatchDetailPagination = ref({
+  page: 1,
+  rowsPerPage: 15,
+  rowsNumber: 0,
+})
+let dispatchDetailRequestSequence = 0
 
 const form = reactive({
   contactIds: [],
@@ -304,6 +330,16 @@ const deliveryColumns = [
   { name: 'channel', label: 'Canal', field: 'channel', align: 'left' },
   { name: 'recipient', label: 'Destino', field: 'recipient', align: 'left' },
   { name: 'status', label: 'Status', field: 'status', align: 'left' },
+  { name: 'actions', label: '', field: 'actions', align: 'right' },
+]
+
+const dispatchDetailColumns = [
+  { name: 'contact', label: 'Contato', field: 'contactId', align: 'left' },
+  { name: 'channel', label: 'Canal', field: 'channel', align: 'left' },
+  { name: 'status', label: 'Status', field: 'status', align: 'left' },
+  { name: 'attempts', label: 'Tentativas', field: 'attempts', align: 'center' },
+  { name: 'detail', label: 'Detalhe', field: 'errorMessage', align: 'left' },
+  { name: 'updatedAt', label: 'Atualizado', field: 'updatedAt', align: 'left' },
 ]
 
 function statusColor(status = '') {
@@ -318,6 +354,46 @@ function statusColor(status = '') {
     failed: 'negative',
     cancelled: 'grey-7',
   }[String(status).toLowerCase()] || 'grey-7'
+}
+
+function statusLabel(status = '') {
+  return {
+    delivered: 'Entregue',
+    read: 'Lida',
+    sent: 'Enviada',
+    queued: 'Na fila',
+    processing: 'Processando',
+    partial: 'Parcial',
+    skipped: 'Ignorada',
+    failed: 'Falhou',
+    cancelled: 'Cancelada',
+  }[String(status).toLowerCase()] || String(status || 'Aguardando')
+}
+
+function channelLabel(channel = '') {
+  return channels.value.find((item) => item.value === channel)?.label || channel || 'Global'
+}
+
+function notificationId(notification = {}) {
+  return notification.id || notification._id || null
+}
+
+function contactLabel(delivery = {}) {
+  const contact = delivery.contact || {}
+  const displayName = contact.displayName || contact.name || contact.email || contact.phone || contact.telegramUsername
+  if (displayName) return displayName
+  const suffix = String(delivery.contactId || '').slice(-6)
+  return suffix ? `Contato • ${suffix}` : 'Contato não identificado'
+}
+
+function notificationSummary(notification = {}) {
+  const summary = notification.summary || {}
+  return [
+    { key: 'queued', label: 'Na fila', value: Number(summary.queued || 0), color: 'info' },
+    { key: 'sent', label: 'Sucesso', value: Number(summary.sent || 0), color: 'positive' },
+    { key: 'failed', label: 'Falhas', value: Number(summary.failed || 0), color: 'negative' },
+    { key: 'skipped', label: 'Ignoradas', value: Number(summary.skipped || 0), color: 'warning' },
+  ]
 }
 
 function variableInputType(definition = {}) {
@@ -336,6 +412,63 @@ function variableHint(definition = {}) {
 function formatDate(value) {
   if (!value) return '—'
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
+}
+
+async function loadDispatchDetails({ pagination = dispatchDetailPagination.value, showError = true } = {}) {
+  const id = notificationId(selectedDispatch.value)
+  if (!id) return
+  const requestId = ++dispatchDetailRequestSequence
+  const page = Math.max(1, Number(pagination?.page) || 1)
+  const limit = Math.max(1, Number(pagination?.rowsPerPage || pagination?.limit) || 15)
+  dispatchDetailLoading.value = true
+  try {
+    const response = await http.get(`/notifications/${id}/deliveries`, {
+      params: {
+        page,
+        limit,
+        ...(dispatchDetailChannel.value ? { channel: dispatchDetailChannel.value } : {}),
+        ...(dispatchDetailStatus.value ? { status: dispatchDetailStatus.value } : {}),
+      },
+    })
+    if (requestId !== dispatchDetailRequestSequence) return
+    const result = normalizeDeliveryPage(unwrap(response) || {}, contacts.value)
+    dispatchDetailRows.value = result.items
+    dispatchDetailPagination.value = {
+      page: result.page,
+      rowsPerPage: result.limit,
+      rowsNumber: result.total,
+    }
+  } catch (error) {
+    if (requestId === dispatchDetailRequestSequence && showError) {
+      $q.notify({
+        type: 'warning',
+        message: errorMessage(error, 'Não foi possível carregar as entregas deste disparo.'),
+      })
+    }
+  } finally {
+    if (requestId === dispatchDetailRequestSequence) dispatchDetailLoading.value = false
+  }
+}
+
+function openDispatchDetails(notification) {
+  if (!notificationId(notification)) return
+  selectedDispatch.value = notification
+  dispatchDetailRows.value = []
+  dispatchDetailChannel.value = null
+  dispatchDetailStatus.value = null
+  dispatchDetailPagination.value = { page: 1, rowsPerPage: 15, rowsNumber: 0 }
+  dispatchDetailDialog.value = true
+  loadDispatchDetails()
+}
+
+function requestDispatchDetailPage({ pagination }) {
+  loadDispatchDetails({ pagination })
+}
+
+function filterDispatchDetails() {
+  loadDispatchDetails({
+    pagination: { ...dispatchDetailPagination.value, page: 1 },
+  })
 }
 
 async function loadData() {
@@ -704,14 +837,194 @@ onMounted(loadData)
         <div><h2 class="section-title">Atividade recente</h2><p class="section-copy">Últimos lotes e entregas registrados pela API.</p></div>
       </div>
       <EmptyState v-if="!loading && !deliveries.length" icon="outbox" title="Nenhum envio registrado" description="Seu primeiro disparo aparecerá aqui com status por canal." />
-      <q-table v-else flat :rows="deliveries" :columns="deliveryColumns" row-key="id" :loading="loading" :rows-per-page-options="[10, 20]">
+      <q-table
+        v-else
+        flat
+        :rows="deliveries"
+        :columns="deliveryColumns"
+        row-key="_id"
+        :loading="loading"
+        :grid="$q.screen.lt.sm"
+        :rows-per-page-options="[10, 20]"
+        class="activity-table"
+        @row-click="(_event, row) => openDispatchDetails(row)"
+      >
         <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt) }}</q-td></template>
         <template #body-cell-mode="props"><q-td :props="props">{{ props.row.mode || props.row.type || '—' }}</q-td></template>
         <template #body-cell-channel="props"><q-td :props="props"><q-badge outline color="primary" :label="props.row.channel || 'global'" /></q-td></template>
         <template #body-cell-recipient="props"><q-td :props="props">{{ props.row.recipient?.name || props.row.contact?.name || props.row.recipient || 'Lote' }}</q-td></template>
         <template #body-cell-status="props"><q-td :props="props"><q-badge :color="statusColor(props.row.status)" :label="props.row.status || 'queued'" /></q-td></template>
+        <template #body-cell-actions="props">
+          <q-td :props="props">
+            <q-btn
+              flat
+              round
+              dense
+              icon="manage_search"
+              color="primary"
+              aria-label="Ver contatos e canais deste disparo"
+              @click.stop="openDispatchDetails(props.row)"
+            >
+              <q-tooltip>Ver status por contato e canal</q-tooltip>
+            </q-btn>
+          </q-td>
+        </template>
+        <template #item="props">
+          <div class="activity-grid-item">
+            <article class="activity-mobile-card" role="button" tabindex="0" @click="openDispatchDetails(props.row)" @keydown.enter="openDispatchDetails(props.row)">
+              <header>
+                <div>
+                  <strong>{{ props.row.mode || props.row.kind || 'Disparo' }}</strong>
+                  <span>{{ formatDate(props.row.createdAt) }}</span>
+                </div>
+                <q-badge :color="statusColor(props.row.status)" :label="statusLabel(props.row.status)" />
+              </header>
+              <div class="activity-mobile-card__meta">
+                <span><q-icon name="lan" />{{ channelLabel(props.row.channel) }}</span>
+                <span><q-icon name="people" />{{ props.row.recipient?.name || props.row.contact?.name || props.row.recipient || 'Lote' }}</span>
+              </div>
+              <footer>
+                <span>Ver contatos, canais e motivos</span>
+                <q-icon name="chevron_right" />
+              </footer>
+            </article>
+          </div>
+        </template>
       </q-table>
     </q-card>
+
+    <q-dialog v-model="dispatchDetailDialog" :maximized="$q.screen.lt.sm">
+      <q-card class="dispatch-detail-dialog">
+        <q-card-section class="dispatch-detail-header">
+          <div>
+            <div class="text-overline text-primary">Detalhes do disparo</div>
+            <h2>Status por contato e canal</h2>
+            <p>
+              {{ formatDate(selectedDispatch?.createdAt) }}
+              · {{ channelLabel(selectedDispatch?.channel) }}
+              · {{ dispatchDetailPagination.rowsNumber }} entrega(s)
+            </p>
+          </div>
+          <q-btn flat round dense icon="close" v-close-popup aria-label="Fechar detalhes do disparo" />
+        </q-card-section>
+
+        <q-separator />
+
+        <q-card-section class="dispatch-detail-content">
+          <div class="dispatch-detail-summary" aria-label="Resumo das entregas">
+            <div
+              v-for="item in notificationSummary(selectedDispatch)"
+              :key="item.key"
+              :class="`dispatch-detail-summary__${item.key}`"
+            >
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+            </div>
+          </div>
+
+          <div class="dispatch-detail-filters">
+            <q-select
+              v-model="dispatchDetailChannel"
+              outlined
+              dense
+              clearable
+              emit-value
+              map-options
+              label="Canal"
+              :options="channels.map((channel) => ({ label: channel.label, value: channel.value }))"
+              @update:model-value="filterDispatchDetails"
+            />
+            <q-select
+              v-model="dispatchDetailStatus"
+              outlined
+              dense
+              clearable
+              emit-value
+              map-options
+              label="Status"
+              :options="[
+                { label: 'Na fila', value: 'queued' },
+                { label: 'Processando', value: 'processing' },
+                { label: 'Enviada', value: 'sent' },
+                { label: 'Entregue', value: 'delivered' },
+                { label: 'Lida', value: 'read' },
+                { label: 'Falhou', value: 'failed' },
+                { label: 'Ignorada', value: 'skipped' },
+              ]"
+              @update:model-value="filterDispatchDetails"
+            />
+            <q-btn
+              outline
+              color="primary"
+              no-caps
+              icon="refresh"
+              label="Atualizar"
+              :loading="dispatchDetailLoading"
+              @click="loadDispatchDetails()"
+            />
+          </div>
+
+          <q-table
+            v-model:pagination="dispatchDetailPagination"
+            flat
+            bordered
+            :rows="dispatchDetailRows"
+            :columns="dispatchDetailColumns"
+            row-key="id"
+            :loading="dispatchDetailLoading"
+            :grid="$q.screen.lt.md"
+            :rows-per-page-options="[10, 15, 25, 50]"
+            class="dispatch-detail-table"
+            @request="requestDispatchDetailPage"
+          >
+            <template #body-cell-contact="props">
+              <q-td :props="props">
+                <strong>{{ contactLabel(props.row) }}</strong>
+                <small>{{ props.row.contactId }}</small>
+              </q-td>
+            </template>
+            <template #body-cell-channel="props">
+              <q-td :props="props"><q-badge outline color="primary" :label="channelLabel(props.row.channel)" /></q-td>
+            </template>
+            <template #body-cell-status="props">
+              <q-td :props="props"><q-badge :color="statusColor(props.row.status)" :label="statusLabel(props.row.status)" /></q-td>
+            </template>
+            <template #body-cell-detail="props">
+              <q-td :props="props" class="dispatch-detail-reason">
+                {{ notificationDeliveryDetail(props.row) }}
+                <small v-if="props.row.errorCode">{{ props.row.errorCode }}</small>
+              </q-td>
+            </template>
+            <template #body-cell-updatedAt="props"><q-td :props="props">{{ formatDate(props.row.updatedAt) }}</q-td></template>
+            <template #item="props">
+              <div class="dispatch-delivery-grid-item">
+                <article class="dispatch-delivery-card">
+                  <header>
+                    <div>
+                      <strong>{{ contactLabel(props.row) }}</strong>
+                      <span>{{ channelLabel(props.row.channel) }}</span>
+                    </div>
+                    <q-badge :color="statusColor(props.row.status)" :label="statusLabel(props.row.status)" />
+                  </header>
+                  <p>{{ notificationDeliveryDetail(props.row) }}</p>
+                  <div class="dispatch-delivery-card__meta">
+                    <span>{{ props.row.attempts || 0 }} tentativa(s)</span>
+                    <span>{{ formatDate(props.row.updatedAt) }}</span>
+                  </div>
+                  <code v-if="props.row.errorCode">{{ props.row.errorCode }}</code>
+                </article>
+              </div>
+            </template>
+            <template #no-data>
+              <div class="dispatch-detail-empty">
+                <q-icon name="filter_alt_off" />
+                <span>Nenhuma entrega corresponde aos filtros selecionados.</span>
+              </div>
+            </template>
+          </q-table>
+        </q-card-section>
+      </q-card>
+    </q-dialog>
 
     <q-dialog v-model="reviewDialog" persistent :maximized="$q.screen.lt.sm">
       <q-card class="review-dialog-card">
@@ -789,13 +1102,56 @@ onMounted(loadData)
 </template>
 
 <style scoped>
+.page-container,
+.notification-layout,
+.composer-card,
+.safety-column,
+.section-card,
+.form-grid,
+.global-mode-selector,
+.global-template-grid,
+.variable-fields,
+.send-summary,
+.toolbar-row {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.page-container {
+  overflow-x: clip;
+}
+
 .notification-layout {
   grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.55fr);
   align-items: start;
 }
 
 .composer-tabs {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
   justify-content: flex-start;
+}
+
+.composer-tabs :deep(.q-tabs__content) {
+  min-width: max-content;
+  flex-wrap: nowrap;
+}
+
+.composer-card :deep(.q-tab-panels),
+.composer-card :deep(.q-tab-panel),
+.composer-card :deep(.q-banner),
+.composer-card :deep(.q-banner__content),
+.composer-card :deep(.q-field),
+.composer-card :deep(.q-field__control-container) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.composer-card :deep(.q-banner__content) {
+  overflow-wrap: anywhere;
 }
 
 .global-template-grid,
@@ -933,6 +1289,262 @@ onMounted(loadData)
 
 .safety-card {
   background: linear-gradient(145deg, rgba(255,255,255,.8), rgba(130,248,230,.15));
+}
+
+.activity-table {
+  width: 100%;
+  max-width: 100%;
+}
+
+.activity-table :deep(tbody tr) {
+  cursor: pointer;
+}
+
+.activity-table :deep(tbody tr:hover) {
+  background: rgba(53, 188, 164, 0.07);
+}
+
+.activity-grid-item,
+.dispatch-delivery-grid-item {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 4px;
+}
+
+.activity-mobile-card,
+.dispatch-delivery-card {
+  min-width: 0;
+  border: 1px solid rgba(14, 89, 78, 0.14);
+  border-radius: 15px;
+  background: #fbfffe;
+}
+
+.activity-mobile-card {
+  padding: 14px;
+  cursor: pointer;
+}
+
+.activity-mobile-card > header,
+.dispatch-delivery-card > header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.activity-mobile-card > header > div,
+.dispatch-delivery-card > header > div {
+  min-width: 0;
+}
+
+.activity-mobile-card > header strong,
+.activity-mobile-card > header span,
+.dispatch-delivery-card > header strong,
+.dispatch-delivery-card > header span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.activity-mobile-card > header span,
+.dispatch-delivery-card > header span {
+  margin-top: 2px;
+  color: #6b7f7b;
+  font-size: 0.75rem;
+}
+
+.activity-mobile-card__meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 7px 14px;
+  margin-top: 12px;
+  color: #4d6762;
+  font-size: 0.78rem;
+}
+
+.activity-mobile-card__meta span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  overflow-wrap: anywhere;
+}
+
+.activity-mobile-card > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 13px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(14, 89, 78, 0.09);
+  color: #168f7d;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.dispatch-detail-dialog {
+  display: flex;
+  width: min(1080px, calc(100vw - 32px));
+  max-width: 1080px;
+  max-height: min(90vh, 920px);
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 22px;
+  background: #fbfffe;
+}
+
+.dispatch-detail-header {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 22px;
+}
+
+.dispatch-detail-header > div {
+  min-width: 0;
+}
+
+.dispatch-detail-header h2 {
+  margin: 0;
+  color: #071f1c;
+  font-size: clamp(1.25rem, 3vw, 1.7rem);
+}
+
+.dispatch-detail-header p {
+  margin: 5px 0 0;
+  color: #647975;
+  overflow-wrap: anywhere;
+}
+
+.dispatch-detail-content {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 18px 22px 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.dispatch-detail-summary {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dispatch-detail-summary > div {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(14, 89, 78, 0.11);
+  border-radius: 13px;
+  background: rgba(247, 254, 252, 0.82);
+}
+
+.dispatch-detail-summary span,
+.dispatch-detail-summary strong {
+  display: block;
+}
+
+.dispatch-detail-summary span {
+  color: #6b7f7b;
+  font-size: 0.72rem;
+}
+
+.dispatch-detail-summary strong {
+  margin-top: 3px;
+  font-size: 1.35rem;
+}
+
+.dispatch-detail-summary__sent {
+  border-color: rgba(39, 183, 159, 0.25) !important;
+  background: rgba(39, 183, 159, 0.08) !important;
+}
+
+.dispatch-detail-summary__failed {
+  border-color: rgba(194, 55, 75, 0.22) !important;
+  background: rgba(194, 55, 75, 0.06) !important;
+}
+
+.dispatch-detail-summary__skipped {
+  border-color: rgba(242, 169, 59, 0.28) !important;
+  background: rgba(242, 169, 59, 0.08) !important;
+}
+
+.dispatch-detail-filters {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0;
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) auto;
+}
+
+.dispatch-detail-table {
+  width: 100%;
+  max-width: 100%;
+  border-radius: 14px;
+}
+
+.dispatch-detail-table :deep(td),
+.dispatch-detail-table :deep(th) {
+  max-width: 280px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.dispatch-detail-table :deep(td strong),
+.dispatch-detail-table :deep(td small),
+.dispatch-detail-reason small {
+  display: block;
+}
+
+.dispatch-detail-table :deep(td small),
+.dispatch-detail-reason small {
+  margin-top: 3px;
+  color: #738682;
+  font-size: 0.68rem;
+}
+
+.dispatch-delivery-card {
+  padding: 14px;
+}
+
+.dispatch-delivery-card p {
+  margin: 12px 0;
+  color: #365b54;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.dispatch-delivery-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 5px 12px;
+  color: #6b7f7b;
+  font-size: 0.72rem;
+}
+
+.dispatch-delivery-card code {
+  display: block;
+  margin-top: 9px;
+  color: #9a2f42;
+  overflow-wrap: anywhere;
+}
+
+.dispatch-detail-empty {
+  display: flex;
+  width: 100%;
+  min-height: 150px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #71837f;
 }
 
 .review-dialog-card {
@@ -1129,6 +1741,11 @@ onMounted(loadData)
 }
 
 @media (max-width: 650px) {
+  .composer-card {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
   .global-mode-selector {
     align-items: stretch;
     flex-direction: column;
@@ -1178,6 +1795,31 @@ onMounted(loadData)
 
   .safety-column {
     grid-template-columns: 1fr;
+  }
+
+  .dispatch-detail-dialog {
+    width: 100%;
+    max-width: none;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .dispatch-detail-header,
+  .dispatch-detail-content {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .dispatch-detail-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dispatch-detail-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .dispatch-detail-filters .q-btn {
+    width: 100%;
   }
 }
 </style>

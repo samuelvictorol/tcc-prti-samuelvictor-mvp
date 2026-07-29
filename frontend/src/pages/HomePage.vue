@@ -397,7 +397,11 @@ onBeforeUnmount(() => {
 
     <div v-if="$route.query.unavailable" class="unavailable-banner q-mb-lg">
       <q-icon name="lock" size="22px" />
-      <div><strong>Canal protegido</strong><span>Configure e conecte o canal antes de acessar suas funções.</span></div>
+      <div v-if="$route.query.unavailable === 'invites'">
+        <strong>Convites protegidos</strong>
+        <span>Configure o WhatsApp Cloud e o Gmail antes de acessar os convites.</span>
+      </div>
+      <div v-else><strong>Canal protegido</strong><span>Configure e conecte o canal antes de acessar suas funções.</span></div>
     </div>
 
     <section class="page-grid page-grid--3 q-mb-lg" aria-label="Resumo da operação">

@@ -6,6 +6,7 @@ vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 
 import {
   mergeNotificationVariableDefinitions,
+  notificationDeliveryDetail,
   notificationGlobalChannelOptions,
   notificationTemplatePreview,
   notificationTemplateVariableDefinitions,
@@ -170,5 +171,31 @@ describe('compositor amigável de notificações', () => {
     expect(source).toContain('v-html="safeReviewHtml(item.preview.html)"')
     expect(source).toContain('item.preview.mediaUrl')
     expect(source).not.toContain('$q.dialog({')
+  })
+
+  it('explica sucesso, erro e itens ignorados sem ocultar o motivo do provedor', () => {
+    expect(notificationDeliveryDetail({ status: 'sent' })).toBe('Envio aceito pelo provedor')
+    expect(notificationDeliveryDetail({ status: 'skipped' }))
+      .toBe('Contato ignorado pelas regras de elegibilidade do canal')
+    expect(notificationDeliveryDetail({
+      status: 'failed',
+      errorMessage: 'Template não aprovado para este número',
+    })).toBe('Template não aprovado para este número')
+  })
+
+  it('abre um histórico paginado por contato e canal e evita scroll horizontal da página', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
+
+    expect(source).toContain('openDispatchDetails')
+    expect(source).toContain('`/notifications/${id}/deliveries`')
+    expect(source).toContain('v-model:pagination="dispatchDetailPagination"')
+    expect(source).toContain('Status por contato e canal')
+    expect(source).toContain('notificationDeliveryDetail(props.row)')
+    expect(source).toContain('@request="requestDispatchDetailPage"')
+    expect(source).toContain('.page-container {')
+    expect(source).toContain('overflow-x: clip')
+    expect(source).toContain('.composer-tabs {')
+    expect(source).toContain('overflow-x: auto')
+    expect(source).toContain(':grid="$q.screen.lt.md"')
   })
 })

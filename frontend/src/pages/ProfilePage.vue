@@ -13,7 +13,11 @@ import {
   fetchOwnProfile,
   fetchProfileActivationLinks,
   fetchProfileHistory,
+  fetchProfileMemberships,
+  fetchOwnGroupDetails,
   getProfileToken,
+  leaveOwnContactGroup,
+  removeOwnInviteMembership,
   requestProfileLogin,
   revokeOwnConsent,
   setOwnEmailConsent,
@@ -44,6 +48,15 @@ const emailConsentEnabled = ref(false)
 const history = ref([])
 const historyLoading = ref(false)
 const historyPagination = reactive({ page: 1, rowsPerPage: 10, rowsNumber: 0 })
+const memberships = reactive({ invites: [], groups: [] })
+const membershipsLoading = ref(false)
+const groupDetailsDialog = ref(false)
+const groupDetailsLoading = ref(false)
+const selectedGroup = ref(null)
+const leaveGroupDialog = ref(false)
+const leaveGroupTarget = ref(null)
+const removeInviteDialog = ref(false)
+const removeInviteTarget = ref(null)
 
 const identifierTypeOptions = Object.freeze([
   { label: 'Telefone', value: 'phone', icon: 'phone' },
@@ -115,6 +128,14 @@ function clearLoadedProfileState() {
   history.value = []
   historyPagination.page = 1
   historyPagination.rowsNumber = 0
+  memberships.invites = []
+  memberships.groups = []
+  selectedGroup.value = null
+  groupDetailsDialog.value = false
+  leaveGroupDialog.value = false
+  leaveGroupTarget.value = null
+  removeInviteDialog.value = false
+  removeInviteTarget.value = null
   editMode.value = false
   Object.assign(editForm, {
     displayName: '',
@@ -160,6 +181,19 @@ async function loadHistory(pagination = historyPagination) {
   }
 }
 
+async function loadMemberships() {
+  membershipsLoading.value = true
+  try {
+    const result = await fetchProfileMemberships()
+    memberships.invites = result.invites || []
+    memberships.groups = result.groups || []
+  } catch (error) {
+    $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível carregar seus convites e grupos.') })
+  } finally {
+    membershipsLoading.value = false
+  }
+}
+
 async function loadProfile() {
   loading.value = true
   clearLoadedProfileState()
@@ -169,6 +203,7 @@ async function loadProfile() {
     step.value = 'profile'
     await Promise.all([
       loadHistory(),
+      loadMemberships(),
       fetchProfileActivationLinks().then((value) => { activationLinks.value = value }).catch(() => undefined),
     ])
   } catch (error) {
@@ -233,6 +268,7 @@ async function exchangeLinkToken(token) {
     step.value = 'profile'
     await Promise.all([
       loadHistory(),
+      loadMemberships(),
       fetchProfileActivationLinks().then((value) => { activationLinks.value = value }).catch(() => undefined),
     ])
   } catch (error) {
@@ -307,6 +343,67 @@ async function saveEmailConsent() {
     })
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível alterar a permissão de email.') })
+  } finally {
+    loading.value = false
+  }
+}
+
+async function openGroupDetails(group) {
+  groupDetailsDialog.value = true
+  groupDetailsLoading.value = true
+  selectedGroup.value = { ...group, members: [] }
+  try {
+    selectedGroup.value = await fetchOwnGroupDetails(group.id)
+  } catch (error) {
+    groupDetailsDialog.value = false
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível abrir este grupo.') })
+  } finally {
+    groupDetailsLoading.value = false
+  }
+}
+
+function confirmLeaveGroup(group = selectedGroup.value) {
+  leaveGroupTarget.value = group
+  leaveGroupDialog.value = true
+}
+
+async function leaveGroup() {
+  if (!leaveGroupTarget.value?.id) return
+  loading.value = true
+  try {
+    await leaveOwnContactGroup(leaveGroupTarget.value.id)
+    memberships.groups = memberships.groups.filter((group) => group.id !== leaveGroupTarget.value.id)
+    leaveGroupDialog.value = false
+    groupDetailsDialog.value = false
+    selectedGroup.value = null
+    $q.notify({ type: 'positive', message: 'Seu contato foi removido do grupo.' })
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível sair do grupo.') })
+  } finally {
+    loading.value = false
+  }
+}
+
+function confirmRemoveInvite(invite) {
+  removeInviteTarget.value = invite
+  removeInviteDialog.value = true
+}
+
+async function removeInvite() {
+  if (!removeInviteTarget.value?.id) return
+  loading.value = true
+  try {
+    await removeOwnInviteMembership(removeInviteTarget.value.id)
+    const inviteId = removeInviteTarget.value.id
+    memberships.invites = memberships.invites.filter((invite) => invite.id !== inviteId)
+    await loadMemberships()
+    removeInviteDialog.value = false
+    $q.notify({
+      type: 'positive',
+      message: 'O convite foi removido do seu perfil e dos grupos sincronizados.',
+    })
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível remover o convite.') })
   } finally {
     loading.value = false
   }
@@ -548,6 +645,77 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
             </q-card>
           </section>
 
+          <q-card flat class="profile-card memberships-card">
+            <q-card-section class="card-heading">
+              <div><span>VÍNCULOS</span><h2>Convites e grupos</h2></div>
+              <q-icon name="hub" color="primary" size="30px" />
+            </q-card-section>
+            <q-inner-loading :showing="membershipsLoading">
+              <q-spinner color="primary" size="34px" />
+            </q-inner-loading>
+            <q-card-section class="memberships-grid">
+              <section class="membership-column">
+                <header>
+                  <q-icon name="link" />
+                  <div>
+                    <strong>Convites utilizados</strong>
+                    <span>Você pode remover apenas os vínculos do seu próprio cadastro.</span>
+                  </div>
+                </header>
+                <div v-if="memberships.invites.length" class="membership-list">
+                  <article v-for="invite in memberships.invites" :key="invite.id" class="membership-item">
+                    <div>
+                      <strong>{{ invite.title }}</strong>
+                      <span>/{{ invite.slug }}</span>
+                      <small v-if="invite.channels?.length">{{ invite.channels.join(' · ') }}</small>
+                    </div>
+                    <q-btn
+                      flat
+                      round
+                      color="negative"
+                      icon="link_off"
+                      :aria-label="`Remover vínculo com ${invite.title}`"
+                      @click="confirmRemoveInvite(invite)"
+                    >
+                      <q-tooltip>Remover este convite do meu perfil</q-tooltip>
+                    </q-btn>
+                  </article>
+                </div>
+                <div v-else class="membership-empty">Nenhum convite associado ao seu perfil.</div>
+              </section>
+
+              <section class="membership-column">
+                <header>
+                  <q-icon name="groups" />
+                  <div>
+                    <strong>Grupos de contatos</strong>
+                    <span>Consulte os participantes ou retire somente o seu contato.</span>
+                  </div>
+                </header>
+                <div v-if="memberships.groups.length" class="membership-list">
+                  <article v-for="group in memberships.groups" :key="group.id" class="membership-item">
+                    <div>
+                      <strong>{{ group.name }}</strong>
+                      <span>{{ group.memberCount }} participante(s)</span>
+                      <small v-if="group.sourceInvite">Convite: {{ group.sourceInvite.title }}</small>
+                    </div>
+                    <q-btn
+                      flat
+                      round
+                      color="primary"
+                      icon="visibility"
+                      :aria-label="`Ver grupo ${group.name}`"
+                      @click="openGroupDetails(group)"
+                    >
+                      <q-tooltip>Ver participantes e opções</q-tooltip>
+                    </q-btn>
+                  </article>
+                </div>
+                <div v-else class="membership-empty">Seu contato não participa de nenhum grupo.</div>
+              </section>
+            </q-card-section>
+          </q-card>
+
           <q-card flat class="profile-card history-card">
             <q-card-section class="card-heading">
               <div><span>TRANSPARÊNCIA</span><h2>Histórico de entregas</h2></div>
@@ -582,6 +750,89 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
         </main>
       </q-page>
     </q-page-container>
+
+    <q-dialog v-model="groupDetailsDialog">
+      <q-card class="membership-dialog">
+        <q-card-section class="membership-dialog__header">
+          <div>
+            <div class="text-caption text-primary text-weight-bold">GRUPO DE CONTATOS</div>
+            <div class="text-h6 text-weight-bold">{{ selectedGroup?.name || 'Grupo' }}</div>
+            <div class="text-caption text-grey-7">
+              Somente o início dos telefones é exibido; os demais dígitos permanecem protegidos.
+            </div>
+          </div>
+          <q-space />
+          <q-btn flat round dense icon="close" aria-label="Fechar" v-close-popup />
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="membership-dialog__body">
+          <q-inner-loading :showing="groupDetailsLoading">
+            <q-spinner color="primary" size="34px" />
+          </q-inner-loading>
+          <q-list v-if="selectedGroup?.members?.length" separator>
+            <q-item v-for="(member, index) in selectedGroup.members" :key="`${member.displayName}:${index}`">
+              <q-item-section avatar>
+                <q-avatar color="primary" text-color="dark" icon="person" />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>
+                  {{ member.displayName }}
+                  <q-badge v-if="member.isSelf" color="positive" label="Você" class="q-ml-xs" />
+                </q-item-label>
+                <q-item-label caption>{{ member.phoneMasked }}</q-item-label>
+              </q-item-section>
+            </q-item>
+          </q-list>
+          <div v-else-if="!groupDetailsLoading" class="membership-empty">Nenhum participante ativo.</div>
+        </q-card-section>
+        <q-separator />
+        <q-card-actions align="between" class="membership-dialog__actions">
+          <q-btn
+            flat
+            no-caps
+            color="negative"
+            icon="group_remove"
+            label="Remover meu contato"
+            @click="confirmLeaveGroup()"
+          />
+          <q-btn flat no-caps label="Fechar" v-close-popup />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="leaveGroupDialog" persistent>
+      <q-card class="revoke-card">
+        <q-card-section class="row items-center q-gutter-sm">
+          <q-icon name="warning" color="negative" size="30px" />
+          <div class="text-h6">Sair deste grupo?</div>
+        </q-card-section>
+        <q-card-section>
+          Somente o seu contato será removido de <strong>{{ leaveGroupTarget?.name }}</strong>.
+          Os demais participantes e o grupo não serão alterados.
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat no-caps label="Cancelar" v-close-popup />
+          <q-btn color="negative" unelevated no-caps label="Sim, remover meu contato" :loading="loading" @click="leaveGroup" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="removeInviteDialog" persistent>
+      <q-card class="revoke-card">
+        <q-card-section class="row items-center q-gutter-sm">
+          <q-icon name="link_off" color="negative" size="30px" />
+          <div class="text-h6">Remover este convite?</div>
+        </q-card-section>
+        <q-card-section>
+          O vínculo com <strong>{{ removeInviteTarget?.title }}</strong> será retirado do seu perfil.
+          Seu contato também sairá dos grupos sincronizados por esse convite, evitando novos disparos por essa origem.
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat no-caps label="Cancelar" v-close-popup />
+          <q-btn color="negative" unelevated no-caps label="Sim, remover convite" :loading="loading" @click="removeInvite" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
 
     <q-dialog v-model="revokeDialog" persistent>
       <q-card class="revoke-card">
@@ -654,8 +905,26 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
 .permission-copy strong, .permission-copy span { display: block; }
 .permission-copy span { margin-top: 2px; color: #718480; font-size: .73rem; }
 .permission-copy small { display: block; max-width: 430px; margin-top: 4px; color: #4f706a; font-size: .68rem; line-height: 1.35; }
+.memberships-card { position: relative; margin-top: 22px; overflow: hidden; }
+.memberships-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 8px 26px 28px; }
+.membership-column { min-width: 0; padding: 16px; border: 1px solid rgba(3,21,21,.07); border-radius: 18px; background: #f7fcfa; }
+.membership-column > header { display: flex; align-items: flex-start; gap: 11px; margin-bottom: 13px; }
+.membership-column > header > .q-icon { display: grid; flex: 0 0 38px; width: 38px; height: 38px; border-radius: 13px; background: rgba(53,188,164,.13); color: #137d6c; font-size: 21px; place-items: center; }
+.membership-column header strong, .membership-column header span { display: block; }
+.membership-column header span { margin-top: 3px; color: #6a7d79; font-size: .7rem; line-height: 1.4; }
+.membership-list { display: grid; gap: 8px; }
+.membership-item { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; border-radius: 14px; background: #fff; }
+.membership-item > div { min-width: 0; }
+.membership-item strong, .membership-item span, .membership-item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.membership-item span { margin-top: 2px; color: #617570; font-size: .72rem; }
+.membership-item small { margin-top: 3px; color: #78908b; font-size: .65rem; }
+.membership-empty { padding: 22px 12px; color: #758984; font-size: .78rem; text-align: center; }
+.membership-dialog { display: flex; width: min(640px, calc(100vw - 28px)); max-height: min(760px, calc(100dvh - 28px)); flex-direction: column; border-radius: 22px; }
+.membership-dialog__header { display: flex; flex: 0 0 auto; align-items: flex-start; gap: 12px; }
+.membership-dialog__body { position: relative; min-height: 150px; overflow: auto; }
+.membership-dialog__actions { flex: 0 0 auto; padding: 12px 18px; }
 .history-card { margin-top: 22px; overflow: hidden; }
 .revoke-card { width: min(480px, calc(100vw - 30px)); border-radius: 22px; }
-@media (max-width: 850px) { .profile-grid { grid-template-columns: 1fr; } .profile-hero { align-items: flex-start; } }
-@media (max-width: 560px) { .profile-toolbar { padding: 0 12px; } .profile-toolbar .q-btn :deep(.q-btn__content span) { display: none; } .profile-content { width: min(100% - 22px, 1240px); padding-top: 28px; } .profile-hero .q-avatar { display: none; } .edit-grid { grid-template-columns: 1fr; } .permission-row { grid-template-columns: auto 1fr auto; } .permission-row > .q-badge { display: none; } }
+@media (max-width: 850px) { .profile-grid, .memberships-grid { grid-template-columns: 1fr; } .profile-hero { align-items: flex-start; } }
+@media (max-width: 560px) { .profile-toolbar { padding: 0 12px; } .profile-toolbar .q-btn :deep(.q-btn__content span) { display: none; } .profile-content { width: min(100% - 22px, 1240px); padding-top: 28px; } .profile-hero .q-avatar { display: none; } .edit-grid { grid-template-columns: 1fr; } .permission-row { grid-template-columns: auto 1fr auto; } .permission-row > .q-badge { display: none; } .memberships-grid { padding: 6px 12px 18px; } .membership-column { padding: 12px; } .membership-dialog { width: 100%; max-height: 100dvh; border-radius: 0; } .membership-dialog__actions { align-items: stretch; flex-direction: column; } }
 </style>

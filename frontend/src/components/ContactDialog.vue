@@ -27,6 +27,8 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'saved'])
 const $q = useQuasar()
 const saving = ref(false)
+const removingInviteId = ref(null)
+const inviteOrigins = ref([])
 
 const emptyForm = () => ({
   displayName: '',
@@ -113,6 +115,9 @@ function reset() {
     },
   })
   Object.assign(originalConsents, form.consents)
+  inviteOrigins.value = Array.isArray(source.inviteOrigins)
+    ? source.inviteOrigins.map((origin) => ({ ...origin }))
+    : []
 }
 
 function upsertIdentity(channels, channel, address) {
@@ -184,6 +189,39 @@ async function persistConsentChanges(contactId, changes) {
       ...(change.granted ? {} : { confirmed: true }),
     })
   }
+}
+
+function confirmRemoveInviteOrigin(invite) {
+  $q.dialog({
+    title: 'Remover vínculo com este convite?',
+    message: `O vínculo com "${invite.title}" será removido somente deste contato. Ele também sairá dos grupos sincronizados por esse convite.`,
+    cancel: { flat: true, label: 'Cancelar' },
+    ok: { color: 'negative', label: 'Remover vínculo' },
+    persistent: true,
+  }).onOk(async () => {
+    const contactId = recordId(props.contact)
+    const inviteId = invite.inviteId || invite.id
+    if (!contactId || !inviteId) return
+    removingInviteId.value = inviteId
+    try {
+      await http.delete(`/contacts/${contactId}/invites/${inviteId}`, {
+        data: { confirmed: true },
+      })
+      inviteOrigins.value = inviteOrigins.value.filter(
+        (origin) => String(origin.inviteId || origin.id) !== String(inviteId),
+      )
+      const refreshed = (await http.get(`/contacts/${contactId}`)).data?.data
+      emit('saved', refreshed)
+      $q.notify({
+        type: 'positive',
+        message: 'Vínculo de convite removido deste contato e dos grupos sincronizados.',
+      })
+    } catch (error) {
+      $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível remover o vínculo do convite.') })
+    } finally {
+      removingInviteId.value = null
+    }
+  })
 }
 
 async function save() {
@@ -282,6 +320,35 @@ watch(() => props.modelValue, (open) => open && reset())
                       <dd><code>{{ identifier.value }}</code></dd>
                     </div>
                   </dl>
+                </article>
+              </div>
+            </section>
+            <section v-if="contact && inviteOrigins.length" class="full-span invite-origins" aria-label="Convites vinculados ao contato">
+              <div class="invite-origins__heading">
+                <div>
+                  <strong>Convites vinculados</strong>
+                  <span>Remova apenas o vínculo incorreto deste contato; o convite e os demais participantes serão preservados.</span>
+                </div>
+                <q-icon name="link" color="primary" />
+              </div>
+              <div class="invite-origins__list">
+                <article v-for="invite in inviteOrigins" :key="invite.inviteId || invite.id">
+                  <div>
+                    <strong>{{ invite.title }}</strong>
+                    <span>/{{ invite.slug }}</span>
+                  </div>
+                  <q-btn
+                    type="button"
+                    flat
+                    round
+                    color="negative"
+                    icon="link_off"
+                    :loading="removingInviteId === (invite.inviteId || invite.id)"
+                    :aria-label="`Remover vínculo com ${invite.title}`"
+                    @click="confirmRemoveInviteOrigin(invite)"
+                  >
+                    <q-tooltip>Remover vínculo deste contato</q-tooltip>
+                  </q-btn>
                 </article>
               </div>
             </section>
@@ -514,6 +581,51 @@ watch(() => props.modelValue, (open) => open && reset())
   font-size: 0.72rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.invite-origins {
+  padding: 16px;
+  border: 1px solid rgba(53, 188, 164, 0.2);
+  border-radius: 16px;
+  background: rgba(247, 254, 252, 0.76);
+}
+
+.invite-origins__heading,
+.invite-origins__list article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.invite-origins__heading {
+  margin-bottom: 10px;
+}
+
+.invite-origins__heading strong,
+.invite-origins__heading span,
+.invite-origins__list strong,
+.invite-origins__list span {
+  display: block;
+}
+
+.invite-origins__heading span,
+.invite-origins__list span {
+  margin-top: 2px;
+  color: #657976;
+  font-size: 0.72rem;
+}
+
+.invite-origins__list {
+  display: grid;
+  gap: 7px;
+}
+
+.invite-origins__list article {
+  padding: 9px 10px 9px 12px;
+  border: 1px solid rgba(3, 21, 21, 0.07);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.86);
 }
 
 @media (max-width: 560px) {

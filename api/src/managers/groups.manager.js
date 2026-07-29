@@ -335,5 +335,6 @@ module.exports = {
   addContactForInvite,
   refreshInviteSnapshot,
   inviteContactIds,
-  serialize
+  serialize,
+  SECRET_SELECT
 };

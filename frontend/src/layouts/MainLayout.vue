@@ -16,6 +16,7 @@ const drawer = ref($q.screen.gt.sm)
 const adminNotifications = ref([])
 const unreadAdminNotifications = ref(0)
 const notificationsLoading = ref(false)
+const inviteAccessExplanation = 'Para liberar Convites, configure o WhatsApp Cloud e o Gmail na página Início.'
 
 const navigation = computed(() => [
   { label: 'Início', caption: 'Saúde e configurações', icon: 'space_dashboard', to: '/', available: true },
@@ -27,7 +28,14 @@ const navigation = computed(() => [
   { label: 'Telegram', icon: 'send_to_mobile', to: '/telegram', available: app.isChannelEnabled('telegram'), channelColor: 'telegram' },
   { label: 'Gmail', icon: 'mail', to: '/email', available: app.isChannelEnabled('email'), channelColor: 'gmail' },
   { separator: true, label: 'Governança' },
-  { label: 'Convites', icon: 'link', to: '/invites', available: true },
+  {
+    label: 'Convites',
+    icon: 'link',
+    to: '/invites',
+    available: app.canAccessInvites,
+    unavailableMessage: inviteAccessExplanation,
+    tooltip: app.canAccessInvites ? '' : inviteAccessExplanation,
+  },
   { label: 'Termos e LGPD', icon: 'verified_user', to: '/terms', available: true },
   { label: 'Logins', caption: 'Acesso seguro dos contatos', icon: 'login', to: '/logins', available: true },
   { separator: true, label: 'Suporte' },
@@ -42,8 +50,10 @@ function goTo(item) {
   }
   $q.notify({
     type: 'warning',
-    message: `${item.label} ainda não está configurado ou conectado.`,
-    caption: 'Configure o canal na página Início.',
+    message: item.unavailableMessage || `${item.label} ainda não está configurado ou conectado.`,
+    caption: item.unavailableMessage
+      ? 'Os dois canais são necessários para criar e publicar convites.'
+      : 'Configure o canal na página Início.',
   })
 }
 
@@ -247,6 +257,9 @@ onBeforeUnmount(() => {
               :aria-disabled="String(!item.available)"
               @click="goTo(item)"
             >
+              <q-tooltip v-if="item.tooltip" :delay="300" anchor="center right" self="center left">
+                {{ item.tooltip }}
+              </q-tooltip>
               <q-item-section avatar>
                 <q-icon :name="item.icon" />
               </q-item-section>

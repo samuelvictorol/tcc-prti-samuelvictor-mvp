@@ -235,6 +235,7 @@ import DOMPurify from 'dompurify'
 import { useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
+import ContextHelp from '../components/ContextHelp.vue'
 import TelegramTemplateBuilder from '../components/TelegramTemplateBuilder.vue'
 import { asList, errorMessage, fetchAll, http, paginationOf, unwrap } from '../services/http.js'
 import {
@@ -1049,22 +1050,24 @@ onMounted(loadPageData)
 
     <q-card flat class="glass-card section-card">
       <div class="toolbar-row">
-        <q-tabs v-model="tab" dense no-caps outside-arrows mobile-arrows active-color="primary" indicator-color="transparent">
-          <q-tab name="all" icon="view_list" label="Todos" />
-          <q-tab v-for="channel in channelOptions" :key="channel.value" :name="channel.value" :icon="channel.icon" :label="channel.label" />
-        </q-tabs>
+        <div class="template-tabs-row">
+          <q-tabs v-model="tab" dense no-caps outside-arrows mobile-arrows active-color="primary" indicator-color="transparent">
+            <q-tab name="all" icon="view_list" label="Todos" />
+            <q-tab v-for="channel in channelOptions" :key="channel.value" :name="channel.value" :icon="channel.icon" :label="channel.label" />
+          </q-tabs>
+          <ContextHelp
+            title="Templates oficiais e número remetente"
+            tooltip="Entenda quais templates pertencem a cada número"
+            :text="[
+              'Templates oficiais dependem do número remetente. Os itens OFICIAL META TEST NUMBER pertencem ao fluxo com o número de teste.',
+              'O item OFICIAL META PROD NUMBER valida o modo de teste com um número de produção. Antes do envio, confirme que o modelo com o mesmo nome e idioma está disponível e aprovado na conta do WhatsApp Business que atende o número correspondente.',
+            ]"
+          />
+        </div>
         <q-input v-model="search" dense outlined clearable placeholder="Buscar template" class="search-field">
           <template #prepend><q-icon name="search" /></template>
         </q-input>
       </div>
-
-      <q-banner rounded class="bg-blue-1 text-blue-10 q-mb-md">
-        <template #avatar><q-icon name="info" color="primary" /></template>
-        <strong>Templates oficiais dependem do número remetente.</strong>
-        Os itens <strong>OFICIAL META TEST NUMBER</strong> pertencem ao fluxo com o número de teste.
-        O item <strong>OFICIAL META PROD NUMBER</strong> valida o modo de teste com um número de produção.
-        Antes do envio, confirme que o modelo com o mesmo nome e idioma está disponível e aprovado na conta do WhatsApp Business que atende o número correspondente.
-      </q-banner>
 
       <EmptyState v-if="!loading && !filteredTemplates.length" icon="note_add" title="Nenhum template neste filtro" description="Crie uma mensagem reutilizável para começar.">
         <q-btn color="primary" unelevated no-caps label="Criar template" @click="openCreate()" />
@@ -1636,6 +1639,17 @@ onMounted(loadPageData)
 <style scoped>
 .search-field {
   width: min(310px, 100%);
+}
+
+.template-tabs-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.template-tabs-row .q-tabs {
+  min-width: 0;
 }
 
 .template-sets-panel {
