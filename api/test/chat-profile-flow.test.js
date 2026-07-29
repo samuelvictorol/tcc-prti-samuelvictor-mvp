@@ -515,24 +515,54 @@ test('captura nao vincula automaticamente email pertencente a outro perfil', asy
   assert.equal(await chatProfileFlow.pendingEmailCapture(contactId, 'telegram'), false);
 });
 
-test('/cancelar limpa capturas do contato mesmo quando chegou pelo outro canal', async () => {
-  const originalUpdateOne = ChatEmailChallenge.updateOne;
+test('/cancelar limpa capturas do contato mesmo quando chegou pelo outro canal', async (context) => {
+  restoreAfter(context, [
+    [ChatEmailChallenge, 'findOne'],
+    [ChatEmailChallenge, 'updateOne']
+  ]);
   ChatEmailChallenge.updateOne = async () => ({ modifiedCount: 0 });
+  ChatEmailChallenge.findOne = () => {
+    const chain = {
+      select() { return chain; },
+      async lean() { return null; }
+    };
+    return chain;
+  };
   const contactId = '507f1f77bcf86cd799439018';
-  try {
-    await chatProfileFlow.beginEmailCapture(contactId, 'telegram');
+  await chatProfileFlow.beginEmailCapture(contactId, 'telegram');
 
-    const result = await chatProfileFlow.handleInbound({
-      contactId,
-      channel: 'whatsapp_cloud',
-      text: '/cancelar'
-    });
+  const result = await chatProfileFlow.handleInbound({
+    contactId,
+    channel: 'whatsapp_cloud',
+    text: '/cancelar'
+  });
 
-    assert.equal(result.kind, 'email_cancelled');
-    assert.equal(await chatProfileFlow.pendingEmailCapture(contactId, 'telegram'), false);
-  } finally {
-    ChatEmailChallenge.updateOne = originalUpdateOne;
-  }
+  assert.equal(result.kind, 'email_cancelled');
+  assert.equal(await chatProfileFlow.pendingEmailCapture(contactId, 'telegram'), false);
+});
+
+test('/cancelar nao confirma cancelamento durante uma verificacao ja em andamento', async (context) => {
+  const challenges = stubEmailChallenges(context);
+  const contactId = '507f1f77bcf86cd799439028';
+  await chatProfileFlow.handleInbound({
+    contactId,
+    channel: 'telegram',
+    text: 'andamento@example.test'
+  });
+  challenges.state().status = 'verifying';
+  challenges.state().verificationLeaseId = 'lease-em-andamento';
+  challenges.state().verificationLeaseUntil = new Date(Date.now() + 60_000);
+
+  const result = await chatProfileFlow.handleInbound({
+    contactId,
+    channel: 'whatsapp_cloud',
+    text: '/cancelar'
+  });
+
+  assert.equal(result.kind, 'email_verification_in_progress');
+  assert.match(result.text, /sendo concluida/i);
+  assert.equal(challenges.state().status, 'verifying');
+  assert.equal(challenges.state().verificationLeaseId, 'lease-em-andamento');
 });
 
 test('setEmailFromChat cria identidade e concede consentimento explicito somente ao email informado', async (context) => {

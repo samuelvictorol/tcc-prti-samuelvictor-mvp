@@ -341,12 +341,46 @@ async function beginEmailVerification({
 }
 
 async function cancelEmailVerification(contactId) {
-  await ChatEmailChallenge.updateOne({
-    slotKey: verificationSlotKey(contactId),
-    status: { $in: ['pending_delivery', 'active', 'verifying'] }
+  const slotKey = verificationSlotKey(contactId);
+  const now = new Date();
+  const cancelled = await ChatEmailChallenge.updateOne({
+    slotKey,
+    status: { $in: ['pending_delivery', 'active'] }
   }, {
-    $set: { status: 'revoked', revokedAt: new Date() }
+    $set: { status: 'revoked', revokedAt: now },
+    $unset: { verificationLeaseId: 1, verificationLeaseUntil: 1 }
   });
+  if (cancelled.modifiedCount === 1) {
+    return { cancelled: true, inProgress: false };
+  }
+
+  const current = await currentEmailChallenge(contactId);
+  if (current?.status !== 'verifying') {
+    return { cancelled: false, inProgress: false };
+  }
+  if (verificationLeaseDeadline(current) > now.getTime()) {
+    return { cancelled: false, inProgress: true };
+  }
+
+  const staleCancelled = await ChatEmailChallenge.updateOne({
+    slotKey,
+    operationId: current.operationId,
+    status: 'verifying',
+    ...expiredVerificationLeaseFilter(current, now)
+  }, {
+    $set: { status: 'revoked', revokedAt: now },
+    $unset: { verificationLeaseId: 1, verificationLeaseUntil: 1 }
+  });
+  if (staleCancelled.modifiedCount === 1) {
+    return { cancelled: true, inProgress: false };
+  }
+
+  const latest = await currentEmailChallenge(contactId);
+  return {
+    cancelled: false,
+    inProgress: latest?.status === 'verifying'
+      && verificationLeaseDeadline(latest) > Date.now()
+  };
 }
 
 async function verifyEmailCode({
@@ -667,7 +701,14 @@ async function handleInbound({ contactId, channel, text, profileUrl, providerEvi
 
   if (exactCommand(normalizedText, '/cancelar')) {
     await clearEmailCaptures(contactId);
-    await cancelEmailVerification(contactId);
+    const cancellation = await cancelEmailVerification(contactId);
+    if (cancellation.inProgress) {
+      return {
+        handled: true,
+        kind: 'email_verification_in_progress',
+        text: 'A verificacao desse email ja esta sendo concluida. Aguarde alguns instantes antes de tentar outra alteracao.'
+      };
+    }
     return {
       handled: true,
       kind: 'email_cancelled',
