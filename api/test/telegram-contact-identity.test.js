@@ -109,7 +109,11 @@ function stubTelegramInbound(context, options = {}) {
     url: `${env.publicAppUrl.replace(/\/$/, '')}/meu-perfil#acesso=grant-seguro-teste`,
     expiresAt: new Date(Date.now() + 300_000).toISOString()
   });
-  conversationsManager.recordInbound = async () => ({ conversation: { id: '507f1f77bcf86cd799439012' } });
+  let recordedInbound;
+  conversationsManager.recordInbound = async (input) => {
+    recordedInbound = input;
+    return { conversation: { id: '507f1f77bcf86cd799439012' } };
+  };
   const logs = [];
   logsManager.create = async (entry) => { logs.push(entry); return entry; };
   adminNotificationsManager.create = async () => ({});
@@ -121,6 +125,7 @@ function stubTelegramInbound(context, options = {}) {
   });
   return {
     input: () => upsertInput,
+    recordedInbound: () => recordedInbound,
     logs,
     providerCalls
   };
@@ -238,6 +243,7 @@ test('comando Telegram configurado autoriza o contato e envia menu de onboarding
   assert.match(menu.reply_markup.inline_keyboard[0][0].callback_data, /onboarding:phone/);
   assert.match(menu.reply_markup.inline_keyboard[1][0].url, /^https?:\/\/.*\/meu-perfil#acesso=/);
   assert.match(menu.reply_markup.inline_keyboard[2][0].callback_data, /onboarding:help/);
+  assert.match(menu.text, /\/login/);
   assert.equal(JSON.stringify(menu).includes('request_contact'), false);
   assert.match(emailPrompt.text, /cadastrar ou atualizar seu email/i);
   assert.equal(phonePrompt.reply_markup.keyboard[0][0].request_contact, true);
@@ -270,6 +276,7 @@ test('opt-in com email existente ainda solicita o telefone nativo e usa mensagen
   assert.match(menu.text, /Bem-vindo, Samuel/);
   assert.match(menu.text, /Convite TCC \(convite-tcc\)/);
   assert.match(menu.text, /\/notify-me/);
+  assert.match(menu.text, /\/login/);
   assert.match(menu.text, /cadastro já existia e foi encontrado/i);
   assert.equal(phonePrompt.text, 'Mensagem personalizada para vincular seu telefone.');
   assert.equal(phonePrompt.reply_markup.keyboard[0][0].request_contact, true);
@@ -393,6 +400,42 @@ test('/meu-perfil responde com os dados do proprio contato e link publico', asyn
   assert.doesNotMatch(response.text, /507f1f77bcf86cd799439011/);
 });
 
+test('/login direto no Telegram emite link temporario e explica como gerar outro acesso', async (context) => {
+  const state = stubTelegramInbound(context, {
+    publicAppUrl: 'https://notify.example',
+    contact: {
+      id: '507f1f77bcf86cd799439011',
+      displayName: 'Samuel',
+      upsertState: { created: false, identityAdded: false }
+    }
+  });
+  let linkRequest;
+  profileManager.createDirectProfileLink = async (contactId, options) => {
+    linkRequest = { contactId, options };
+    return {
+      challengeId: 'profile-challenge-safe-id',
+      url: 'https://notify.example/meu-perfil#acesso=grant-seguro-teste',
+      expiresAt: new Date(Date.now() + 300_000).toISOString()
+    };
+  };
+
+  await telegramManager.webhook(telegramUpdate(2_026_072_216, {
+    text: '/login'
+  }), 'webhook-secret');
+
+  assert.deepEqual(linkRequest, {
+    contactId: '507f1f77bcf86cd799439011',
+    options: { source: 'telegram_login_command' }
+  });
+  const response = state.providerCalls.find((payload) => /grant-seguro-teste/.test(payload.text || ''));
+  assert.ok(response);
+  assert.match(response.text, /link temporario/i);
+  assert.match(response.text, /envie \/login/i);
+  assert.equal(state.recordedInbound().body, '/login');
+  assert.doesNotMatch(JSON.stringify(state.logs), /grant-seguro-teste/);
+  assert.ok(state.logs.some((entry) => entry.action === 'profile_auth.link_issued'));
+});
+
 test('callback de telefone responde ao Telegram e so entao abre o request_contact nativo', async (context) => {
   const state = stubTelegramInbound(context);
   const update = {
@@ -437,7 +480,8 @@ test('callback Meu perfil emite link pessoal temporario que autentica sem codigo
 
   assert.equal(result.callback, 'onboarding_profile');
   const profileMessage = state.providerCalls.find((payload) => payload.reply_markup?.inline_keyboard);
-  assert.equal(profileMessage.text, 'Seu link pessoal está pronto e só pode ser usado uma vez.');
+  assert.match(profileMessage.text, /^Seu link pessoal está pronto e só pode ser usado uma vez\./);
+  assert.match(profileMessage.text, /\/login/);
   assert.match(
     profileMessage.reply_markup.inline_keyboard[0][0].url,
     /^https:\/\/notify\.example\/meu-perfil#acesso=/
@@ -460,6 +504,7 @@ test('callback de Ajuda explica vinculo e Meu perfil sem pedir telefone', async 
   assert.equal(state.providerCalls[0].callback_query_id, 'callback-help-1');
   assert.match(state.providerCalls[1].text, /Vincular meu telefone/i);
   assert.match(state.providerCalls[1].text, /Meu perfil/i);
+  assert.match(state.providerCalls[1].text, /\/login/);
   assert.equal(JSON.stringify(state.providerCalls).includes('request_contact'), false);
 });
 

@@ -193,6 +193,7 @@ test('link direto usa fragmento, e one-time e emite sessao limitada a sete dias'
 
   const issued = await profileManager.createDirectProfileLink(contactId, { source: 'telegram' });
   assert.equal(revokedPrevious, true);
+  assert.equal(issued.challengeId, challengeId);
   const url = new URL(issued.url);
   assert.equal(url.search, '');
   const token = new URLSearchParams(url.hash.slice(1)).get('acesso');

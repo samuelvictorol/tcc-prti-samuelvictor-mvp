@@ -895,6 +895,90 @@ test('/meu-perfil no WhatsApp responde com resumo privado e link publico', async
   assert.doesNotMatch(response.text.body, /507f1f77bcf86cd799439011/);
 });
 
+test('/login sem parametro no WhatsApp emite link temporario direto sem alterar o fluxo assinado', async (context) => {
+  stubWebhookPersistence(context);
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [settingsManager, 'isWhatsappPermissionCommand'],
+    [contactsManager, 'findByChannelAddress'],
+    [contactsManager, 'findByChannelOrPhone'],
+    [contactsManager, 'upsertFromChannel'],
+    [logsManager, 'create'],
+    [adminNotificationsManager, 'create'],
+    [profileManager, 'createDirectProfileLink'],
+    [profileManager, 'activateProfileLoginFromWhatsapp'],
+    [global, 'fetch']
+  ]);
+  const appSecret = 'cloud-secret';
+  settingsManager.getValue = async (key) => ({
+    WHATSAPP_CLOUD_APP_SECRET: appSecret,
+    WHATSAPP_CLOUD_ACCESS_TOKEN: 'test-access-token',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
+    WHATSAPP_CLOUD_API_VERSION: 'v25.0'
+  })[key] || null;
+  settingsManager.isWhatsappPermissionCommand = async () => false;
+  contactsManager.findByChannelAddress = async () => null;
+  contactsManager.findByChannelOrPhone = async () => null;
+  contactsManager.upsertFromChannel = async () => ({
+    id: '507f1f77bcf86cd799439011',
+    displayName: 'Samuel',
+    upsertState: { created: false, identityAdded: false }
+  });
+  let directRequest;
+  profileManager.createDirectProfileLink = async (contactId, options) => {
+    directRequest = { contactId, options };
+    return {
+      challengeId: 'profile-challenge-safe-id',
+      url: 'https://notify.example/meu-perfil#acesso=token-opaco',
+      expiresAt: new Date(Date.now() + 300_000).toISOString()
+    };
+  };
+  let signedActivationCalled = false;
+  profileManager.activateProfileLoginFromWhatsapp = async () => {
+    signedActivationCalled = true;
+    return { activated: false };
+  };
+  const logs = [];
+  logsManager.create = async (entry) => { logs.push(entry); return entry; };
+  adminNotificationsManager.create = async () => ({});
+  const providerPayloads = [];
+  global.fetch = async (_url, options) => {
+    providerPayloads.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      json: async () => ({ messages: [{ id: 'wamid.direct-login-response' }] })
+    };
+  };
+  const payload = {
+    entry: [{ changes: [{ value: {
+      contacts: [{ wa_id: '551131234567', profile: { name: 'Samuel' } }],
+      messages: [{
+        id: 'wamid.direct-login',
+        from: '551131234567',
+        type: 'text',
+        text: { body: ' /LOGIN ' }
+      }]
+    } }] }]
+  };
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256=' + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+  const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
+
+  assert.equal(result.receivedMessages, 1);
+  assert.deepEqual(directRequest, {
+    contactId: '507f1f77bcf86cd799439011',
+    options: { source: 'whatsapp_login_command' }
+  });
+  assert.equal(signedActivationCalled, false);
+  const response = providerPayloads.find((item) => /token-opaco/.test(item.text?.body || ''));
+  assert.ok(response);
+  assert.match(response.text.body, /link pode ser usado uma vez/i);
+  assert.match(response.text.body, /envie \/login/i);
+  assert.doesNotMatch(JSON.stringify(logs), /token-opaco/);
+  assert.ok(logs.some((entry) => entry.action === 'profile_auth.link_issued'));
+});
+
 test('falha ao entregar magic link revoga o grant e nao registra sucesso falso', async (context) => {
   stubWebhookPersistence(context);
   restoreAfter(context, [
@@ -907,6 +991,7 @@ test('falha ao entregar magic link revoga o grant e nao registra sucesso falso',
     [adminNotificationsManager, 'create'],
     [profileManager, 'parseProfileLoginInvocation'],
     [profileManager, 'activateProfileLoginFromWhatsapp'],
+    [profileManager, 'createDirectProfileLink'],
     [profileManager, 'revokeProfileLink'],
     [global, 'fetch']
   ]);
@@ -931,6 +1016,11 @@ test('falha ao entregar magic link revoga o grant e nao registra sucesso falso',
     challengeId: '9f9e0f12-353a-4c28-9a96-b9e267def122',
     url: 'https://notify.example/meu-perfil#acesso=token-opaco'
   });
+  let directProfileLinkCalled = false;
+  profileManager.createDirectProfileLink = async () => {
+    directProfileLinkCalled = true;
+    throw new Error('o fluxo assinado nao deve emitir um grant direto');
+  };
   let revokedChallengeId = null;
   profileManager.revokeProfileLink = async (challengeId) => {
     revokedChallengeId = challengeId;
@@ -961,6 +1051,7 @@ test('falha ao entregar magic link revoga o grant e nao registra sucesso falso',
   const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
 
   assert.equal(result.receivedMessages, 1);
+  assert.equal(directProfileLinkCalled, false);
   assert.equal(revokedChallengeId, '9f9e0f12-353a-4c28-9a96-b9e267def122');
   assert.ok(actions.includes('profile_auth.link_delivery_failed'));
   assert.equal(actions.includes('profile_auth.link_issued'), false);

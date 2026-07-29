@@ -83,6 +83,7 @@ test('captura temporaria aceita email valido e permanece ativa apos valor invali
     return { id: contactId, email };
   };
   const contactId = '507f1f77bcf86cd799439012';
+  assert.match(chatProfileFlow.emailCapturePrompt(), /autoriza o Notify Flow/i);
   await chatProfileFlow.beginEmailCapture(contactId, 'whatsapp_cloud');
   await chatProfileFlow.beginEmailCapture(contactId, 'telegram');
 
@@ -97,16 +98,34 @@ test('captura temporaria aceita email valido e permanece ativa apos valor invali
   const valid = await chatProfileFlow.handleInbound({
     contactId,
     channel: 'whatsapp_cloud',
-    text: ' Samuel@Example.Test '
+    text: ' Samuel@Example.Test ',
+    providerEvidence: {
+      providerMessageId: 'wamid.secret-reference',
+      updateId: 'cloud-update-1'
+    }
   });
   assert.equal(valid.kind, 'email_updated');
-  assert.deepEqual(updates, [{
-    contactId,
-    email: 'Samuel@Example.Test',
-    options: { channel: 'whatsapp_cloud' }
-  }]);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].contactId, contactId);
+  assert.equal(updates[0].email, 'Samuel@Example.Test');
+  assert.equal(updates[0].options.channel, 'whatsapp_cloud');
+  assert.equal(updates[0].options.providerMessageId, 'wamid.secret-reference');
+  assert.equal(updates[0].options.updateId, 'cloud-update-1');
+  assert.match(updates[0].options.operationId, /^[0-9a-f-]{36}$/i);
+  assert.match(valid.text, /autorizado para receber notificacoes/i);
   assert.equal(await chatProfileFlow.pendingEmailCapture(contactId, 'whatsapp_cloud'), false);
   assert.equal(await chatProfileFlow.pendingEmailCapture(contactId, 'telegram'), false);
+});
+
+test('setEmailFromChat rejeita origem que nao seja um chat autenticado suportado', async () => {
+  await assert.rejects(
+    () => contactsManager.setEmailFromChat(
+      '507f1f77bcf86cd799439014',
+      'samuel@example.test',
+      { channel: 'email' }
+    ),
+    (error) => error.code === 'INVALID_EMAIL_SOURCE_CHANNEL'
+  );
 });
 
 test('captura nao vincula automaticamente email pertencente a outro perfil', async (context) => {
@@ -144,8 +163,8 @@ test('/cancelar limpa capturas do contato mesmo quando chegou pelo outro canal',
   assert.equal(await chatProfileFlow.pendingEmailCapture(contactId, 'telegram'), false);
 });
 
-test('setEmailFromChat cria identidade sem conceder consentimento e atualiza a mesma ficha', async (context) => {
-  restoreAfter(context, [[Contact, 'findById'], [Contact, 'findOne']]);
+test('setEmailFromChat cria identidade e concede consentimento explicito somente ao email informado', async (context) => {
+  restoreAfter(context, [[Contact, 'findById'], [Contact, 'findOne'], [ConsentEvent, 'create']]);
   const contact = {
     _id: '507f1f77bcf86cd799439014',
     displayNameEncrypted: encrypt('Samuel'),
@@ -177,20 +196,41 @@ test('setEmailFromChat cria identidade sem conceder consentimento e atualiza a m
     ownerFilter = filter;
     return query(null);
   };
+  const audits = [];
+  ConsentEvent.create = async (input) => {
+    audits.push(input);
+    return input;
+  };
 
   const updated = await contactsManager.setEmailFromChat(
     contact._id,
     'Samuel@Example.Test',
-    { channel: 'telegram' }
+    {
+      channel: 'telegram',
+      operationId: 'chat-email-grant-1',
+      providerMessageId: 'telegram-message-10',
+      updateId: 'telegram-update-20'
+    }
   );
 
   assert.equal(decrypt(contact.emailEncrypted), 'samuel@example.test');
   assert.equal(updated.email, 'samuel@example.test');
   const identity = contact.channels.find((item) => item.channel === 'email');
   assert.ok(identity);
-  assert.equal(identity.authorized, false);
-  assert.equal(identity.consentStatus, 'unknown');
+  assert.equal(identity.authorized, true);
+  assert.equal(identity.consentStatus, 'granted');
+  assert.equal(identity.consentSource, 'chat_email_explicit_opt_in');
   assert.equal(decrypt(identity.addressEncrypted), 'samuel@example.test');
+  assert.equal(audits.length, 1);
+  assert.equal(audits[0].status, 'granted');
+  assert.equal(audits[0].source, 'chat_email_explicit_opt_in');
+  const evidence = decrypt(audits[0].evidenceEncrypted, { json: true });
+  assert.equal(evidence.sourceChannel, 'telegram');
+  assert.equal(evidence.interaction, 'email_submitted_after_consent_prompt');
+  assert.equal(evidence.addressReferenceHash, searchHash('samuel@example.test'));
+  assert.equal(evidence.providerMessageReferenceHash, searchHash('chat-email-message:telegram:telegram-message-10'));
+  assert.equal(evidence.providerUpdateReferenceHash, searchHash('chat-email-update:telegram:telegram-update-20'));
+  assert.doesNotMatch(audits[0].evidenceEncrypted, /samuel@example\.test|telegram-message-10/);
   assert.deepEqual(ownerFilter.$or, [
     { emailHash: searchHash('samuel@example.test') },
     {
@@ -228,7 +268,7 @@ test('setEmailFromChat exige validacao quando o email pertence a outro contato',
   );
 });
 
-test('trocar endereco de email nao transfere consentimento concedido ao endereco antigo', async (context) => {
+test('trocar endereco revoga o consentimento antigo e cria um novo grant auditado para o email informado', async (context) => {
   restoreAfter(context, [[Contact, 'findById'], [Contact, 'findOne'], [ConsentEvent, 'create']]);
   const contact = {
     _id: '507f1f77bcf86cd799439016',
@@ -263,18 +303,26 @@ test('trocar endereco de email nao transfere consentimento concedido ao endereco
   const updated = await contactsManager.setEmailFromChat(
     contact._id,
     'novo@example.test',
-    { channel: 'whatsapp_cloud' }
+    { channel: 'whatsapp_cloud', operationId: 'chat-email-grant-replacement' }
   );
 
   const identity = contact.channels.find((item) => item.channel === 'email');
   assert.equal(updated.email, 'novo@example.test');
   assert.equal(decrypt(identity.addressEncrypted), 'novo@example.test');
-  assert.equal(identity.authorized, false);
-  assert.equal(identity.consentStatus, 'unknown');
+  assert.equal(identity.authorized, true);
+  assert.equal(identity.consentStatus, 'granted');
   assert.equal(identity.source, 'chat_profile');
-  assert.equal(audits.length, 1);
+  assert.equal(identity.consentSource, 'chat_email_explicit_opt_in');
+  assert.equal(audits.length, 2);
   assert.equal(audits[0].status, 'revoked');
   assert.equal(audits[0].source, 'chat_profile_email_change');
+  assert.equal(audits[1].status, 'granted');
+  assert.equal(audits[1].source, 'chat_email_explicit_opt_in');
+  const revocationEvidence = decrypt(audits[0].evidenceEncrypted, { json: true });
+  const grantEvidence = decrypt(audits[1].evidenceEncrypted, { json: true });
+  assert.equal(revocationEvidence.previousAddressReferenceHash, searchHash('antigo@example.test'));
+  assert.equal(revocationEvidence.replacementAddressReferenceHash, searchHash('novo@example.test'));
+  assert.equal(grantEvidence.addressReferenceHash, searchHash('novo@example.test'));
 });
 
 test('falha ao persistir troca de email nao cria auditoria de revogacao falsa', async (context) => {
@@ -373,10 +421,12 @@ test('falha temporaria de auditoria deixa marcador e o retry conclui a trilha', 
   await contactsManager.setEmailFromChat(
     contact._id,
     'novo@example.test',
-    { channel: 'telegram' }
+    { channel: 'telegram', operationId: 'chat-email-audit-retry' }
   );
 
-  assert.equal(auditAttempts, 2);
+  assert.equal(auditAttempts, 3);
+  assert.equal(contact.channels.find((item) => item.channel === 'email').authorized, true);
+  assert.equal(contact.channels.find((item) => item.channel === 'email').consentStatus, 'granted');
   assert.equal(
     decrypt(
       contact.channels.find((item) => item.channel === 'email').metadataEncrypted,
@@ -436,7 +486,7 @@ test('retry de cleanup nao duplica evento legal da mesma operacao', async (conte
     () => contactsManager.setEmailFromChat(
       contact._id,
       'novo@example.test',
-      { channel: 'whatsapp_cloud' }
+      { channel: 'whatsapp_cloud', operationId: 'chat-email-cleanup-retry' }
     ),
     /cleanup indisponivel/
   );
@@ -450,11 +500,13 @@ test('retry de cleanup nao duplica evento legal da mesma operacao', async (conte
   await contactsManager.setEmailFromChat(
     contact._id,
     'novo@example.test',
-    { channel: 'whatsapp_cloud' }
+    { channel: 'whatsapp_cloud', operationId: 'chat-email-cleanup-retry' }
   );
 
-  assert.equal(operationHashes.length, 2);
+  assert.equal(operationHashes.length, 3);
   assert.equal(operationHashes[0], operationHashes[1]);
+  assert.notEqual(operationHashes[1], operationHashes[2]);
+  assert.equal(contact.channels.find((item) => item.channel === 'email').authorized, true);
   assert.equal(
     decrypt(
       contact.channels.find((item) => item.channel === 'email').metadataEncrypted,

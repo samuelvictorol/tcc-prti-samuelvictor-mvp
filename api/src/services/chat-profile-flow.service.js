@@ -30,7 +30,8 @@ async function beginEmailCapture(contactId, channel) {
   const key = captureKey(contactId, channel);
   const state = {
     createdAt: new Date().toISOString(),
-    expiresAt: Date.now() + EMAIL_CAPTURE_TTL_SECONDS * 1000
+    expiresAt: Date.now() + EMAIL_CAPTURE_TTL_SECONDS * 1000,
+    operationId: crypto.randomUUID()
   };
   const redis = getRedis();
   if (redis) {
@@ -48,7 +49,7 @@ async function beginEmailCapture(contactId, channel) {
   return state;
 }
 
-async function pendingEmailCapture(contactId, channel) {
+async function emailCaptureState(contactId, channel) {
   const key = captureKey(contactId, channel);
   const redis = getRedis();
   if (redis) {
@@ -56,14 +57,18 @@ async function pendingEmailCapture(contactId, channel) {
       const value = await redis.get(key);
       if (value) {
         const state = JSON.parse(value);
-        return Number(state.expiresAt) > Date.now();
+        return Number(state.expiresAt) > Date.now() ? state : null;
       }
     } catch (_error) {
       // Continua pelo fallback local.
     }
   }
   pruneLocalCaptures();
-  return Boolean(localCaptures.get(key));
+  return localCaptures.get(key) || null;
+}
+
+async function pendingEmailCapture(contactId, channel) {
+  return Boolean(await emailCaptureState(contactId, channel));
 }
 
 async function clearEmailCapture(contactId, channel) {
@@ -85,6 +90,7 @@ function emailCapturePrompt() {
   return [
     'Quer cadastrar ou atualizar seu email?',
     'Responda apenas com um endereco valido, por exemplo: nome@exemplo.com.',
+    'Ao enviar, voce autoriza o Notify Flow a entregar notificacoes nesse email. A permissao pode ser revogada quando quiser no Meu perfil.',
     'Para sair sem alterar, envie /cancelar.'
   ].join('\n');
 }
@@ -139,7 +145,7 @@ function exactCommand(text, command) {
     === String(command).toLocaleLowerCase('pt-BR');
 }
 
-async function handleInbound({ contactId, channel, text, profileUrl }) {
+async function handleInbound({ contactId, channel, text, profileUrl, providerEvidence = {} }) {
   const normalizedText = String(text || '').normalize('NFKC').trim();
   if (!normalizedText) return { handled: false };
 
@@ -161,7 +167,7 @@ async function handleInbound({ contactId, channel, text, profileUrl }) {
     };
   }
 
-  const pending = await pendingEmailCapture(contactId, channel);
+  const pending = await emailCaptureState(contactId, channel);
   if (!pending) return { handled: false };
 
   // Outros comandos continuam sendo tratados pelo fluxo principal do bot.
@@ -177,13 +183,18 @@ async function handleInbound({ contactId, channel, text, profileUrl }) {
   }
 
   try {
-    const contact = await contactsManager.setEmailFromChat(contactId, parsed.data, { channel });
+    const contact = await contactsManager.setEmailFromChat(contactId, parsed.data, {
+      channel,
+      operationId: pending.operationId,
+      providerMessageId: providerEvidence.providerMessageId,
+      updateId: providerEvidence.updateId
+    });
     await clearEmailCaptures(contactId);
     return {
       handled: true,
       kind: 'email_updated',
       contact,
-      text: `Email atualizado com sucesso para ${contact.email}. A permissao de notificacoes por email continua separada e pode ser ajustada no Meu perfil.`
+      text: `Pronto! O email ${contact.email} foi atualizado e esta autorizado para receber notificacoes. Voce pode revogar essa permissao quando quiser no Meu perfil.`
     };
   } catch (error) {
     if ([
@@ -209,6 +220,7 @@ function resetLocalStateForTests() {
 module.exports = {
   EMAIL_CAPTURE_TTL_SECONDS,
   beginEmailCapture,
+  emailCaptureState,
   pendingEmailCapture,
   clearEmailCapture,
   clearEmailCaptures,

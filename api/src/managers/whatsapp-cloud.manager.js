@@ -368,7 +368,10 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
   if (!address) return resultSummary;
   const inboundText = String(message.text?.body || '');
   const profileManager = require('./profile.manager');
-  const profileLoginRequested = Boolean(profileManager.parseProfileLoginInvocation(inboundText));
+  const signedProfileLoginInvocation = profileManager.parseProfileLoginInvocation(inboundText);
+  const directProfileLoginRequested = /^\/login$/i
+    .test(inboundText.normalize('NFKC').trim());
+  const profileLoginRequested = directProfileLoginRequested || Boolean(signedProfileLoginInvocation);
   const strictPermissionGranted = await settingsManager.isWhatsappPermissionCommand(inboundText);
   const markerCandidate = inboundText.normalize('NFKC').trim().split(/\s+/).at(-1);
   const hasValidAttributionMarker = !strictPermissionGranted
@@ -456,13 +459,31 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
   });
   const conversationId = recordedInbound?.conversation?.id;
   if (profileLoginRequested && conversationId) {
-    const activation = await profileManager.activateProfileLoginFromWhatsapp({
-      contactId: contact.id,
-      text: inboundText
-    });
+    let activation;
+    if (directProfileLoginRequested) {
+      try {
+        const link = await profileManager.createDirectProfileLink(contact.id, {
+          source: 'whatsapp_login_command'
+        });
+        activation = { activated: true, direct: true, ...link };
+      } catch (error) {
+        activation = {
+          activated: false,
+          direct: true,
+          reasonCode: error.code || 'PROFILE_LINK_ISSUE_FAILED'
+        };
+      }
+    } else {
+      activation = await profileManager.activateProfileLoginFromWhatsapp({
+        contactId: contact.id,
+        text: inboundText
+      });
+    }
     const text = activation.activated
-      ? `Seu acesso seguro esta pronto. Abra o link abaixo para entrar no Meu perfil:\n${activation.url}\n\nO link pode ser usado uma vez e expira em ate 7 dias.`
-      : 'Este pedido de acesso nao esta mais valido. Volte ao Meu perfil, informe seu telefone e tente novamente.';
+      ? `Seu acesso seguro esta pronto. Abra o link abaixo para entrar no Meu perfil:\n${activation.url}\n\nO link pode ser usado uma vez e expira em ate 7 dias.\nQuando precisar de um novo acesso, envie /login nesta conversa.`
+      : directProfileLoginRequested
+        ? 'Nao consegui gerar seu link de acesso agora. Envie /login novamente em alguns instantes.'
+        : 'Este pedido de acesso nao esta mais valido. Volte ao Meu perfil, informe seu telefone e tente novamente.';
     let deliveryError = null;
     try {
       await sendConversationText(conversationId, text, { useCase: 'profile_auth_link' });
@@ -488,7 +509,9 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
         ? 'Link temporario do Meu perfil emitido pela conversa do WhatsApp'
         : activation.activated
           ? 'O link temporario foi revogado porque a entrega pelo WhatsApp falhou'
-          : 'Comando de login recebido sem solicitacao valida',
+          : directProfileLoginRequested
+            ? 'Comando direto de login recebido, mas o link temporario nao pode ser emitido'
+            : 'Comando de login recebido sem solicitacao valida',
       context: {
         contactId: contact.id,
         challengeId: activation.challengeId || null,
@@ -503,7 +526,10 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
         contactId: contact.id,
         channel: 'whatsapp_cloud',
         text: inboundText,
-        profileUrl: configuredProfileUrl()
+        profileUrl: configuredProfileUrl(),
+        providerEvidence: {
+          providerMessageId: message.id
+        }
       });
       if (chatResult.handled) {
         await sendConversationText(conversationId, chatResult.text, { useCase: 'chat_profile' });
@@ -543,7 +569,7 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
           : '\nNenhum convite foi vinculado a este cadastro ainda.';
         await sendConversationText(
           conversationId,
-          `Seu cadastro ja existe e sua permissao foi atualizada.${inviteText}\nAcesse seus dados e preferencias pelo link seguro (uso unico, valido por ate 7 dias):\n${profileLink.url}`,
+          `Seu cadastro ja existe e sua permissao foi atualizada.${inviteText}\nAcesse seus dados e preferencias pelo link seguro (uso unico, valido por ate 7 dias):\n${profileLink.url}\n\nDepois, envie /login a qualquer momento para gerar um novo link temporario.`,
           { useCase: 'profile_auth_existing_contact' }
         );
       } catch (error) {
@@ -560,7 +586,7 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
     try {
       await sendConversationText(
         conversationId,
-        chatProfileFlow.emailCapturePrompt(),
+        `${chatProfileFlow.emailCapturePrompt()}\n\nDica: envie /login a qualquer momento para receber um link temporario de acesso ao Meu perfil.`,
         { useCase: 'chat_profile_email_prompt' }
       );
     } catch (error) {

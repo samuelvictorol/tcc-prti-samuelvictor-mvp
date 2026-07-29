@@ -64,4 +64,15 @@ describe('autorizações manuais do contato', () => {
     expect(source).toContain('!pendingWhatsappCloud.value && form.consents.whatsappCloud')
     expect(source).toContain("item.pending ? 'Cancelar autorização pendente'")
   })
+
+  it('exibe e persiste a permissão do Telegram quando a identidade do bot existe', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/components/ContactDialog.vue', import.meta.url)), 'utf8')
+
+    expect(source).toContain("consents: { telegram: false, email: false, whatsappCloud: false }")
+    expect(source).toContain("key: 'telegram'")
+    expect(source).toContain("channel: 'telegram'")
+    expect(source).toContain("available: Boolean(identity(props.contact || props.initial, 'telegram'))")
+    expect(source).toContain("telegram: Boolean(telegramIdentity?.authorized && telegramIdentity?.consentStatus === 'granted')")
+    expect(source).toContain('Telegram, WhatsApp Cloud e Email permanecem separados')
+  })
 })

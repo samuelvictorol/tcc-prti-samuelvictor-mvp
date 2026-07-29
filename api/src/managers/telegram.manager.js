@@ -391,6 +391,74 @@ async function issueSecureProfileLink(contactId, source) {
   }
 }
 
+function isDirectProfileLoginCommand(text) {
+  return /^\/login(?:@[a-z0-9_]{3,32})?$/i
+    .test(String(text || '').normalize('NFKC').trim());
+}
+
+async function sendDirectProfileLogin(chatId, contactId) {
+  const profileLink = await issueSecureProfileLink(contactId, 'telegram_login_command');
+  if (!profileLink?.url) {
+    await call('sendMessage', {
+      chat_id: String(chatId),
+      text: 'Nao consegui gerar seu link de acesso agora. Envie /login novamente em alguns instantes.'
+    });
+    await logsManager.create({
+      level: 'warn',
+      channel: 'telegram',
+      action: 'profile_auth.link_skipped',
+      message: 'Comando direto de login recebido, mas o link temporario nao pode ser emitido',
+      context: { contactId, reasonCode: 'PROFILE_LINK_UNAVAILABLE' }
+    }).catch(() => undefined);
+    return { delivered: false, reasonCode: 'PROFILE_LINK_UNAVAILABLE' };
+  }
+
+  const text = [
+    'Seu link temporario para entrar no Meu perfil esta pronto:',
+    profileLink.url,
+    '',
+    'Ele funciona uma unica vez e expira em ate 7 dias.',
+    'Quando precisar de um novo acesso, envie /login nesta conversa.'
+  ].join('\n');
+  try {
+    const result = await call('sendMessage', {
+      chat_id: String(chatId),
+      text
+    });
+    await logsManager.create({
+      channel: 'telegram',
+      action: 'profile_auth.link_issued',
+      message: 'Link temporario do Meu perfil emitido pelo comando direto no Telegram',
+      context: {
+        contactId,
+        challengeId: profileLink.challengeId || null,
+        messageId: result?.message_id || null
+      }
+    }).catch(() => undefined);
+    return { delivered: true, result };
+  } catch (error) {
+    if (profileLink.challengeId) {
+      const profileManager = require('./profile.manager');
+      await profileManager.revokeProfileLink(
+        profileLink.challengeId,
+        'telegram_link_delivery_failed'
+      ).catch(() => undefined);
+    }
+    await logsManager.create({
+      level: 'warn',
+      channel: 'telegram',
+      action: 'profile_auth.link_delivery_failed',
+      message: 'O link temporario foi revogado porque a entrega pelo Telegram falhou',
+      context: {
+        contactId,
+        challengeId: profileLink.challengeId || null,
+        errorCode: error.code || 'PROFILE_LINK_DELIVERY_FAILED'
+      }
+    }).catch(() => undefined);
+    throw error;
+  }
+}
+
 async function sendOnboardingMenu(chatId, command, contact = {}, options = {}) {
   const [profileLink, onboardingTemplate] = await Promise.all([
     issueSecureProfileLink(contact.id, 'telegram_onboarding'),
@@ -411,6 +479,9 @@ async function sendOnboardingMenu(chatId, command, contact = {}, options = {}) {
   });
   if (!String(onboardingTemplate).includes('{status}')) {
     onboardingText = `${onboardingText}\n\n${contactStatus}`;
+  }
+  if (!/\/login\b/i.test(onboardingText)) {
+    onboardingText = `${onboardingText}\n\nPara entrar novamente no Meu perfil, envie /login a qualquer momento e receba um link temporario de uso unico.`;
   }
   onboardingText = [...onboardingText].slice(0, 4096).join('');
   if (!profileUrl) {
@@ -768,10 +839,13 @@ async function handleOnboardingCallback(update, query) {
       await answerMenuCallback(query.id, 'A URL publica do Meu perfil ainda nao esta disponivel. Tente novamente apos configurar o acesso HTTPS.', true);
       return { received: true, updateId: update.update_id, callback: 'onboarding_profile_unavailable' };
     }
-    const profileText = await configuredTelegramMessage(
+    let profileText = await configuredTelegramMessage(
       'TELEGRAM_PROFILE_MESSAGE',
       settingsManager.DEFAULT_TELEGRAM_MESSAGES.profile
     );
+    if (!/\/login\b/i.test(profileText)) {
+      profileText = `${profileText}\n\nDepois, envie /login a qualquer momento para gerar um novo link temporario.`;
+    }
     await answerMenuCallback(query.id, 'Link do Meu perfil atualizado.');
     await call('sendMessage', {
       chat_id: chatId,
@@ -781,10 +855,13 @@ async function handleOnboardingCallback(update, query) {
     return { received: true, updateId: update.update_id, callback: 'onboarding_profile' };
   }
 
-  const helpText = await configuredTelegramMessage(
+  let helpText = await configuredTelegramMessage(
     'TELEGRAM_HELP_MESSAGE',
     settingsManager.DEFAULT_TELEGRAM_MESSAGES.help
   );
+  if (!/\/login\b/i.test(helpText)) {
+    helpText = `${helpText}\n\nEnvie /login a qualquer momento para receber um link temporario e seguro de acesso ao Meu perfil.`;
+  }
   await answerMenuCallback(query.id, 'Ajuda aberta.');
   await call('sendMessage', {
     chat_id: chatId,
@@ -1046,29 +1123,39 @@ async function webhook(update, providedSecret) {
       let chatProfileHandled = false;
       if (message.text) {
         try {
+          const directLoginRequested = isDirectProfileLoginCommand(message.text);
           const ownProfileRequested = /^\/meu-perfil(?:@[a-z0-9_]{3,32})?$/i
             .test(String(message.text).trim());
           const directProfileLink = ownProfileRequested
             ? await issueSecureProfileLink(contact.id, 'telegram_profile_command')
             : null;
-          const chatResult = await chatProfileFlow.handleInbound({
-            contactId: contact.id,
-            channel: 'telegram',
-            text: message.text,
-            profileUrl: directProfileLink?.url || await publicProfileUrl()
-          });
-          chatProfileHandled = chatResult.handled;
-          if (chatResult.handled) {
-            await call('sendMessage', {
-              chat_id: String(chat.id),
-              text: chatResult.text
-            });
-            await logsManager.create({
+          if (directLoginRequested) {
+            await sendDirectProfileLogin(chat.id, contact.id);
+            chatProfileHandled = true;
+          } else {
+            const chatResult = await chatProfileFlow.handleInbound({
+              contactId: contact.id,
               channel: 'telegram',
-              action: `chat_profile.${chatResult.kind}`,
-              message: 'Comando de perfil processado na conversa do Telegram',
-              context: { contactId: contact.id, kind: chatResult.kind }
-            }).catch(() => undefined);
+              text: message.text,
+              profileUrl: directProfileLink?.url || await publicProfileUrl(),
+              providerEvidence: {
+                providerMessageId: message.message_id,
+                updateId: update.update_id
+              }
+            });
+            chatProfileHandled = chatResult.handled;
+            if (chatResult.handled) {
+              await call('sendMessage', {
+                chat_id: String(chat.id),
+                text: chatResult.text
+              });
+              await logsManager.create({
+                channel: 'telegram',
+                action: `chat_profile.${chatResult.kind}`,
+                message: 'Comando de perfil processado na conversa do Telegram',
+                context: { contactId: contact.id, kind: chatResult.kind }
+              }).catch(() => undefined);
+            }
           }
         } catch (error) {
           await logsManager.create({

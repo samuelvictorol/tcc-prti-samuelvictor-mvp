@@ -1285,6 +1285,10 @@ function validChatEmail(value) {
 async function setEmailFromChat(id, value, context = {}) {
   const email = validChatEmail(value);
   if (!email) throw new ApiError(422, 'Email invalido', null, 'INVALID_EMAIL');
+  const sourceChannel = String(context.channel || '').trim();
+  if (!['telegram', 'whatsapp_cloud'].includes(sourceChannel)) {
+    throw new ApiError(422, 'Canal de origem da atualizacao de email invalido', null, 'INVALID_EMAIL_SOURCE_CHANNEL');
+  }
   const contact = await getRawById(id);
   const emailHash = searchHash(email);
   const owner = await Contact.findOne({
@@ -1324,7 +1328,9 @@ async function setEmailFromChat(id, value, context = {}) {
         purpose: 'notification_delivery',
         operationId: crypto.randomUUID(),
         evidence: {
-          channel: context.channel || null,
+          channel: sourceChannel,
+          previousAddressReferenceHash: retainedIdentity.addressHash,
+          replacementAddressReferenceHash: emailHash,
           replacementRequiresConsent: true
         }
       };
@@ -1335,7 +1341,9 @@ async function setEmailFromChat(id, value, context = {}) {
         purpose: 'notification_delivery',
         operationId: pendingAudit.operationId,
         evidence: {
-          channel: pendingAudit.channel || context.channel || null,
+          channel: pendingAudit.channel || sourceChannel,
+          previousAddressReferenceHash: pendingAudit.previousAddressReferenceHash,
+          replacementAddressReferenceHash: pendingAudit.replacementAddressReferenceHash || emailHash,
           replacementRequiresConsent: true,
           operationId: pendingAudit.operationId
         }
@@ -1357,11 +1365,13 @@ async function setEmailFromChat(id, value, context = {}) {
     retainedIdentity.metadataEncrypted = encrypt({
       ...metadata,
       lastProfileUpdateSource: 'chat',
-      lastProfileUpdateChannel: context.channel || null,
+      lastProfileUpdateChannel: sourceChannel,
       ...(revocationAudit ? {
         pendingConsentAudit: {
           kind: 'email_replacement_revocation',
           channel: revocationAudit.evidence.channel,
+          previousAddressReferenceHash: revocationAudit.evidence.previousAddressReferenceHash,
+          replacementAddressReferenceHash: revocationAudit.evidence.replacementAddressReferenceHash,
           operationId: revocationAudit.operationId,
           createdAt: pendingAudit?.createdAt || new Date().toISOString()
         }
@@ -1381,7 +1391,7 @@ async function setEmailFromChat(id, value, context = {}) {
       interactedAt: new Date(),
       metadata: {
         lastProfileUpdateSource: 'chat',
-        lastProfileUpdateChannel: context.channel || null
+        lastProfileUpdateChannel: sourceChannel
       }
     }));
   }
@@ -1412,7 +1422,30 @@ async function setEmailFromChat(id, value, context = {}) {
       throw error;
     }
   }
-  return serialize(contact);
+  const operationId = context.operationId || crypto.randomUUID();
+  const evidence = {
+    sourceChannel,
+    interaction: 'email_submitted_after_consent_prompt',
+    addressReferenceHash: emailHash,
+    operationId
+  };
+  if (context.providerMessageId !== undefined && context.providerMessageId !== null) {
+    evidence.providerMessageReferenceHash = searchHash(
+      `chat-email-message:${sourceChannel}:${String(context.providerMessageId)}`
+    );
+  }
+  if (context.updateId !== undefined && context.updateId !== null) {
+    evidence.providerUpdateReferenceHash = searchHash(
+      `chat-email-update:${sourceChannel}:${String(context.updateId)}`
+    );
+  }
+  return setChannelConsent(contact._id, 'email', 'granted', {
+    source: 'chat_email_explicit_opt_in',
+    legalBasis: 'consent',
+    purpose: 'notification_delivery',
+    operationId,
+    evidence
+  });
 }
 
 async function ensureEmailIdentity(id) {
@@ -1475,11 +1508,29 @@ async function repairLegacyWhatsappPhones() {
 }
 
 async function setChannelConsent(id, channel, status, context = {}) {
-  if (channel === 'telegram' && status === 'granted' && !context.providerManaged) {
+  const isTelegramGrant = channel === 'telegram' && status === 'granted';
+  const isAuthenticatedAdminGrant = isTelegramGrant
+    && context.source === 'admin_manual'
+    && Boolean(context.actorId);
+  if (isTelegramGrant && !context.providerManaged && !isAuthenticatedAdminGrant) {
     throw new ApiError(403, 'Consentimento Telegram so pode ser concedido por interacao privada verificada', null, 'PROVIDER_CONSENT_MANAGED');
   }
   const contact = await getRawById(id);
   const identities = contact.channels.filter((item) => item.channel === channel);
+  if (
+    isAuthenticatedAdminGrant
+    && !identities.some((identity) => (
+      identity.addressEncrypted
+      && String(identity.source || '').startsWith('telegram_')
+    ))
+  ) {
+    throw new ApiError(
+      403,
+      'A permissao administrativa exige uma identidade Telegram verificada pelo bot',
+      null,
+      'TELEGRAM_IDENTITY_UNVERIFIED'
+    );
+  }
   const pendingIndex = WHATSAPP_CHANNELS.includes(channel)
     ? whatsappPendingList(contact).findIndex((pending) => pending.channel === channel)
     : -1;

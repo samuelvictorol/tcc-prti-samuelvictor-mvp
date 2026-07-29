@@ -73,7 +73,7 @@ test('consentimento manual limita canais e exige confirmacao para remover permis
   assert.equal(granted.data.body.source, undefined);
   assert.equal(consentSchema.safeParse({ params, body: { channel: 'whatsapp_cloud', status: 'revoked' } }).success, false);
   assert.equal(consentSchema.safeParse({ params, body: { channel: 'email', status: 'denied', confirmed: true } }).success, true);
-  assert.equal(consentSchema.safeParse({ params, body: { channel: 'telegram', status: 'granted' } }).success, false);
+  assert.equal(consentSchema.safeParse({ params, body: { channel: 'telegram', status: 'granted' } }).success, true);
 });
 
 test('envio Telegram exige contato/grupo cadastrado e modo coerente', () => {

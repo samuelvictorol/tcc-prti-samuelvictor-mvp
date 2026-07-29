@@ -32,18 +32,20 @@ test('alteracao manual de permissao deriva origem administrativa e persiste ator
   const actorId = '507f1f77bcf86cd799439012';
   contactsManager.getById = async () => ({ id: contactId });
   let consentContext;
-  contactsManager.setChannelConsent = async (_id, _channel, _status, input) => {
+  let consentChannel;
+  contactsManager.setChannelConsent = async (_id, channel, _status, input) => {
+    consentChannel = channel;
     consentContext = input;
-    return { id: contactId, channels: [{ channel: 'whatsapp_cloud', consentStatus: 'revoked' }] };
+    return { id: contactId, channels: [{ channel: 'telegram', consentStatus: 'revoked' }] };
   };
   ConsentEvent.findOne = () => ({
     sort() { return this; },
     select() { return this; },
-    async lean() { return { channel: 'whatsapp_cloud', status: 'revoked', source: 'admin_manual', actor: actorId }; }
+    async lean() { return { channel: 'telegram', status: 'revoked', source: 'admin_manual', actor: actorId }; }
   });
 
   const result = await privacyManager.recordConsent(contactId, {
-    channel: 'whatsapp_cloud',
+    channel: 'telegram',
     status: 'revoked',
     confirmed: true,
     evidence: { reason: 'Solicitacao do cliente' },
@@ -52,6 +54,7 @@ test('alteracao manual de permissao deriva origem administrativa e persiste ator
 
   assert.equal(consentContext.source, 'admin_manual');
   assert.equal(consentContext.actorId, actorId);
+  assert.equal(consentChannel, 'telegram');
   assert.deepEqual(consentContext.evidence, { reason: 'Solicitacao do cliente', confirmed: true });
   assert.equal(result.contact.channels[0].consentStatus, 'revoked');
 });

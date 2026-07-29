@@ -452,8 +452,8 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
                       <q-badge
                         v-for="origin in compactInviteOrigins(props.row).slice(0, 2)"
                         :key="origin.id"
-                        outline
-                        color="secondary"
+                        color="blue-7"
+                        text-color="white"
                         icon="link"
                         :label="origin.title"
                       >
@@ -529,8 +529,8 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
                   <q-badge
                     v-for="origin in compactInviteOrigins(props.row, 'group')"
                     :key="origin.id"
-                    outline
-                    color="secondary"
+                    color="blue-7"
+                    text-color="white"
                     icon="link"
                     :label="origin.title"
                   />

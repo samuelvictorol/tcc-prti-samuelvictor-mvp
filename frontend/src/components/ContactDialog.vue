@@ -37,7 +37,7 @@ const emptyForm = () => ({
   telegramUsername: '',
   notes: '',
   tagsText: '',
-  consents: { email: false, whatsappCloud: false },
+  consents: { telegram: false, email: false, whatsappCloud: false },
 })
 const form = reactive(emptyForm())
 const originalConsents = reactive(emptyForm().consents)
@@ -62,6 +62,17 @@ const pendingWhatsappCloud = computed(() => pendingWhatsappConsent(props.contact
 const providerIdentitySummaries = computed(() => contactIdentitySummaries(props.contact || props.initial)
   .filter((item) => ['telegram', 'whatsapp_cloud'].includes(item.channel)))
 const permissionCards = computed(() => [
+  {
+    key: 'telegram',
+    channel: 'telegram',
+    label: 'Telegram',
+    icon: 'send',
+    color: 'info',
+    available: Boolean(identity(props.contact || props.initial, 'telegram')),
+    unavailableText: 'O contato precisa iniciar o bot para registrar a identidade do Telegram.',
+    identity: identity(props.contact || props.initial, 'telegram'),
+    pending: null,
+  },
   {
     key: 'whatsappCloud',
     channel: 'whatsapp_cloud',
@@ -100,6 +111,7 @@ const permissionCards = computed(() => [
 
 function reset() {
   const source = props.contact || props.initial || {}
+  const telegramIdentity = identity(source, 'telegram')
   const emailIdentity = identity(source, 'email')
   const cloudIdentity = identity(source, 'whatsapp_cloud')
   Object.assign(form, emptyForm(), {
@@ -110,6 +122,7 @@ function reset() {
     notes: source.metadata?.notes || source.notes || '',
     tagsText: Array.isArray(source.tags) ? source.tags.join(', ') : '',
     consents: {
+      telegram: Boolean(telegramIdentity?.authorized && telegramIdentity?.consentStatus === 'granted'),
       email: Boolean(emailIdentity?.authorized && emailIdentity?.consentStatus === 'granted'),
       whatsappCloud: Boolean(cloudIdentity?.authorized && cloudIdentity?.consentStatus === 'granted') || Boolean(pendingWhatsappCloud.value),
     },
@@ -358,7 +371,7 @@ watch(() => props.modelValue, (open) => open && reset())
                 <ContextHelp
                   title="Permissões dos canais"
                   tooltip="Entenda como as permissões são aplicadas"
-                  text="O comando configurado recebido pela API oficial autoriza notificações no WhatsApp Cloud. WhatsApp Cloud e Email permanecem separados para ajustes individuais; toda remoção exige confirmação."
+                  text="O comando configurado recebido pela API oficial autoriza notificações no WhatsApp Cloud. Telegram, WhatsApp Cloud e Email permanecem separados para ajustes individuais; o Telegram só aparece disponível depois que o contato inicia o bot e toda remoção exige confirmação."
                 />
               </div>
               <div class="permission-grid">
@@ -444,7 +457,7 @@ watch(() => props.modelValue, (open) => open && reset())
 .permission-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
 }
 
 .permission-card {

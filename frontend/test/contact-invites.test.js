@@ -60,5 +60,7 @@ describe('origens e grupos por convite', () => {
     expect(contactsPage).toContain('`/contact-groups/${editingId.value}/sync-invite`')
     expect(contactsPage).toContain('nunca remove membros atuais')
     expect(contactsPage).not.toContain("mode: 'replace'")
+    expect(contactsPage).toContain('color="blue-7"')
+    expect(contactsPage).toContain('text-color="white"')
   })
 })

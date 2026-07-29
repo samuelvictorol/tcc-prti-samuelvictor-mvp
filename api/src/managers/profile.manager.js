@@ -399,7 +399,7 @@ async function createDirectProfileLink(contactId, options = {}) {
     });
     const link = await persistProfileLink(contactId, challenge, options.source || 'trusted_inbound_channel');
     if (!link) throw new ApiError(409, 'Nao foi possivel emitir o link de acesso', null, 'PROFILE_LINK_ISSUE_FAILED');
-    return link;
+    return { challengeId: challenge.challengeId, ...link };
   } finally {
     await releaseLock();
   }

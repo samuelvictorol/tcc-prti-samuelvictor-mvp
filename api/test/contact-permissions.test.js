@@ -372,3 +372,48 @@ test('alteracao manual persiste ator e origem na identidade e no evento', async 
   assert.equal(audit.source, 'admin_manual');
   assert.equal(String(audit.actor), actorId);
 });
+
+test('administrador autenticado concede Telegram somente sobre identidade real do bot', async (context) => {
+  const originals = { findById: Contact.findById, consent: ConsentEvent.create };
+  context.after(() => {
+    Contact.findById = originals.findById;
+    ConsentEvent.create = originals.consent;
+  });
+  const actorId = '507f1f77bcf86cd799439099';
+  const identity = identityFixture({
+    channel: 'telegram',
+    addressEncrypted: encrypt('987654321'),
+    addressHash: searchHash('987654321'),
+    source: 'telegram_webhook',
+    metadataEncrypted: encrypt({ chatId: '987654321', userId: '987654321' })
+  });
+  const contact = contactFixture(identity);
+  Contact.findById = () => selected(contact);
+  let audit;
+  ConsentEvent.create = async (input) => { audit = input; return input; };
+
+  const result = await contactsManager.setChannelConsent(contact._id, 'telegram', 'granted', {
+    source: 'admin_manual',
+    actorId
+  });
+
+  assert.equal(result.channels[0].authorized, true);
+  assert.equal(result.channels[0].consentStatus, 'granted');
+  assert.equal(result.channels[0].consentSource, 'admin_manual');
+  assert.equal(result.channels[0].consentChangedBy, actorId);
+  assert.equal(audit.channel, 'telegram');
+  assert.equal(audit.source, 'admin_manual');
+  assert.equal(String(audit.actor), actorId);
+});
+
+test('grant manual do Telegram continua bloqueado sem ator administrativo autenticado', async () => {
+  await assert.rejects(
+    () => contactsManager.setChannelConsent(
+      '507f1f77bcf86cd799439011',
+      'telegram',
+      'granted',
+      { source: 'admin_manual' }
+    ),
+    (error) => error.statusCode === 403 && error.code === 'PROVIDER_CONSENT_MANAGED'
+  );
+});
