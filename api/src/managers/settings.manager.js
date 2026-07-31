@@ -42,11 +42,8 @@ const DEFAULT_TELEGRAM_MESSAGES = Object.freeze({
     '',
     '{status}',
     '',
-    'Use as opções abaixo para vincular seu telefone, consultar o Meu perfil ou abrir a ajuda.',
-    '',
     '{invites}',
     '',
-    'Comando utilizado: {command}'
   ].join('\n'),
   phoneShare: 'Para unir Telegram e WhatsApp no mesmo cadastro, compartilhe seu próprio telefone pelo botão oficial abaixo. O número só será aceito se pertencer a você.',
   profile: 'Seu acesso seguro ao Meu perfil está pronto. O botão abaixo é pessoal, funciona uma única vez e expira em até 7 dias.',

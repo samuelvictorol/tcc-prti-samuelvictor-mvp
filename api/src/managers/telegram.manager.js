@@ -469,8 +469,8 @@ async function sendOnboardingMenu(chatId, command, contact = {}, options = {}) {
   ]);
   const profileUrl = profileLink?.url || null;
   const contactStatus = options.existing
-    ? 'Seu cadastro já existia e foi encontrado com segurança; apenas atualizamos a autorização e os dados recentes.'
-    : 'Seu cadastro foi criado com segurança a partir desta conversa.';
+    ? 'Bem Vindo(a) Novamente! apenas atualizamos a autorização e os dados recentes.'
+    : 'Bem Vindo(a)!';
   let onboardingText = renderTelegramMessage(onboardingTemplate, {
     name: contact.displayName || 'tudo bem',
     command: String(command || '/verify-me').slice(0, 80),

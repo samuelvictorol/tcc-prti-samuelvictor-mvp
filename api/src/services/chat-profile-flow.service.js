@@ -629,10 +629,8 @@ async function clearEmailCaptures(contactId) {
 function emailCapturePrompt() {
   return [
     'Quer cadastrar ou atualizar seu email?',
-    'Responda apenas com um endereco valido, por exemplo: nome@exemplo.com.',
-    'Enviaremos um codigo de verificacao para confirmar que o endereco pertence a voce.',
-    'Somente depois da confirmacao o email sera salvo e autorizado para notificacoes. A permissao pode ser revogada quando quiser no Meu perfil.',
-    'Para sair sem alterar, envie /cancelar.'
+    'Responda apenas com um endereço válido, por exemplo: nome@exemplo.com.',
+    'A permissão pode ser revogada quando quiser no Meu perfil.',
   ].join('\n');
 }
 

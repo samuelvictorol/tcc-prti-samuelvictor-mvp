@@ -91,7 +91,7 @@ async function submit() {
         <div class="story-points">
           <div><q-icon name="verified_user" /><span>Controles de privacidade e LGPD</span></div>
           <div><q-icon name="conversion_path" /><span>Entregas multicanal rastreáveis</span></div>
-          <div><q-icon name="shield_lock" /><span>Credenciais protegidas no servidor</span></div>
+          <div><q-icon name="mdi-shield-lock-outline" /><span>Credenciais protegidas no servidor</span></div>
         </div>
       </div>
       <div class="orb orb--one" />
@@ -369,7 +369,21 @@ h1 {
 }
 
 .story-points .q-icon {
+  display: grid;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid rgba(130, 248, 230, 0.22);
+  border-radius: 10px;
+  background: rgba(130, 248, 230, 0.1);
   color: #82f8e6;
+  font-size: 18px;
+}
+
+.story-points span {
+  min-width: 0;
+  line-height: 1.35;
 }
 
 .orb {

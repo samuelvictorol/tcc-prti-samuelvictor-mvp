@@ -63,6 +63,8 @@ describe('escolha de acesso no login', () => {
     expect(page).toContain("window.open(url, '_blank', 'noopener,noreferrer')")
     expect(page).toContain('popup.opener = null')
     expect(page).toContain('@media (max-width: 520px)')
+    expect(page).toContain('mdi-shield-lock-outline')
+    expect(page).not.toContain('name="shield_lock"')
     expect(service).toContain("get('/my-profile/access-config')")
   })
 })

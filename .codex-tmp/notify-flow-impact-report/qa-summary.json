@@ -1,0 +1,24 @@
+{
+  "file": "C:\\Users\\samuel\\tcc\\notify-app\\docs\\Relatorio-de-Impacto-Notify-Flow-Gate-4-Samuel-Victor-Oliveira-Lima.docx",
+  "size_bytes": 1996879,
+  "paragraphs": 304,
+  "words": 5758,
+  "headings": 50,
+  "tables": 15,
+  "inline_images": 6,
+  "sections": 2,
+  "figure_captions": [
+    "Figura 1 — Arquitetura ponta a ponta do Notify Flow",
+    "Figura 2 — Jornada de consentimento e vínculo de identidades",
+    "Figura 3 — Área pública Meu Perfil em desktop e dispositivo móvel",
+    "Figura 4 — Preparação do WhatsApp Cloud para produção",
+    "Figura 5 — Ciclo de entrega confiável, tentativas e auditoria",
+    "Figura 1 — Arquitetura ponta a ponta do Notify Flow",
+    "Figura 2 — Jornada de consentimento e vínculo de identidades",
+    "Figura 3 — Área pública Meu Perfil em desktop e dispositivo móvel",
+    "Figura 4 — Preparação do WhatsApp Cloud para produção",
+    "Figura 5 — Ciclo de entrega confiável, tentativas e auditoria"
+  ],
+  "failures": [],
+  "warnings": []
+}

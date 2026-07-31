@@ -65,6 +65,8 @@ describe('canais e alertas sonoros', () => {
     expect(soundFile('notify')).toBe('/notify.mp3')
     expect(soundFile('whatsapp')).toBe('/whatsapp.mp3')
     expect(soundFile('telegram')).toBe('/telegram.mp3')
+    expect(readFileSync(fileURLToPath(new URL('../public/whatsapp.mp3', import.meta.url))).byteLength)
+      .toBeLessThan(64 * 1024)
     await expect(playAppSound('notify')).resolves.toBe(false)
   })
 

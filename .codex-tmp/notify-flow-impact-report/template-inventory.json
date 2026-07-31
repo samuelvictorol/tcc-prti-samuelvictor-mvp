@@ -1,0 +1,4224 @@
+{
+  "source": "C:\\Users\\samuel\\Downloads\\Template Relatorio de Impacto - TJGO PRTI - Samuel Victor Oliveira Lima.docx",
+  "sha256": "70103c81c778fe548fded375e82327c8e7a82108ba86387a551517b18c53f306",
+  "paragraph_count": 163,
+  "paragraphs": [
+    {
+      "index": 0,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 1,
+      "style": "normal",
+      "text": "UNIVERSIDADE FEDERAL DE GOIÁS",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 2,
+      "style": "normal",
+      "text": "Instituto de Informática",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 3,
+      "style": "normal",
+      "text": "Especialização em Residência em Tecnologia da Informação\n",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 4,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 5,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 6,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 7,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 8,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 9,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 10,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 11,
+      "style": "normal",
+      "text": "NOME DO ESTUDANTE 1",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 12,
+      "style": "normal",
+      "text": "NOME DO ESTUDANTE 2",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 13,
+      "style": "normal",
+      "text": "NOME DO ESTUDANTE 3",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 14,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 15,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 16,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 17,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 18,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 19,
+      "style": "normal",
+      "text": "TÍTULO DO TRABALHO DE CONCLUSÃO DE CURSO ",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": null,
+        "size_pt": 16.0,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 20,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 21,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 22,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 23,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 24,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 25,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 26,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 27,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 28,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 29,
+      "style": "normal",
+      "text": "Trabalho de Conclusão de Curso",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": 14.0,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 30,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 31,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 32,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 33,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 34,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 35,
+      "style": "normal",
+      "text": "Goiânia",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 36,
+      "style": "normal",
+      "text": "2026",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 37,
+      "style": "normal",
+      "text": "UNIVERSIDADE FEDERAL DE GOIÁS",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 38,
+      "style": "normal",
+      "text": "Instituto de Informática",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 39,
+      "style": "normal",
+      "text": "Especialização em Residência em Tecnologia da Informação",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 40,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 41,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 42,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 43,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 44,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 45,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 46,
+      "style": "normal",
+      "text": "NOME DO ESTUDANTE 1",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 47,
+      "style": "normal",
+      "text": "NOME DO ESTUDANTE 2",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 48,
+      "style": "normal",
+      "text": "NOME DO ESTUDANTE 3",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 49,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 50,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 51,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 52,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 53,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 54,
+      "style": "normal",
+      "text": "TÍTULO DO TRABALHO DE CONCLUSÃO DE CURSO ",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": null,
+        "size_pt": 16.0,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 55,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 18.0,
+        "line_spacing": "1.0",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 56,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 18.0,
+        "line_spacing": "1.0",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 57,
+      "style": "normal",
+      "text": "Trabalho de Conclusão de Curso apresentado ao Programa de Pós–Graduação Lato Sensu Especialização em Residência em Tecnologia da Informação do Instituto de Informática da Universidade Federal de Goiás, como requisito parcial para obtenção do título de Especialista em Residência em Tecnologia da Informação.",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": 2.6583,
+        "right_indent": null,
+        "first_line_indent": 0.0,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 58,
+      "style": "normal",
+      "text": "",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": 2.6583,
+        "right_indent": null,
+        "first_line_indent": 0.0,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 59,
+      "style": "normal",
+      "text": "Orientador(a): Prof. (a) Dr. (a) (nome do orientador)",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": 2.6583,
+        "right_indent": null,
+        "first_line_indent": 0.0,
+        "space_before_pt": 12.0,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 60,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 61,
+      "style": "Heading 1",
+      "text": "RESUMO EXECUTIVO",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 62,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 63,
+      "style": "normal",
+      "text": "Texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto texto.",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": 0.3937,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 64,
+      "style": "Heading 1",
+      "text": "",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 65,
+      "style": "Heading 1",
+      "text": "LISTA DE FIGURAS",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 66,
+      "style": "normal",
+      "text": "Listar as figuras contidas no corpo do trabalho.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 67,
+      "style": "Heading 1",
+      "text": "",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 68,
+      "style": "Heading 1",
+      "text": "LISTA DE QUADROS E TABELAS",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 69,
+      "style": "normal",
+      "text": "Listar os quadros contidos no corpo do trabalho.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 70,
+      "style": "Heading 1",
+      "text": "",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 71,
+      "style": "Heading 1",
+      "text": "LISTA DE SIGLAS E ABREVIATURAS",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 72,
+      "style": "normal",
+      "text": "",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 12.0,
+        "space_after_pt": 8.0,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 73,
+      "style": "normal",
+      "text": "ABREVIATURAS",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 12.0,
+        "space_after_pt": 8.0,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 74,
+      "style": "normal",
+      "text": "QoS\tQualidade de Serviço (Quality of Service)",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": 1.575,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 75,
+      "style": "normal",
+      "text": "SÍMBOLOS",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 12.0,
+        "space_after_pt": 8.0,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 76,
+      "style": "normal",
+      "text": "Letras Arábicas",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 6.0,
+        "space_after_pt": 6.0,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 77,
+      "style": "normal",
+      "text": "Cc\tCoeficiente de curvatura",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": 1.575,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 78,
+      "style": "normal",
+      "text": "Cu\tCoeficiente de uniformidade",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": 1.575,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 79,
+      "style": "normal",
+      "text": "Letras Gregas",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 6.0,
+        "space_after_pt": 6.0,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 80,
+      "style": "normal",
+      "text": "σ\tTensão",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": 1.575,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Noto Sans Symbols",
+        "fonts": {
+          "ascii": "Noto Sans Symbols",
+          "hAnsi": "Noto Sans Symbols",
+          "eastAsia": "Noto Sans Symbols",
+          "cs": "Noto Sans Symbols"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 81,
+      "style": "normal",
+      "text": "ε\tDeformação",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": 1.575,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Noto Sans Symbols",
+        "fonts": {
+          "ascii": "Noto Sans Symbols",
+          "hAnsi": "Noto Sans Symbols",
+          "eastAsia": "Noto Sans Symbols",
+          "cs": "Noto Sans Symbols"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 82,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 83,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 84,
+      "style": "normal",
+      "text": "SUMÁRIO",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": null,
+        "size_pt": 14.0,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 85,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 86,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 87,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 88,
+      "style": "Heading 1",
+      "text": "1 INTRODUÇÃO",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 89,
+      "style": "normal",
+      "text": "Apresente o contexto do projeto desenvolvido, os objetivos gerais e específicos, justificativa e a relevância para o TJGO (ou sistema judiciário ou um segmento específico).",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 90,
+      "style": "normal",
+      "text": "***Neste capítulo deve ser apresentado o contexto no qual foi desenvolvido o trabalho, contendo a descrição completa do setor (da organização, do departamento ou do projeto) em que se desenvolveu o cenário de prática e seus objetivos.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 91,
+      "style": "normal",
+      "text": "***A introdução deve apresentar, pelo menos, a seguinte estrutura: explicitação da motivação inicial, do problema, de forma contextualizada; deixar claro o que o projeto pretendeu responder; declaração de objetivos (geral e específicos); justificativa (a razão pela qual se deu origem ao trabalho). ",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 92,
+      "style": "normal",
+      "text": "Comece apresentando o trabalho; discorra sucintamente sobre a temática que foi abordada; em que área(s) do conhecimento está inserida; quais as áreas de confluência. Problematize enumerando as razões pelas quais o projeto foi (ou está sendo) desenvolvido; qual a pertinência da aplicação. Enumere os ganhos e benefícios esperados mediante os resultados a serem alcançados com a solução proposta.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 93,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 94,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 95,
+      "style": "Heading 1",
+      "text": "",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 96,
+      "style": "Heading 1",
+      "text": "2 FUNDAMENTAÇÃO TEÓRICA",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": 14.0,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 97,
+      "style": "normal",
+      "text": "Descreva os conceitos, tecnologias e teorias que sustentam o projeto. Utilize referências conforme a NBR 6023:2018.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 98,
+      "style": "normal",
+      "text": "*** SUGESTÃO: Neste e nos outros capítulos pode ser interessante inserir quadros, tabelas e figuras para dar apoio visual ao que está sendo apresentado. Lembre-se da principal diferença entre eles: quadros são informações textuais agrupadas em linhas e colunas, e tabelas são informações geralmente numéricas. Entretanto, a diagramação deles é semelhante***",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": 11.0,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 99,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": 0.4924,
+        "space_before_pt": 6.0,
+        "space_after_pt": 6.0,
+        "line_spacing": "1.0",
+        "keep_with_next": true,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 100,
+      "style": "normal",
+      "text": "QUADRO 1 – Abreviaturas de alguns meses",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": 0.4924,
+        "space_before_pt": 6.0,
+        "space_after_pt": 6.0,
+        "line_spacing": "1.0",
+        "keep_with_next": true,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": null,
+        "size_pt": 10.0,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 101,
+      "style": "normal",
+      "text": "Fonte: ABNT NBR 6023:2018. ",
+      "alignment": "None",
+      "format": {
+        "left_indent": 1.1812,
+        "right_indent": null,
+        "first_line_indent": 0.0,
+        "space_before_pt": 3.0,
+        "space_after_pt": 12.0,
+        "line_spacing": "1.0",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": 10.0,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 102,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 103,
+      "style": "normal",
+      "text": "",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 12.0,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": true,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 104,
+      "style": "normal",
+      "text": "Figura 1 – Tipos de fontes utilizadas como referência",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 12.0,
+        "space_after_pt": null,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": 10.0,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 105,
+      "style": "normal",
+      "text": "Fonte: Elaborado pelo autor.ANEXO A – Como apresentar",
+      "alignment": "CENTER (1)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": true,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": 10.0,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 106,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 107,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 108,
+      "style": "Heading 1",
+      "text": "",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 109,
+      "style": "Heading 1",
+      "text": "3 METODOLOGIA",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 110,
+      "style": "normal",
+      "text": "Explique os métodos, técnicas e ferramentas utilizadas. Pode incluir abordagem ágil, design thinking, entre outros.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 111,
+      "style": "normal",
+      "text": "***Neste capítulo devem ser apresentados os métodos, técnicas, ferramentas e procedimentos empregados ao longo do desenvolvimento da Residência. Ao final, descreva os resultados obtidos a partir das atividades da residência técnica.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 112,
+      "style": "normal",
+      "text": "***Comece respondendo a pergunta: de que forma o trabalho foi conduzido? Nesta seção, o foco recai principalmente nos instrumentos, ou seja, o tipo de ambiente, ferramenta de gestão de projeto, gestão de tarefas, versionamento e repositório (github) que foram empregados para fazer o mapeamento inicial, a elicitação dos requisitos, produção de artefatos.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 113,
+      "style": "normal",
+      "text": "*** Descrever de que forma e quais os critérios para priorização do problema; definição dos aspectos estéticos da aplicação (UI e UX), apresentar a arquitetura da informação e a arquitetura da aplicação; qual a infraestrutura tecnológica especificada, qual a stack de ferramentas para o front e back end.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 114,
+      "style": "Heading 1",
+      "text": "",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 115,
+      "style": "Heading 1",
+      "text": "4 DESENVOLVIMENTO",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": 14.0,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 116,
+      "style": "normal",
+      "text": "*** Descrever o roadmap, contendo, pelo menos, a especificação completa do backlog do produto; especificar quantos ciclos de desenvolvimento (sprints de 4 meses cada) serão necessários para a continuidade da entrega da aplicação; especificar quais serão as tarefas para cada ciclo (backlog da Sprint).",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 117,
+      "style": "normal",
+      "text": "*** Descrever a arquitetura de negócio, contendo, pelo menos, a especificação do modelo de negócio, do Canvas de Hipótese, da Análise ambiental (análise SWOT) e etc.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 118,
+      "style": "normal",
+      "text": "*** Nas seções seguintes deve haver o relato completo dos resultados obtidos na Residência, incluindo todos os artefatos produzidos. Inclua os links de acesso ao repositório e ferramentas utilizadas (git hub), onde ficarão os arquivos de código-fonte e a documentação. Informe também como foi desenvolvido o projeto, os papéis de cada membro, as contribuições e participações.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 119,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 120,
+      "style": "Heading 2",
+      "text": "4.1 ARQUITETURA DE NEGÓCIO",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 10.0,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 121,
+      "style": "normal",
+      "text": "Inclua o Business Model Canvas, hipóteses, jornada do usuário e mapas de processo.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 122,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 123,
+      "style": "Heading 2",
+      "text": "4.2 PROTÓTIPO OU MVP",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 10.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 124,
+      "style": "normal",
+      "text": "Descreva e/ou ilustre o protótipo funcional, MVP, mockup ou sistema entregue.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 125,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 126,
+      "style": "Heading 2",
+      "text": "4.3 ARQUITETURA TÉCNICA",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 10.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 127,
+      "style": "normal",
+      "text": "Detalhe os aspectos funcionais e não funcionais: negócio, dados, segurança, UX/UI, infraestrutura, interoperabilidade.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 128,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 129,
+      "style": "Heading 2",
+      "text": "4.4 ROADMAP DE EVOLUÇÃO",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 10.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 130,
+      "style": "normal",
+      "text": "Inclua as fases futuras do projeto, entregas previstas, ciclos DevOps e sustentação.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 131,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 132,
+      "style": "Heading 1",
+      "text": "5 CONSIDERAÇÕES FINAIS",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 133,
+      "style": "normal",
+      "text": "Apresente os principais resultados, limitações e possibilidades de continuidade.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 134,
+      "style": "normal",
+      "text": "***A conclusão é indispensável para dar uma finalização formal ao trabalho, onde devem ser destacados os principais aspectos e contribuições. Uma boa forma de concluir é apresentar um resumo do que era esperado, isto é, rever o objetivo geral e os específicos do estudo, ressaltando os pontos mais significativos da argumentação. ",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": null,
+        "first_line_indent": 0.0,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 135,
+      "style": "normal",
+      "text": "***Deve também incluir a reflexão a respeito de como o projeto de aplicação desenvolvido contribuiu para o órgão no âmbito institucional (ou organizacional), envolvendo o cenário de prática. Deve sintetizar a discussão sobre a importância do trabalho realizado e de suas implicações práticas. Não se esqueça de incluir as limitações do estudo e sugestões para futuros trabalhos.",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": null,
+        "first_line_indent": 0.0,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 136,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 137,
+      "style": "Heading 1",
+      "text": "",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 138,
+      "style": "Heading 1",
+      "text": "REFERÊNCIAS",
+      "alignment": "LEFT (0)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": 0.0,
+        "first_line_indent": 0.0,
+        "space_before_pt": 24.0,
+        "space_after_pt": 10.0,
+        "line_spacing": "1.15",
+        "keep_with_next": true,
+        "page_break_before": false
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 139,
+      "style": "normal",
+      "text": "Liste todas as fontes utilizadas conforme a ABNT NBR 6023:2018.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 140,
+      "style": "normal",
+      "text": "***indicar aqui todas as referências utilizadas, que devem ter sido (necessariamente) citadas ao longo do trabalho. Utilizar o padrão da ABNT. Seguir o estilo que está configurado nos modelos de referência abaixo***. ",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": 0.0,
+        "right_indent": null,
+        "first_line_indent": 0.0,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 141,
+      "style": "normal",
+      "text": "para livro:",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 12.0,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 142,
+      "style": "normal",
+      "text": "SOBRENOME, Nome. Título do livro em negrito. Cidade: Editora, ano.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 24.0,
+        "line_spacing": "1.0",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 143,
+      "style": "normal",
+      "text": "para revista científica:",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 12.0,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 144,
+      "style": "normal",
+      "text": "SOBRENOME, Nome. Título do artigo. Nome da revista em negrito, volume, número, páginas, mês, ano.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 24.0,
+        "line_spacing": "1.0",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 145,
+      "style": "normal",
+      "text": "para anais de evento em meio eletrônico:",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 12.0,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 146,
+      "style": "normal",
+      "text": "SOBRENOME, Nome. Título do artigo. In: Nome do evento, Edição, Local do evento. Anais eletrônicos... Entidade patrocinadora do evento: Editora|, ano. CD-ROM.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 24.0,
+        "line_spacing": "1.0",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 147,
+      "style": "normal",
+      "text": "para capítulo de livro:",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 12.0,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 148,
+      "style": "normal",
+      "text": "SOBRENOME, Nome. Título do artigo. In: Responsável pela organização do livro (Org.). Título do livro. Cidade: Editora, ano.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 24.0,
+        "line_spacing": "1.0",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 149,
+      "style": "normal",
+      "text": "para dissertação ou tese:",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 12.0,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 150,
+      "style": "normal",
+      "text": "SOBRENOME, Nome. Título: subtítulo. ano. Dissertação (ou Tese) – Departamento acadêmico, Universidade, Cidade, ano.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 24.0,
+        "line_spacing": "1.0",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 151,
+      "style": "normal",
+      "text": "Internet:",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": 12.0,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": true,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 152,
+      "style": "normal",
+      "text": "SOBRENOME, Nome. Título. Cidade: Organização, ano. Disponível em:<http://***>. Acesso em: dia (não incluir o zero à esquerda) mês (usar abreviações) ano.",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 24.0,
+        "line_spacing": "1.0",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": true,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 153,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 154,
+      "style": "Heading 1",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 10.0,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 155,
+      "style": "Heading 1",
+      "text": "APÊNDICES",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 10.0,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 156,
+      "style": "normal",
+      "text": "Nos apêndices devem ser colocados os arquivos ou artefatos de código ou  documentais elaborados pelo(s) autor(es) do TCC, que não são necessários no corpo do trabalho, mas ajudam a explicá-lo. Cada apêndice deverá ter uma numeração, por exemplo, “A”, “B” e “C”. Utilizam-se letras maiúsculas dobradas quando esgotadas as letras do alfabeto.",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": 0.3937,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 157,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 158,
+      "style": "Heading 1",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 10.0,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 159,
+      "style": "Heading 1",
+      "text": "ANEXOS",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": 10.0,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": "Times New Roman",
+        "fonts": {
+          "ascii": "Times New Roman",
+          "hAnsi": "Times New Roman",
+          "eastAsia": "Times New Roman",
+          "cs": "Times New Roman"
+        }
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 160,
+      "style": "normal",
+      "text": "Nos anexos devem ser colocados os arquivos ou artefatos que NÃO foram elaborados pelo(s) autor(es) do TCC e que não são necessários no corpo do trabalho, mas ajudam a explicá-lo. Cada anexo deverá ter uma numeração, por exemplo, “A”, “B” e “C”. Utilizam-se letras maiúsculas dobradas quando esgotadas as letras do alfabeto.",
+      "alignment": "JUSTIFY (3)",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": 0.3937,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "1.5",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 161,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    },
+    {
+      "index": 162,
+      "style": "normal",
+      "text": "",
+      "alignment": "None",
+      "format": {
+        "left_indent": null,
+        "right_indent": null,
+        "first_line_indent": null,
+        "space_before_pt": null,
+        "space_after_pt": null,
+        "line_spacing": "None",
+        "keep_with_next": null,
+        "page_break_before": null
+      },
+      "first_run": {
+        "bold": null,
+        "italic": null,
+        "size_pt": null,
+        "font_name": null,
+        "fonts": {}
+      },
+      "has_ppr": true
+    }
+  ],
+  "tables": [
+    {
+      "index": 0,
+      "style": null,
+      "rows": [
+        [
+          "Português",
+          "Português",
+          "Inglês",
+          "Inglês"
+        ],
+        [
+          "Janeiro",
+          "jan.",
+          "January",
+          "Jan."
+        ],
+        [
+          "Fevereiro",
+          "fev.",
+          "February",
+          "Feb."
+        ],
+        [
+          "Março",
+          "mar.",
+          "March",
+          "Mar."
+        ]
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "index": 0,
+      "page_width_in": 8.5,
+      "page_height_in": 11.0,
+      "top_margin_in": 1.0,
+      "right_margin_in": 1.25,
+      "bottom_margin_in": 1.0,
+      "left_margin_in": 1.25,
+      "header_distance_in": 0.5,
+      "footer_distance_in": 0.5,
+      "different_first_page": true,
+      "start_type": "NEW_PAGE (2)",
+      "header": [
+        ""
+      ],
+      "first_page_header": [
+        ""
+      ],
+      "footer": [
+        ""
+      ],
+      "first_page_footer": [
+        ""
+      ]
+    },
+    {
+      "index": 1,
+      "page_width_in": 8.5,
+      "page_height_in": 11.0,
+      "top_margin_in": 1.0,
+      "right_margin_in": 1.25,
+      "bottom_margin_in": 1.0,
+      "left_margin_in": 1.25,
+      "header_distance_in": 0.5,
+      "footer_distance_in": 0.5,
+      "different_first_page": false,
+      "start_type": "NEW_PAGE (2)",
+      "header": [
+        "",
+        "",
+        ""
+      ],
+      "first_page_header": [
+        ""
+      ],
+      "footer": [
+        "",
+        ""
+      ],
+      "first_page_footer": [
+        ""
+      ]
+    }
+  ],
+  "inline_shapes": 2,
+  "package_parts": [
+    {
+      "path": "[Content_Types].xml",
+      "size": 2573,
+      "sha256": "e635b527f05004ec6471c745a46cdb696878b5f2fcedc456b6c9eff91303d04e"
+    },
+    {
+      "path": "_rels/.rels",
+      "size": 443,
+      "sha256": "450973054150e155baa20de9ae4d682cf52545a537ed2b84ed78400b7dc15ddc"
+    },
+    {
+      "path": "customXML/_rels/item1.xml.rels",
+      "size": 295,
+      "sha256": "26ac718f80df621ee703e3c0f143a63034967c5fe65fbfdcefbf96419235355e"
+    },
+    {
+      "path": "customXML/item1.xml",
+      "size": 3337,
+      "sha256": "6c05c03a3284f4305df6d0ed549d917f2d4cd2d96402817fe316f84be304e2c7"
+    },
+    {
+      "path": "customXML/itemProps1.xml",
+      "size": 404,
+      "sha256": "fc2e321bb5ca54d5f2b99b99f91d681d004417098918a318be88fe525218c9a3"
+    },
+    {
+      "path": "docProps/core.xml",
+      "size": 481,
+      "sha256": "066348ef830a07847b13036ff72d60f75934ae46b2848f934b27fc1e9d7f5c2f"
+    },
+    {
+      "path": "word/_rels/document.xml.rels",
+      "size": 2129,
+      "sha256": "12411dc568e71458cea28833404e736c4aaf9f3c8a4405bb7e10f5344e6cb9e9"
+    },
+    {
+      "path": "word/_rels/fontTable.xml.rels",
+      "size": 449,
+      "sha256": "6f500acf3de0bcc672d01923dda818ab2675a5892bdf740eed3db4fc8194d6ef"
+    },
+    {
+      "path": "word/comments.xml",
+      "size": 3756,
+      "sha256": "f046a0148a9cf8d9f06ab206c60c2672f4824b819560c6cd08c7392669d209ad"
+    },
+    {
+      "path": "word/commentsExtended.xml",
+      "size": 1760,
+      "sha256": "0400994259b9059ef54eb42beff3a1f9247fbbb2c11e67ac01c7c360858a6f3e"
+    },
+    {
+      "path": "word/document.xml",
+      "size": 135374,
+      "sha256": "fc642c0d6dc87755832051aa2deae8fc7be8601e25d62bee7e14229830778316"
+    },
+    {
+      "path": "word/fontTable.xml",
+      "size": 2012,
+      "sha256": "0c03cf01822f6dce728b8f9f1a7858f3b0ab931fb99738fb386d47b8f874cc5f"
+    },
+    {
+      "path": "word/fonts/NotoSansSymbols-bold.ttf",
+      "size": 183344,
+      "sha256": "afc2a6b7050df884f5deb2618ebbdecb9fa2f163d3ca66ca75f8b069febc6741"
+    },
+    {
+      "path": "word/fonts/NotoSansSymbols-regular.ttf",
+      "size": 183620,
+      "sha256": "3c9c40311ae6012f7d3c4a4ff98952b2c7bbc0d4c89a93ba22986ff1f1884af5"
+    },
+    {
+      "path": "word/footer1.xml",
+      "size": 2153,
+      "sha256": "59a076bda62decfb84cfdf44fd2a969b19936a05a320681d378df0d5d1566132"
+    },
+    {
+      "path": "word/footer2.xml",
+      "size": 1979,
+      "sha256": "aaa470e61cac086ba8e43fcff9af75d3b9adee88cfe364f3d2835011880b4bb4"
+    },
+    {
+      "path": "word/footer3.xml",
+      "size": 6355,
+      "sha256": "52ecf859ad6d8bbd0604b5983e69258ee59b6af6730461dec204bf50ab720e55"
+    },
+    {
+      "path": "word/header1.xml",
+      "size": 1958,
+      "sha256": "3639e135648ad743ae677fcebc87161bd1aec352300b34f6574c8c0ac1c464ef"
+    },
+    {
+      "path": "word/header2.xml",
+      "size": 4324,
+      "sha256": "e1c7182918094ecd41e0b48fab2979ec355ab5597fc80783fa58253341c82aec"
+    },
+    {
+      "path": "word/media/image1.jpg",
+      "size": 7818,
+      "sha256": "6eaada1237c4b5ab6e6c79936dc42382747172ced2922828e2015d3261f9b120"
+    },
+    {
+      "path": "word/media/image2.png",
+      "size": 36767,
+      "sha256": "a49029e35d00baf43a6ade3de122fba9633469fce149b11bbc6cacad72583df5"
+    },
+    {
+      "path": "word/numbering.xml",
+      "size": 1690,
+      "sha256": "d2a3e08465525eee874ea10d780540816951a37b115e90f1cd56aefdd76adc2e"
+    },
+    {
+      "path": "word/settings.xml",
+      "size": 2152,
+      "sha256": "26f2853fde05b88d4b0a9da0bb016d56a896901f60c9272dddf33c3f3fa61e4a"
+    },
+    {
+      "path": "word/styles.xml",
+      "size": 372519,
+      "sha256": "3d1e8c402eee7ecf34cc3dfb746e78c7337002840019fbad1bf8ad0a25cc641f"
+    },
+    {
+      "path": "word/theme/theme1.xml",
+      "size": 10939,
+      "sha256": "e3a8ab7db9ca7afca56f5f2820a56e8b660016c647773555b060b0a02ac76941"
+    }
+  ]
+}
