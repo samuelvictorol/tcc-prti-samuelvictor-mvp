@@ -25,6 +25,54 @@ function isPrivateIpv4(hostname) {
     || parts[0] >= 224;
 }
 
+function isPrivateIpv6(hostname) {
+  const normalized = String(hostname || '').toLowerCase();
+  return normalized === '::'
+    || normalized === '::1'
+    || normalized.startsWith('fc')
+    || normalized.startsWith('fd')
+    || normalized.startsWith('fe8')
+    || normalized.startsWith('fe9')
+    || normalized.startsWith('fea')
+    || normalized.startsWith('feb')
+    || normalized.startsWith('2001:db8:')
+    || normalized.startsWith('::ffff:127.')
+    || normalized.startsWith('::ffff:10.')
+    || normalized.startsWith('::ffff:169.254.')
+    || normalized.startsWith('::ffff:172.')
+    || normalized.startsWith('::ffff:192.168.');
+}
+
+function hasSafePublicHostname(url) {
+  const hostname = url.hostname
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '')
+    .toLowerCase();
+  if (!hostname || url.username || url.password) return false;
+  if (
+    hostname === 'localhost'
+    || hostname.endsWith('.localhost')
+    || hostname.endsWith('.local')
+    || hostname.endsWith('.internal')
+    || hostname.endsWith('.lan')
+  ) return false;
+  const ipVersion = net.isIP(hostname);
+  if (ipVersion === 4 && isPrivateIpv4(hostname)) return false;
+  if (ipVersion === 6 && isPrivateIpv6(hostname)) return false;
+  if (ipVersion === 0 && !hostname.includes('.')) return false;
+  return true;
+}
+
+function isSafeExternalHttpUrl(value) {
+  try {
+    const url = new URL(String(value));
+    if (!['http:', 'https:'].includes(url.protocol)) return false;
+    return hasSafePublicHostname(url);
+  } catch (_error) {
+    return false;
+  }
+}
+
 function isSafePublicHttpsUrl(value) {
   try {
     const url = new URL(String(value));
@@ -41,4 +89,9 @@ function isSafePublicHttpsUrl(value) {
   }
 }
 
-module.exports = { ALLOWED_INVITE_PROTOCOLS, isAllowedInviteUrl, isSafePublicHttpsUrl };
+module.exports = {
+  ALLOWED_INVITE_PROTOCOLS,
+  isAllowedInviteUrl,
+  isSafeExternalHttpUrl,
+  isSafePublicHttpsUrl
+};

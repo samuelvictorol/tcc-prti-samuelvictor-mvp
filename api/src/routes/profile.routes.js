@@ -20,6 +20,7 @@ const {
 const { env } = require('../config/env');
 
 const profileRouter = express.Router();
+profileRouter.get('/access-config', asyncHandler(controller.accessConfig));
 profileRouter.post('/request-login', profileCodeRequestLimiter, validate(requestProfileLoginSchema), asyncHandler(controller.requestLogin));
 profileRouter.post('/exchange-link', profileCodeVerifyLimiter, validate(exchangeProfileLinkSchema), asyncHandler(controller.exchangeLink));
 profileRouter.use(requireProfileAuth);

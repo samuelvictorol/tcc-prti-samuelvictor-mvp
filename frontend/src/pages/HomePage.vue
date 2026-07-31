@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { copyToClipboard, useQuasar } from 'quasar'
+import { useRouter } from 'vue-router'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -23,6 +24,14 @@ import {
   DEFAULT_WHATSAPP_PERMISSION_COMMAND,
   whatsappPermissionCommandFromSettings,
 } from '../services/whatsapp.js'
+import {
+  MAX_USEFUL_LINKS,
+  USEFUL_LINK_ICON_OPTIONS,
+  createUsefulLink,
+  normalizeUsefulLinks,
+  usefulLinksPayload,
+  validateUsefulLinks,
+} from '../services/useful-links.js'
 
 const DEFAULT_WHATSAPP_CONSENT_REQUEST_TEXT = 'Para ativar suas notificações, responda com {command}.'
 const DEFAULT_TELEGRAM_MESSAGES = Object.freeze({
@@ -33,11 +42,13 @@ const DEFAULT_TELEGRAM_MESSAGES = Object.freeze({
 })
 
 const $q = useQuasar()
+const router = useRouter()
 const app = useAppStore()
 const loading = ref(true)
 const savingChannel = reactive({ telegram: false, whatsappCloud: false, email: false })
 const savingWhatsappPermission = ref(false)
 const savingTelegramPermission = ref(false)
+const savingUsefulLinks = ref(false)
 const revealingCredentials = reactive({ telegram: false, whatsappCloud: false, email: false })
 const channelCredentialsVisible = reactive({ telegram: false, whatsappCloud: false, email: false })
 const savedCredentialPreviews = reactive({ telegram: {}, whatsappCloud: {}, email: {} })
@@ -62,12 +73,13 @@ const settings = reactive({
   },
   telegramPermission: { command: DEFAULT_TELEGRAM_PERMISSION_COMMAND },
   email: { user: '', appPassword: '', from: '', fromName: '' },
+  usefulLinks: [],
 })
 
 const channels = computed(() => [
-  { key: 'telegram', name: 'Telegram', icon: 'send_to_mobile', description: 'Bot e conversas autorizadas' },
-  { key: 'whatsappCloud', name: 'WhatsApp Cloud', icon: 'cloud_sync', description: 'API oficial da Meta' },
-  { key: 'email', name: 'Gmail', icon: 'mail', description: 'SMTP ou senha de app' },
+  { key: 'whatsappCloud', name: 'WhatsApp Cloud', icon: 'mdi-whatsapp', description: 'API oficial da Meta', to: '/whatsapp-cloud', tone: 'whatsapp' },
+  { key: 'telegram', name: 'Telegram', icon: 'bi-telegram', description: 'Bot e conversas autorizadas', to: '/telegram', tone: 'telegram' },
+  { key: 'email', name: 'Gmail', icon: 'mdi-gmail', description: 'SMTP ou senha de app', to: '/email', tone: 'gmail' },
 ])
 
 const channelNames = {
@@ -133,6 +145,7 @@ function applySettings(value = {}) {
   Object.assign(settings.telegram.messages, DEFAULT_TELEGRAM_MESSAGES, telegramMessages)
   Object.assign(settings.whatsappCloud, source.whatsappCloud || source.whatsapp_cloud || source.meta || {})
   Object.assign(settings.email, source.email || source.gmail || {})
+  settings.usefulLinks.splice(0, settings.usefulLinks.length, ...normalizeUsefulLinks(source.usefulLinks))
   for (const channel of ['telegram', 'whatsappCloud', 'email']) {
     const channelSource = channel === 'whatsappCloud'
       ? (source.whatsappCloud || source.whatsapp_cloud || source.meta || {})
@@ -153,6 +166,65 @@ function applySettings(value = {}) {
     || value.whatsappPermission?.requestText
     || DEFAULT_WHATSAPP_CONSENT_REQUEST_TEXT
   settings.telegramPermission.command = telegramPermissionCommandFromSettings(value)
+}
+
+function addUsefulLink() {
+  if (settings.usefulLinks.length >= MAX_USEFUL_LINKS) {
+    $q.notify({ type: 'info', message: `Você já cadastrou o limite de ${MAX_USEFUL_LINKS} links úteis.` })
+    return
+  }
+  settings.usefulLinks.push(createUsefulLink())
+}
+
+function removeUsefulLink(index) {
+  settings.usefulLinks.splice(index, 1)
+}
+
+function moveUsefulLink(index, direction) {
+  const destination = index + direction
+  if (destination < 0 || destination >= settings.usefulLinks.length) return
+  const [link] = settings.usefulLinks.splice(index, 1)
+  settings.usefulLinks.splice(destination, 0, link)
+}
+
+async function saveUsefulLinks() {
+  const validationError = validateUsefulLinks(settings.usefulLinks)
+  if (validationError) {
+    $q.notify({ type: 'warning', message: validationError })
+    return
+  }
+
+  savingUsefulLinks.value = true
+  try {
+    const usefulLinks = usefulLinksPayload(settings.usefulLinks)
+    const result = await app.saveSettings({ usefulLinks })
+    const source = result.configuration || result.settings || result
+    settings.usefulLinks.splice(
+      0,
+      settings.usefulLinks.length,
+      ...normalizeUsefulLinks(source.usefulLinks ?? usefulLinks),
+    )
+    $q.notify({
+      type: 'positive',
+      message: usefulLinks.length ? 'Links úteis atualizados no menu.' : 'Links úteis removidos do menu.',
+    })
+  } catch (error) {
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível salvar os links úteis.') })
+  } finally {
+    savingUsefulLinks.value = false
+  }
+}
+
+function openChannel(channel) {
+  if (app.isChannelEnabled(channel.key) || channel.key === 'whatsappCloud') {
+    router.push(channel.to)
+    return
+  }
+  $q.notify({
+    type: 'info',
+    message: `${channel.name} ainda não está configurado.`,
+    caption: 'Preencha as credenciais logo abaixo para liberar o canal.',
+  })
 }
 
 function credentialFieldIsMasked(channel, field) {
@@ -422,12 +494,18 @@ onBeforeUnmount(() => {
       </article>
     </section>
 
-    <section class="page-grid channel-grid q-mb-lg" aria-label="Status dos canais">
-      <article
+    <section class="page-grid channel-grid q-mb-lg" aria-label="Atalhos dos canais">
+      <button
         v-for="channel in channels"
         :key="channel.key"
+        type="button"
         class="channel-card glass-card"
-        :class="{ 'channel-card--configured': app.isChannelEnabled(channel.key) }"
+        :class="[
+          `channel-card--${channel.tone}`,
+          { 'channel-card--configured': app.isChannelEnabled(channel.key) },
+        ]"
+        :aria-label="`Abrir ${channel.name}`"
+        @click="openChannel(channel)"
       >
         <div class="channel-icon"><q-icon :name="channel.icon" size="24px" /></div>
         <div class="channel-copy">
@@ -435,8 +513,154 @@ onBeforeUnmount(() => {
           <span>{{ channel.description }}</span>
         </div>
         <StatusBadge :value="app.isChannelEnabled(channel.key)" />
-      </article>
+        <q-icon class="channel-arrow" name="arrow_forward" />
+      </button>
     </section>
+
+    <q-card flat class="glass-card section-card useful-links-card q-mb-lg">
+      <div class="toolbar-row useful-links-card__header">
+        <div>
+          <div class="text-overline useful-links-eyebrow">Navegação personalizada</div>
+          <h2 class="section-title">Links úteis</h2>
+          <p class="section-copy">
+            Cadastre até {{ MAX_USEFUL_LINKS }} atalhos para aparecerem abaixo de Ajuda no menu lateral.
+          </p>
+        </div>
+        <q-btn
+          outline
+          color="primary"
+          no-caps
+          icon="add_link"
+          label="Adicionar link"
+          :disable="settings.usefulLinks.length >= MAX_USEFUL_LINKS"
+          @click="addUsefulLink"
+        >
+          <q-tooltip v-if="settings.usefulLinks.length >= MAX_USEFUL_LINKS">
+            Limite de {{ MAX_USEFUL_LINKS }} links atingido
+          </q-tooltip>
+        </q-btn>
+      </div>
+
+      <div v-if="settings.usefulLinks.length" class="useful-link-list">
+        <article
+          v-for="(link, index) in settings.usefulLinks"
+          :key="`useful-link-${index}`"
+          class="useful-link-editor"
+        >
+          <div class="useful-link-editor__order" aria-hidden="true">{{ index + 1 }}</div>
+          <div class="useful-link-editor__fields">
+            <q-input
+              v-model="link.title"
+              outlined
+              label="Título"
+              maxlength="80"
+              counter
+              :aria-label="`Título do link útil ${index + 1}`"
+            />
+            <q-input
+              v-model="link.caption"
+              outlined
+              label="Descrição (opcional)"
+              maxlength="240"
+              counter
+              :aria-label="`Descrição do link útil ${index + 1}`"
+            />
+            <q-select
+              v-model="link.iconName"
+              outlined
+              emit-value
+              map-options
+              use-input
+              fill-input
+              hide-selected
+              input-debounce="0"
+              new-value-mode="add-unique"
+              :options="USEFUL_LINK_ICON_OPTIONS"
+              label="Nome do ícone MDI"
+              hint="Escolha uma opção ou informe, por exemplo, mdi-web."
+              :aria-label="`Ícone do link útil ${index + 1}`"
+            >
+              <template #prepend><q-icon :name="link.iconName || 'mdi-link-variant'" /></template>
+              <template #option="scope">
+                <q-item v-bind="scope.itemProps">
+                  <q-item-section avatar><q-icon :name="scope.opt.value" /></q-item-section>
+                  <q-item-section>
+                    <q-item-label>{{ scope.opt.label }}</q-item-label>
+                    <q-item-label caption>{{ scope.opt.value }}</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </template>
+            </q-select>
+            <q-input
+              v-model="link.url"
+              outlined
+              type="url"
+              label="URL"
+              placeholder="https://exemplo.com/guia"
+              hint="Somente endereços HTTP ou HTTPS são aceitos."
+              :aria-label="`URL do link útil ${index + 1}`"
+            >
+              <template #prepend><q-icon name="mdi-open-in-new" /></template>
+            </q-input>
+          </div>
+          <div class="useful-link-editor__actions">
+            <q-btn
+              flat
+              round
+              dense
+              icon="keyboard_arrow_up"
+              :disable="index === 0"
+              :aria-label="`Mover ${link.title || `link ${index + 1}`} para cima`"
+              @click="moveUsefulLink(index, -1)"
+            >
+              <q-tooltip>Mover para cima</q-tooltip>
+            </q-btn>
+            <q-btn
+              flat
+              round
+              dense
+              icon="keyboard_arrow_down"
+              :disable="index === settings.usefulLinks.length - 1"
+              :aria-label="`Mover ${link.title || `link ${index + 1}`} para baixo`"
+              @click="moveUsefulLink(index, 1)"
+            >
+              <q-tooltip>Mover para baixo</q-tooltip>
+            </q-btn>
+            <q-btn
+              flat
+              round
+              dense
+              color="negative"
+              icon="delete_outline"
+              :aria-label="`Remover ${link.title || `link ${index + 1}`}`"
+              @click="removeUsefulLink(index)"
+            >
+              <q-tooltip>Remover link</q-tooltip>
+            </q-btn>
+          </div>
+        </article>
+      </div>
+      <div v-else class="useful-links-empty">
+        <q-icon name="mdi-link-plus" />
+        <div>
+          <strong>Nenhum atalho personalizado</strong>
+          <span>Ajuda continuará disponível; seus links aparecerão logo abaixo dela.</span>
+        </div>
+      </div>
+
+      <div class="useful-links-card__footer">
+        <span>{{ settings.usefulLinks.length }}/{{ MAX_USEFUL_LINKS }} links cadastrados</span>
+        <q-btn
+          unelevated
+          color="primary"
+          no-caps
+          icon="save"
+          label="Salvar links úteis"
+          :loading="savingUsefulLinks"
+          @click="saveUsefulLinks"
+        />
+      </div>
+    </q-card>
 
     <section class="q-mb-lg">
       <q-card flat class="glass-card section-card">
@@ -883,7 +1107,7 @@ onBeforeUnmount(() => {
 }
 
 .channel-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .channel-card {
@@ -891,13 +1115,55 @@ onBeforeUnmount(() => {
   min-width: 0;
   align-items: center;
   gap: 12px;
+  border: 1px solid transparent;
   padding: 16px;
+  color: #173d37;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.channel-card:hover {
+  transform: translateY(-2px);
+}
+
+.channel-card:focus-visible {
+  outline: 3px solid rgba(53, 188, 164, 0.3);
+  outline-offset: 2px;
+}
+
+.channel-card--whatsapp {
+  background: linear-gradient(135deg, rgba(214, 250, 237, 0.95), rgba(245, 255, 251, 0.78));
+  box-shadow: 0 12px 30px rgba(18, 140, 106, 0.08);
+}
+
+.channel-card--telegram {
+  background: linear-gradient(135deg, rgba(220, 243, 255, 0.95), rgba(247, 252, 255, 0.82));
+  box-shadow: 0 12px 30px rgba(36, 139, 214, 0.08);
+}
+
+.channel-card--gmail {
+  background: linear-gradient(135deg, rgba(255, 231, 230, 0.92), rgba(255, 250, 249, 0.82));
+  box-shadow: 0 12px 30px rgba(217, 81, 78, 0.07);
 }
 
 .channel-card--configured {
-  border-color: rgba(21, 157, 130, 0.34);
-  background: linear-gradient(135deg, rgba(220, 250, 241, 0.88), rgba(255, 255, 255, 0.58));
-  box-shadow: inset 4px 0 0 #1a9f83;
+  border-color: rgba(21, 157, 130, 0.28);
+}
+
+.channel-card--whatsapp.channel-card--configured {
+  box-shadow: inset 4px 0 0 #128c6a, 0 12px 30px rgba(18, 140, 106, 0.1);
+}
+
+.channel-card--telegram.channel-card--configured {
+  border-color: rgba(36, 139, 214, 0.25);
+  box-shadow: inset 4px 0 0 #248bd6, 0 12px 30px rgba(36, 139, 214, 0.1);
+}
+
+.channel-card--gmail.channel-card--configured {
+  border-color: rgba(217, 81, 78, 0.22);
+  box-shadow: inset 4px 0 0 #d9514e, 0 12px 30px rgba(217, 81, 78, 0.09);
 }
 
 :deep(.channel-config-header) {
@@ -925,6 +1191,21 @@ onBeforeUnmount(() => {
   place-items: center;
 }
 
+.channel-card--whatsapp .channel-icon {
+  background: rgba(18, 140, 106, 0.13);
+  color: #128c6a;
+}
+
+.channel-card--telegram .channel-icon {
+  background: rgba(36, 139, 214, 0.13);
+  color: #248bd6;
+}
+
+.channel-card--gmail .channel-icon {
+  background: rgba(217, 81, 78, 0.12);
+  color: #d9514e;
+}
+
 .channel-copy {
   min-width: 0;
   flex: 1;
@@ -942,6 +1223,111 @@ onBeforeUnmount(() => {
   font-size: 0.74rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.channel-arrow {
+  flex: none;
+  color: currentColor;
+  opacity: 0.58;
+}
+
+.useful-links-card {
+  overflow: hidden;
+}
+
+.useful-links-card__header {
+  align-items: flex-start;
+}
+
+.useful-links-eyebrow {
+  margin-bottom: 4px;
+  color: #16866f;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.useful-link-list {
+  display: grid;
+  gap: 12px;
+  padding: 0 20px 18px;
+}
+
+.useful-link-editor {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(19, 125, 108, 0.13);
+  border-radius: 18px;
+  background: rgba(247, 255, 252, 0.7);
+}
+
+.useful-link-editor__order {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: rgba(53, 188, 164, 0.14);
+  color: #137d6c;
+  font-size: 0.78rem;
+  font-weight: 800;
+  place-items: center;
+}
+
+.useful-link-editor__fields {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.useful-link-editor__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.useful-links-empty {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin: 0 20px 18px;
+  padding: 20px;
+  border: 1px dashed rgba(19, 125, 108, 0.2);
+  border-radius: 17px;
+  background: rgba(247, 255, 252, 0.46);
+  color: #607773;
+}
+
+.useful-links-empty > .q-icon {
+  color: #35bca4;
+  font-size: 30px;
+}
+
+.useful-links-empty strong,
+.useful-links-empty span {
+  display: block;
+}
+
+.useful-links-empty strong {
+  color: #294641;
+}
+
+.useful-links-empty span {
+  margin-top: 2px;
+  font-size: 0.76rem;
+}
+
+.useful-links-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  border-top: 1px solid rgba(3, 21, 21, 0.07);
+  color: #637875;
+  font-size: 0.76rem;
 }
 
 .channel-actions {
@@ -1154,6 +1540,10 @@ onBeforeUnmount(() => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .useful-link-editor__fields {
+    grid-template-columns: 1fr;
+  }
+
   .whatsapp-permission-card {
     grid-template-columns: auto minmax(0, 1fr) minmax(260px, 0.9fr);
   }
@@ -1171,6 +1561,36 @@ onBeforeUnmount(() => {
 @media (max-width: 650px) {
   .channel-grid {
     grid-template-columns: 1fr;
+  }
+
+  .useful-links-card__header,
+  .useful-links-card__footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .useful-links-card__header > .q-btn,
+  .useful-links-card__footer > .q-btn {
+    width: 100%;
+  }
+
+  .useful-link-list {
+    padding-inline: 12px;
+  }
+
+  .useful-link-editor {
+    grid-template-columns: 1fr;
+    padding: 13px;
+  }
+
+  .useful-link-editor__actions {
+    flex-direction: row;
+    justify-content: flex-end;
+  }
+
+  .useful-links-empty {
+    align-items: flex-start;
+    margin-inline: 12px;
   }
 
   .log-row {

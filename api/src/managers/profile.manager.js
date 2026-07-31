@@ -594,6 +594,27 @@ async function profileWhatsappEntryPoint() {
   return { digits, url: url.toString() };
 }
 
+async function publicAccessConfig() {
+  const configured = await settingsManager.getValue('WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER');
+  const digits = String(configured || env.whatsappCloudDisplayPhoneNumber || '').replace(/\D/g, '');
+  const validPhoneNumber = /^[1-9]\d{7,14}$/.test(digits);
+  let loginUrl = null;
+
+  if (validPhoneNumber) {
+    const url = new URL('https://wa.me/' + digits);
+    url.searchParams.set('text', PROFILE_LINK_COMMAND);
+    loginUrl = url.toString();
+  }
+
+  return {
+    profilePath: '/meu-perfil',
+    whatsapp: {
+      configured: validPhoneNumber,
+      loginUrl
+    }
+  };
+}
+
 async function requestCode(input, meta = {}) {
   const identifier = normalizedIdentifier(input.identifier);
   const releaseLock = await acquireRequestLock(identifier.identifierHash);
@@ -1244,5 +1265,6 @@ module.exports = {
   createDirectProfileLink,
   revokeProfileLink,
   exchangeProfileLink,
-  resolveActiveProfileContactId
+  resolveActiveProfileContactId,
+  publicAccessConfig
 };

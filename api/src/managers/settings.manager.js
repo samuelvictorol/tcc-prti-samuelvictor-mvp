@@ -1,6 +1,7 @@
 const Setting = require('../models/setting.model');
 const { encrypt, decrypt } = require('../services/crypto.service');
 const ApiError = require('../utils/api-error');
+const { usefulLinksSchema } = require('../dtos/settings.dto');
 
 const DEFINITIONS = Object.freeze({
   TELEGRAM_BOT_TOKEN: { sensitive: true, channel: 'telegram' },
@@ -22,7 +23,8 @@ const DEFINITIONS = Object.freeze({
   WHATSAPP_CLOUD_API_VERSION: { sensitive: false, channel: 'whatsapp_cloud' },
   WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT: { sensitive: false, channel: 'whatsapp_cloud' },
   START_NOTIFY_WHATSAPP_PERMISSION: { sensitive: false, channel: 'whatsapp' },
-  START_VERIFY_TELEGRAM_PERMISSION: { sensitive: false, channel: 'telegram' }
+  START_VERIFY_TELEGRAM_PERMISSION: { sensitive: false, channel: 'telegram' },
+  USEFUL_LINKS: { sensitive: false, channel: 'general', structured: true }
 });
 
 const REQUIRED = Object.freeze({
@@ -131,6 +133,40 @@ function hasDisallowedControlCharacters(value) {
   });
 }
 
+function parseUsefulLinks(value, options = {}) {
+  let candidate = value;
+  if (typeof candidate === 'string') {
+    try {
+      candidate = JSON.parse(candidate);
+    } catch (_error) {
+      if (options.fallback) return [];
+      throw new ApiError(
+        422,
+        'A lista de links uteis possui um formato invalido',
+        { field: 'usefulLinks' },
+        'USEFUL_LINKS_INVALID'
+      );
+    }
+  }
+  const parsed = usefulLinksSchema.safeParse(candidate);
+  if (parsed.success) return parsed.data;
+  if (options.fallback) return [];
+  throw new ApiError(
+    422,
+    'Revise os links uteis informados',
+    {
+      field: 'usefulLinks',
+      fieldErrors: parsed.error.flatten().fieldErrors
+    },
+    'USEFUL_LINKS_INVALID'
+  );
+}
+
+function normalizeValueForStorage(key, value) {
+  if (key !== 'USEFUL_LINKS') return value;
+  return JSON.stringify(parseUsefulLinks(value));
+}
+
 function assertWritableValue(key, value, config) {
   if (config.sensitive && isMaskedSentinel(value)) {
     throw new ApiError(
@@ -226,13 +262,14 @@ async function getValue(key) {
 async function setValue(key, value, actorId, options = {}) {
   const [normalized, config] = definition(key);
   if (config.internal && !options.internal) throw new ApiError(403, 'Configuracao reservada');
-  assertWritableValue(normalized, value, config);
+  const valueForStorage = normalizeValueForStorage(normalized, value);
+  assertWritableValue(normalized, valueForStorage, config);
   if (!options.skipPermissionValidation) {
-    await validatePermissionCommandChange(normalized, value);
+    await validatePermissionCommandChange(normalized, valueForStorage);
   }
   await Setting.updateOne({ key: normalized }, {
     $set: {
-      valueEncrypted: encrypt(String(value)),
+      valueEncrypted: encrypt(String(valueForStorage)),
       sensitive: options.sensitive ?? config.sensitive,
       updatedBy: actorId
     }
@@ -253,16 +290,23 @@ async function list() {
   return Object.entries(DEFINITIONS).filter(([, config]) => !config.internal).map(([key, config]) => {
     const runtime = byKey.get(key);
     const configured = Boolean(runtime || process.env[key]);
-    const readableValue = configured && !config.sensitive
+    const rawReadableValue = configured && !config.sensitive
       ? (runtime ? decrypt(runtime.valueEncrypted) : process.env[key])
       : null;
+    const readableValue = config.structured && rawReadableValue !== null
+      ? parseUsefulLinks(rawReadableValue, { fallback: true })
+      : rawReadableValue;
     return {
       key,
       channel: config.channel,
       sensitive: config.sensitive,
       configured,
       source: runtime ? 'runtime' : process.env[key] ? 'environment' : null,
-      preview: configured && config.sensitive ? SENSITIVE_PREVIEW : maskedPreview(readableValue),
+      preview: configured && config.sensitive
+        ? SENSITIVE_PREVIEW
+        : config.structured
+          ? null
+          : maskedPreview(readableValue),
       value: configured && !config.sensitive ? readableValue : undefined
     };
   });
@@ -326,15 +370,17 @@ async function setBulk(input, actorId) {
     'email.user': 'GMAIL_USER',
     'email.from': 'GMAIL_FROM',
     'email.fromName': 'GMAIL_FROM_NAME',
-    'email.appPassword': 'GMAIL_APP_PASSWORD'
+    'email.appPassword': 'GMAIL_APP_PASSWORD',
+    usefulLinks: 'USEFUL_LINKS'
   };
   const pending = [];
   for (const [path, key] of Object.entries(mapping)) {
     const value = path.split('.').reduce((current, part) => current?.[part], input);
     if (value === undefined || value === null || value === '') continue;
     const [normalized, config] = definition(key);
-    assertWritableValue(normalized, value, config);
-    pending.push({ key: normalized, value });
+    const valueForStorage = normalizeValueForStorage(normalized, value);
+    assertWritableValue(normalized, valueForStorage, config);
+    pending.push({ key: normalized, value: valueForStorage });
   }
   const pendingCommands = Object.fromEntries(
     pending
@@ -385,6 +431,9 @@ async function getStructured() {
     || process.env.WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT
     || DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT;
   return {
+    usefulLinks: Array.isArray(values.USEFUL_LINKS?.value)
+      ? values.USEFUL_LINKS.value
+      : [],
     telegram: {
       configured: channelStatuses.telegram.configured,
       botTokenConfigured: values.TELEGRAM_BOT_TOKEN?.configured || false,
@@ -500,5 +549,5 @@ module.exports = {
   getWhatsappConsentRequestText, isTelegramPermissionCommand, normalizeWhatsappPermissionText, CHANNEL_REVEAL_FIELDS,
   DEFAULT_WHATSAPP_CLOUD_CONSENT_REQUEST_TEXT, DEFAULT_TELEGRAM_MESSAGES,
   RESERVED_CHAT_COMMANDS, getValidatedPermissionCommands,
-  SENSITIVE_PREVIEW, maskedPreview, isMaskedSentinel, revealChannel
+  SENSITIVE_PREVIEW, maskedPreview, isMaskedSentinel, revealChannel, parseUsefulLinks
 };

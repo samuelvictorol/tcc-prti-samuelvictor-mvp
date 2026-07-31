@@ -92,6 +92,37 @@ function data(response) {
   return response?.data?.data ?? response?.data ?? response
 }
 
+export function safeWhatsappLoginUrl(value) {
+  try {
+    const url = new URL(String(value || ''))
+    const path = url.pathname.replace(/\/+$/, '')
+    if (url.protocol !== 'https:' || url.hostname !== 'wa.me' || url.username || url.password) return ''
+    if ((url.port && url.port !== '443') || url.hash) return ''
+    if (!/^\/[1-9]\d{7,14}$/.test(path)) return ''
+    if (url.searchParams.get('text') !== '/login') return ''
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
+
+export function normalizeProfileAccessConfig(payload = {}) {
+  const loginUrl = safeWhatsappLoginUrl(payload?.whatsapp?.loginUrl)
+  return {
+    profilePath: payload?.profilePath === '/meu-perfil' ? payload.profilePath : '/meu-perfil',
+    whatsapp: {
+      configured: Boolean(payload?.whatsapp?.configured && loginUrl),
+      loginUrl: loginUrl || null,
+    },
+  }
+}
+
+export async function fetchProfileAccessConfig() {
+  return normalizeProfileAccessConfig(
+    data(await profileHttp.get('/my-profile/access-config')),
+  )
+}
+
 export async function requestProfileLogin(identifier, identifierType = 'phone') {
   return data(await profileHttp.post('/my-profile/request-login', {
     identifier,

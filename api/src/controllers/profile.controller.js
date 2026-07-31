@@ -5,6 +5,12 @@ function requestMeta(req) {
   return { ip: req.ip, userAgent: req.get('user-agent') };
 }
 
+async function accessConfig(_req, res) {
+  res.set('Cache-Control', 'no-store, max-age=0');
+  res.set('Pragma', 'no-cache');
+  res.json({ success: true, data: await profileManager.publicAccessConfig() });
+}
+
 async function requestLogin(req, res) {
   const data = await profileManager.requestLogin(req.validated.body, requestMeta(req));
   res.status(202).json({ success: true, data });
@@ -87,6 +93,7 @@ async function loginOverview(req, res) {
 }
 
 module.exports = {
+  accessConfig,
   requestLogin,
   exchangeLink,
   me,

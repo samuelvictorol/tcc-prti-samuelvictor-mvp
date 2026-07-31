@@ -7,6 +7,7 @@ import { useAuthStore } from '../stores/auth.js'
 import { connectSocket, disconnectSocket, getSocket } from '../services/socket.js'
 import { asList, errorMessage, http, paginationOf, unwrap } from '../services/http.js'
 import { playAppSound } from '../services/sounds.js'
+import { normalizeUsefulLinks } from '../services/useful-links.js'
 import {
   ADMIN_NOTIFICATION_READ_OPTIONS,
   ADMIN_NOTIFICATION_RETENTION_DAYS,
@@ -91,15 +92,25 @@ const notificationHistoryPages = computed(() => Math.max(
 
 const notificationDetailsContext = computed(() => JSON.stringify(notificationDetails.value?.context || {}, null, 2))
 
+const usefulNavigationLinks = computed(() => normalizeUsefulLinks(app.settings?.usefulLinks).map((link, index) => ({
+  key: `useful-link-${index}-${link.url}`,
+  label: link.title,
+  caption: link.caption,
+  icon: link.iconName,
+  href: link.url,
+  external: true,
+  available: true,
+})))
+
 const navigation = computed(() => [
   { label: 'Início', caption: 'Saúde e configurações', icon: 'space_dashboard', to: '/', available: true },
   { label: 'Contatos', caption: 'Pessoas e grupos', icon: 'group', to: '/contacts', available: true },
   { label: 'Templates', caption: 'Conteúdo por canal', icon: 'dashboard_customize', to: '/templates', available: true },
   { label: 'Notificações', caption: 'Envios e histórico', icon: 'send', to: '/notifications', available: true },
   { separator: true, label: 'Canais' },
-  { label: 'WhatsApp Cloud', icon: 'cloud_sync', to: '/whatsapp-cloud', available: true, channelColor: 'whatsapp' },
-  { label: 'Telegram', icon: 'send_to_mobile', to: '/telegram', available: app.isChannelEnabled('telegram'), channelColor: 'telegram' },
-  { label: 'Gmail', icon: 'mail', to: '/email', available: app.isChannelEnabled('email'), channelColor: 'gmail' },
+  { label: 'WhatsApp Cloud', icon: 'mdi-whatsapp', to: '/whatsapp-cloud', available: true, channelColor: 'whatsapp' },
+  { label: 'Telegram', icon: 'bi-telegram', to: '/telegram', available: app.isChannelEnabled('telegram'), channelColor: 'telegram' },
+  { label: 'Gmail', icon: 'mdi-gmail', to: '/email', available: app.isChannelEnabled('email'), channelColor: 'gmail' },
   { separator: true, label: 'Governança' },
   {
     label: 'Convites',
@@ -111,14 +122,19 @@ const navigation = computed(() => [
   },
   { label: 'Termos e LGPD', icon: 'verified_user', to: '/terms', available: true },
   { label: 'Logins', caption: 'Acesso seguro dos contatos', icon: 'login', to: '/logins', available: true },
-  { separator: true, label: 'Suporte' },
+  { separator: true, label: 'Úteis' },
   { label: 'Ajuda', caption: 'Guias e primeiros passos', icon: 'help_center', to: '/help', available: true },
+  ...usefulNavigationLinks.value,
 ])
+
+function closeDrawerOnMobile() {
+  if ($q.screen.lt.md) drawer.value = false
+}
 
 function goTo(item) {
   if (item.available) {
     router.push(item.to)
-    if ($q.screen.lt.md) drawer.value = false
+    closeDrawerOnMobile()
     return
   }
   $q.notify({
@@ -359,6 +375,7 @@ async function logout() {
 
 onMounted(() => {
   app.fetchStatus()
+  void app.fetchSettings().catch(() => {})
   loadAdminNotifications()
   const socket = connectSocket()
   socket.on('admin_notification:created', onAdminNotification)
@@ -688,8 +705,33 @@ onBeforeUnmount(() => {
         </div>
 
         <q-list class="nav-list">
-          <template v-for="(item, index) in navigation" :key="item.label || index">
+          <template v-for="(item, index) in navigation" :key="item.key || item.label || index">
             <div v-if="item.separator" class="nav-section-label">{{ item.label }}</div>
+            <q-item
+              v-else-if="item.external"
+              tag="a"
+              clickable
+              class="nav-item nav-item--useful"
+              :href="item.href"
+              target="_blank"
+              rel="noopener noreferrer"
+              :aria-label="`Abrir ${item.label} em uma nova guia`"
+              @click="closeDrawerOnMobile"
+            >
+              <q-tooltip :delay="400" anchor="center right" self="center left">
+                Abrir {{ item.label }} em uma nova guia
+              </q-tooltip>
+              <q-item-section avatar>
+                <q-icon :name="item.icon" />
+              </q-item-section>
+              <q-item-section>
+                <q-item-label>{{ item.label }}</q-item-label>
+                <q-item-label v-if="item.caption" caption>{{ item.caption }}</q-item-label>
+              </q-item-section>
+              <q-item-section side>
+                <q-icon name="mdi-open-in-new" size="15px" />
+              </q-item-section>
+            </q-item>
             <q-item
               v-else
               clickable
@@ -821,6 +863,39 @@ onBeforeUnmount(() => {
   color: #137d6c;
 }
 
+.nav-item--whatsapp,
+.nav-item--telegram,
+.nav-item--gmail {
+  border: 1px solid transparent;
+}
+
+.nav-item--whatsapp {
+  background: linear-gradient(105deg, rgba(71, 211, 162, 0.13), rgba(18, 140, 106, 0.04));
+  color: #185f4d;
+}
+
+.nav-item--telegram {
+  background: linear-gradient(105deg, rgba(91, 184, 245, 0.13), rgba(36, 139, 214, 0.04));
+  color: #245b7d;
+}
+
+.nav-item--gmail {
+  background: linear-gradient(105deg, rgba(242, 130, 126, 0.12), rgba(217, 81, 78, 0.035));
+  color: #87413f;
+}
+
+.nav-item--whatsapp:hover {
+  border-color: rgba(18, 140, 106, 0.14);
+}
+
+.nav-item--telegram:hover {
+  border-color: rgba(36, 139, 214, 0.14);
+}
+
+.nav-item--gmail:hover {
+  border-color: rgba(217, 81, 78, 0.13);
+}
+
 .nav-item--whatsapp .q-icon {
   color: #128c6a;
 }
@@ -862,6 +937,21 @@ onBeforeUnmount(() => {
 
 .nav-item--disabled {
   opacity: 0.55;
+}
+
+.nav-item--useful {
+  border: 1px solid transparent;
+  background: linear-gradient(105deg, rgba(130, 248, 230, 0.12), rgba(255, 255, 255, 0.35));
+}
+
+.nav-item--useful:hover {
+  border-color: rgba(53, 188, 164, 0.16);
+  background: linear-gradient(105deg, rgba(130, 248, 230, 0.22), rgba(53, 188, 164, 0.08));
+  color: #073b35;
+}
+
+.nav-item--useful:hover .q-icon {
+  color: #137d6c;
 }
 
 .nav-section-label {
