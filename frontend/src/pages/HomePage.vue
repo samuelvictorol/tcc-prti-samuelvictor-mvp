@@ -236,7 +236,11 @@ function channelHasSavedCredentials(channel) {
 }
 
 function channelConfigHeaderClass(channel) {
-  const tone = channel === 'whatsappCloud' ? 'whatsapp' : channel
+  const tone = {
+    telegram: 'telegram',
+    whatsappCloud: 'whatsapp',
+    email: 'gmail',
+  }[channel] || channel
   const configured = app.isChannelEnabled(channel) ? ' channel-config-header--configured' : ''
   return `channel-config-header channel-config-header--${tone} text-weight-bold${configured}`
 }

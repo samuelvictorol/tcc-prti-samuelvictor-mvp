@@ -45,6 +45,7 @@ describe('hierarquia dos painéis de configuração no Início', () => {
     expect(source).toContain("channelConfigHeaderClass('telegram')")
     expect(source).toContain("channelConfigHeaderClass('whatsappCloud')")
     expect(source).toContain("channelConfigHeaderClass('email')")
+    expect(source).toContain("email: 'gmail'")
     expect(source).toContain('.channel-config-header--telegram')
     expect(source).toContain('.channel-config-header--whatsapp')
     expect(source).toContain('.channel-config-header--gmail')
