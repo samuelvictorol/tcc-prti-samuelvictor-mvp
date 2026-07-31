@@ -110,17 +110,108 @@ export function cloudChatTemplateParameters(template = {}) {
   const builderComponents = template.payload?.builder?.components
   if (Array.isArray(builderComponents)) {
     return builderComponents.flatMap((component, componentIndex) => (
-      (component.parameters || []).map((parameter, parameterIndex) => ({
-        key: parameter.key || `campo_${componentIndex + 1}_${parameterIndex + 1}`,
-        label: parameter.label || parameter.parameterName || `Campo ${parameterIndex + 1}`,
-        type: parameter.type || 'text',
-      }))
+      (component.parameters || []).map((parameter, parameterIndex) => {
+        const normalized = {
+          key: parameter.key || `campo_${componentIndex + 1}_${parameterIndex + 1}`,
+          label: parameter.label || parameter.parameterName || `Campo ${parameterIndex + 1}`,
+          type: parameter.type || 'text',
+        }
+        if (parameter.example) normalized.example = parameter.example
+        if (parameter.filename) normalized.filename = parameter.filename
+        if (parameter.mediaSource) normalized.mediaSource = parameter.mediaSource
+        if (parameter.mediaAssetId) normalized.mediaAssetId = parameter.mediaAssetId
+        if (parameter.mimeType) normalized.mimeType = parameter.mimeType
+        if (parameter.uploadedFilename) normalized.uploadedFilename = parameter.uploadedFilename
+        return normalized
+      })
     ))
   }
   return (template.variables || []).map((key, index) => ({
     key,
     label: `Campo ${index + 1}`,
     type: 'text',
+  }))
+}
+
+const CLOUD_TEMPLATE_MEDIA_CONFIG = Object.freeze({
+  image: Object.freeze({
+    label: 'Imagem',
+    icon: 'image',
+    accept: 'image/jpeg,image/png',
+    maxBytes: 5 * 1024 * 1024,
+    extensions: Object.freeze(['jpg', 'jpeg', 'png']),
+  }),
+  video: Object.freeze({
+    label: 'Vídeo',
+    icon: 'videocam',
+    accept: 'video/mp4,video/3gpp',
+    maxBytes: 16 * 1024 * 1024,
+    extensions: Object.freeze(['mp4', '3gp']),
+  }),
+  document: Object.freeze({
+    label: 'Arquivo',
+    icon: 'description',
+    accept: '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,text/plain,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    maxBytes: 100 * 1024 * 1024,
+    extensions: Object.freeze(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt']),
+  }),
+})
+
+export function isCloudTemplateMediaParameter(parameter = {}) {
+  return Boolean(CLOUD_TEMPLATE_MEDIA_CONFIG[parameter.type])
+}
+
+export function cloudTemplateMediaConfig(parameterOrType = {}) {
+  const type = typeof parameterOrType === 'string' ? parameterOrType : parameterOrType.type
+  return CLOUD_TEMPLATE_MEDIA_CONFIG[type] || null
+}
+
+export function cloudTemplateMediaFileError(file, parameterOrType = {}) {
+  const config = cloudTemplateMediaConfig(parameterOrType)
+  if (!config || !file) return ''
+  const extension = String(file.name || '').split('.').pop()?.toLowerCase() || ''
+  const declaredType = String(file.type || '').toLowerCase()
+  const acceptedMime = config.accept.split(',').some((item) => item && !item.startsWith('.') && item === declaredType)
+  if (!config.extensions.includes(extension) || (declaredType && !acceptedMime)) {
+    return `Selecione um arquivo compatível com ${config.label.toLowerCase()}.`
+  }
+  if (Number(file.size || 0) > config.maxBytes) {
+    return `${config.label} excede o limite de ${Math.round(config.maxBytes / 1024 / 1024)} MB.`
+  }
+  return ''
+}
+
+export function normalizeCloudTemplateMediaUpload(payload = {}, fallback = {}) {
+  const source = payload?.data?.data || payload?.data || payload || {}
+  const mediaType = String(source.mediaType || fallback.mediaType || '').toLowerCase()
+  return {
+    id: source.id || source._id || null,
+    url: String(source.url || source.link || '').trim(),
+    mimeType: String(source.mimeType || fallback.mimeType || ''),
+    mediaType: mediaType === 'file' ? 'document' : mediaType,
+    filename: String(source.filename || fallback.filename || 'arquivo').trim(),
+  }
+}
+
+export function isValidCloudTemplateMediaUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim())
+    return url.protocol === 'https:' && Boolean(url.hostname) && !url.username && !url.password
+  } catch {
+    return false
+  }
+}
+
+export function cloudChatTemplateVariablesForSend(parameters = [], values = {}, assets = {}) {
+  return Object.fromEntries(parameters.map((parameter) => {
+    const value = values[parameter.key]
+    if (!isCloudTemplateMediaParameter(parameter)) return [parameter.key, value]
+    const asset = assets[parameter.key]
+    const assetReference = asset?.url || asset?.id || ''
+    if (!asset || String(value || '') !== String(assetReference)) return [parameter.key, value]
+    const media = asset.url ? { link: asset.url } : { id: asset.id }
+    if (parameter.type === 'document') media.filename = asset.filename || parameter.filename || undefined
+    return [parameter.key, media]
   }))
 }
 
@@ -159,6 +250,10 @@ const draft = ref('')
 const sendMode = ref('quick')
 const templateId = ref(null)
 const templateVariables = ref({})
+const templateMediaModes = ref({})
+const templateMediaFiles = ref({})
+const templateMediaAssets = ref({})
+const templateMediaUploading = ref({})
 const templates = ref([])
 const historyNote = ref('')
 const now = ref(Date.now())
@@ -169,6 +264,7 @@ let clockTimer = null
 let realtimeRefreshTimer = null
 let conversationsRequest = 0
 let messagesRequest = 0
+let templateMediaGeneration = 0
 const readRequests = new Set()
 
 const filteredConversations = computed(() => {
@@ -203,6 +299,7 @@ const selectedTemplate = computed(() => templates.value.find(
   (item) => String(item.id || item._id) === String(templateId.value),
 ) || null)
 const selectedTemplateParameters = computed(() => cloudChatTemplateParameters(selectedTemplate.value || {}))
+const templateMediaUploadPending = computed(() => Object.values(templateMediaUploading.value).some(Boolean))
 
 function conversationName(conversation) {
   return conversation?.contact?.displayName
@@ -299,6 +396,128 @@ async function loadTemplates() {
   }
 }
 
+function resetTemplateComposer() {
+  templateMediaGeneration += 1
+  const values = {}
+  const modes = {}
+  for (const parameter of selectedTemplateParameters.value) {
+    values[parameter.key] = isCloudTemplateMediaParameter(parameter) ? parameter.example || '' : ''
+    if (isCloudTemplateMediaParameter(parameter)) modes[parameter.key] = 'url'
+  }
+  templateVariables.value = values
+  templateMediaModes.value = modes
+  templateMediaFiles.value = {}
+  templateMediaAssets.value = {}
+  templateMediaUploading.value = {}
+}
+
+function templateMediaReference(parameter) {
+  return String(templateVariables.value[parameter.key] || '').trim()
+}
+
+function templateMediaPreviewUrl(parameter) {
+  const reference = templateMediaReference(parameter)
+  return isValidCloudTemplateMediaUrl(reference) ? reference : ''
+}
+
+function templateMediaFilename(parameter) {
+  const asset = templateMediaAssets.value[parameter.key]
+  if (asset?.filename) return asset.filename
+  const reference = templateMediaReference(parameter)
+  try {
+    return decodeURIComponent(new URL(reference).pathname.split('/').filter(Boolean).pop() || '') || parameter.label
+  } catch {
+    return parameter.filename || parameter.label
+  }
+}
+
+function templateMediaReferenceIsValid(parameter) {
+  const reference = templateMediaReference(parameter)
+  return isValidCloudTemplateMediaUrl(reference)
+}
+
+function clearTemplateMediaState(parameter, { clearValue = true } = {}) {
+  const remainingAssets = { ...templateMediaAssets.value }
+  delete remainingAssets[parameter.key]
+  templateMediaAssets.value = remainingAssets
+  templateMediaFiles.value = { ...templateMediaFiles.value, [parameter.key]: null }
+  if (clearValue) templateVariables.value = { ...templateVariables.value, [parameter.key]: '' }
+}
+
+function onTemplateMediaModeChange(parameter, mode) {
+  templateMediaModes.value = { ...templateMediaModes.value, [parameter.key]: mode }
+  clearTemplateMediaState(parameter)
+}
+
+function templateMediaHelp(parameter) {
+  if (parameter.type === 'image') return 'Use a imagem aprovada no cabeçalho do modelo Meta. Aceita JPG ou PNG de até 5 MB.'
+  if (parameter.type === 'video') return 'Use o vídeo aprovado no cabeçalho do modelo Meta. Aceita MP4 ou 3GP de até 16 MB.'
+  return 'Use o documento aprovado no cabeçalho do modelo Meta. O nome enviado ao WhatsApp será preservado.'
+}
+
+function onTemplateMediaRejected(parameter, rejectedEntries = []) {
+  const first = rejectedEntries[0]
+  const detail = cloudTemplateMediaFileError(first?.file, parameter)
+  $q.notify({
+    type: 'warning',
+    message: detail || 'O arquivo selecionado não atende aos limites deste campo.',
+  })
+}
+
+async function uploadTemplateMedia(parameter, selectedFile) {
+  const file = Array.isArray(selectedFile) ? selectedFile[0] : selectedFile
+  templateMediaFiles.value = { ...templateMediaFiles.value, [parameter.key]: file || null }
+  if (!file) {
+    clearTemplateMediaState(parameter)
+    return
+  }
+  const uploadGeneration = templateMediaGeneration
+  clearTemplateMediaState(parameter)
+  templateMediaFiles.value = { ...templateMediaFiles.value, [parameter.key]: file }
+
+  const validationError = cloudTemplateMediaFileError(file, parameter)
+  if (validationError) {
+    templateMediaFiles.value = { ...templateMediaFiles.value, [parameter.key]: null }
+    $q.notify({ type: 'warning', message: validationError })
+    return
+  }
+
+  templateMediaUploading.value = { ...templateMediaUploading.value, [parameter.key]: true }
+  try {
+    const multipart = new FormData()
+    multipart.append('file', file, file.name)
+    multipart.append('mediaType', parameter.type)
+    multipart.append('purpose', 'dispatch')
+    const response = await http.post('/media', multipart, {
+      timeout: 600000,
+    })
+    const asset = normalizeCloudTemplateMediaUpload(unwrap(response), {
+      filename: file.name,
+      mimeType: file.type,
+      mediaType: parameter.type,
+    })
+    if (uploadGeneration !== templateMediaGeneration) return
+    if (!asset.url) throw new Error('O upload foi concluído sem a URL pública exigida pela Meta.')
+    if (asset.mediaType && asset.mediaType !== parameter.type) {
+      throw new Error(`O servidor identificou ${asset.mediaType}, mas este campo exige ${parameter.type}.`)
+    }
+
+    const reference = asset.url
+    templateMediaAssets.value = { ...templateMediaAssets.value, [parameter.key]: asset }
+    templateVariables.value = { ...templateVariables.value, [parameter.key]: reference }
+    templateMediaModes.value = { ...templateMediaModes.value, [parameter.key]: 'upload' }
+    $q.notify({ type: 'positive', message: `${cloudTemplateMediaConfig(parameter).label} enviado e pronto para o template.` })
+  } catch (error) {
+    if (uploadGeneration !== templateMediaGeneration) return
+    clearTemplateMediaState(parameter)
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível enviar esta mídia.') })
+  } finally {
+    if (uploadGeneration === templateMediaGeneration) {
+      templateMediaUploading.value = { ...templateMediaUploading.value, [parameter.key]: false }
+    }
+  }
+}
+
 async function markConversationRead(id) {
   if (!id || readRequests.has(id)) return
   readRequests.add(id)
@@ -368,7 +587,7 @@ async function selectConversation(conversation) {
     sendMode.value = 'quick'
     draft.value = ''
     templateId.value = null
-    templateVariables.value = {}
+    resetTemplateComposer()
   }
   await loadConversation(selected.value, {
     background: !switching && messages.value.length > 0,
@@ -385,7 +604,7 @@ function closeConversation() {
   sendMode.value = 'quick'
   draft.value = ''
   templateId.value = null
-  templateVariables.value = {}
+  resetTemplateComposer()
 }
 
 async function scrollToBottom() {
@@ -427,6 +646,10 @@ async function sendMessage() {
     $q.notify({ type: 'warning', message: 'Associe esta conversa a um contato antes de enviar um template.' })
     return
   }
+  if (sendMode.value === 'template' && templateMediaUploadPending.value) {
+    $q.notify({ type: 'warning', message: 'Aguarde o término do upload da mídia.' })
+    return
+  }
   const missingParameters = selectedTemplateParameters.value.filter(
     (parameter) => !String(templateVariables.value[parameter.key] || '').trim(),
   )
@@ -434,6 +657,16 @@ async function sendMessage() {
     $q.notify({
       type: 'warning',
       message: `Preencha: ${missingParameters.map((parameter) => parameter.label).join(', ')}.`,
+    })
+    return
+  }
+  const invalidMedia = selectedTemplateParameters.value.filter(
+    (parameter) => isCloudTemplateMediaParameter(parameter) && !templateMediaReferenceIsValid(parameter),
+  )
+  if (sendMode.value === 'template' && invalidMedia.length) {
+    $q.notify({
+      type: 'warning',
+      message: `Use uma URL HTTPS ou envie o arquivo em: ${invalidMedia.map((parameter) => parameter.label).join(', ')}.`,
     })
     return
   }
@@ -449,10 +682,16 @@ async function sendMessage() {
         contactIds: [selectedContactId.value],
         groupIds: [],
         templateId: templateId.value,
-        content: { variables: { ...templateVariables.value } },
+        content: {
+          variables: cloudChatTemplateVariablesForSend(
+            selectedTemplateParameters.value,
+            templateVariables.value,
+            templateMediaAssets.value,
+          ),
+        },
         idempotencyKey: newIdempotencyKey('whatsapp-cloud-chat'),
       })
-      templateVariables.value = {}
+      resetTemplateComposer()
       $q.notify({ type: 'positive', message: 'Template colocado na fila de envio.' })
     }
     await refreshSelected()
@@ -933,18 +1172,121 @@ onBeforeUnmount(() => {
                   :options="templateOptions"
                   label="Template oficial"
                   :disable="!selectedCanCompose"
-                  @update:model-value="templateVariables = {}"
+                  @update:model-value="resetTemplateComposer"
                 />
-                <q-input
-                  v-for="parameter in selectedTemplateParameters"
-                  :key="parameter.key"
-                  v-model="templateVariables[parameter.key]"
-                  dense
-                  outlined
-                  :type="['image', 'video', 'document'].includes(parameter.type) ? 'url' : 'text'"
-                  :label="parameter.label"
-                  :disable="!selectedCanCompose"
-                />
+                <template v-for="parameter in selectedTemplateParameters" :key="parameter.key">
+                  <q-input
+                    v-if="!isCloudTemplateMediaParameter(parameter)"
+                    v-model="templateVariables[parameter.key]"
+                    dense
+                    outlined
+                    :label="parameter.label"
+                    :disable="!selectedCanCompose"
+                  />
+                  <section v-else class="template-media-field">
+                    <header class="template-media-field__header">
+                      <div>
+                        <q-icon :name="cloudTemplateMediaConfig(parameter).icon" color="positive" />
+                        <strong>{{ parameter.label }}</strong>
+                        <q-badge outline color="positive" :label="cloudTemplateMediaConfig(parameter).label" />
+                      </div>
+                      <q-btn flat round dense icon="help_outline" aria-label="Ajuda sobre a mídia">
+                        <q-tooltip max-width="300px">{{ templateMediaHelp(parameter) }}</q-tooltip>
+                      </q-btn>
+                    </header>
+
+                    <q-btn-toggle
+                      v-model="templateMediaModes[parameter.key]"
+                      no-caps
+                      unelevated
+                      spread
+                      toggle-color="positive"
+                      color="grey-2"
+                      text-color="dark"
+                      :options="[
+                        { label: 'Link HTTPS', value: 'url', icon: 'link' },
+                        { label: 'Enviar arquivo', value: 'upload', icon: 'upload_file' },
+                      ]"
+                      :disable="!selectedCanCompose || templateMediaUploading[parameter.key]"
+                      class="template-media-mode"
+                      @update:model-value="onTemplateMediaModeChange(parameter, $event)"
+                    />
+
+                    <q-input
+                      v-if="templateMediaModes[parameter.key] !== 'upload'"
+                      v-model.trim="templateVariables[parameter.key]"
+                      dense
+                      outlined
+                      type="url"
+                      label="Link público HTTPS *"
+                      hint="A Meta precisa acessar este endereço sem login ou cookies."
+                      :disable="!selectedCanCompose"
+                    >
+                      <template #prepend><q-icon name="https" /></template>
+                    </q-input>
+                    <q-file
+                      v-else
+                      :model-value="templateMediaFiles[parameter.key] || null"
+                      dense
+                      outlined
+                      clearable
+                      :accept="cloudTemplateMediaConfig(parameter).accept"
+                      :max-file-size="cloudTemplateMediaConfig(parameter).maxBytes"
+                      :label="`Selecionar ${cloudTemplateMediaConfig(parameter).label.toLowerCase()} *`"
+                      :hint="`Upload seguro · até ${Math.round(cloudTemplateMediaConfig(parameter).maxBytes / 1024 / 1024)} MB`"
+                      :disable="!selectedCanCompose || templateMediaUploading[parameter.key]"
+                      @update:model-value="uploadTemplateMedia(parameter, $event)"
+                      @rejected="onTemplateMediaRejected(parameter, $event)"
+                    >
+                      <template #prepend><q-icon name="attach_file" /></template>
+                      <template #append>
+                        <q-spinner v-if="templateMediaUploading[parameter.key]" color="positive" size="22px" />
+                      </template>
+                    </q-file>
+
+                    <q-linear-progress
+                      v-if="templateMediaUploading[parameter.key]"
+                      indeterminate
+                      rounded
+                      color="positive"
+                      class="template-media-progress"
+                    />
+
+                    <div v-if="templateMediaPreviewUrl(parameter)" class="template-media-preview">
+                      <q-img
+                        v-if="parameter.type === 'image'"
+                        :src="templateMediaPreviewUrl(parameter)"
+                        :alt="templateMediaFilename(parameter)"
+                        fit="cover"
+                        loading="lazy"
+                        class="template-media-preview__image"
+                      />
+                      <video
+                        v-else-if="parameter.type === 'video'"
+                        :src="templateMediaPreviewUrl(parameter)"
+                        controls
+                        preload="metadata"
+                        class="template-media-preview__video"
+                      />
+                      <a
+                        v-else
+                        :href="templateMediaPreviewUrl(parameter)"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="template-media-preview__document"
+                      >
+                        <q-icon name="description" size="28px" />
+                        <span><strong>{{ templateMediaFilename(parameter) }}</strong><small>Abrir arquivo em nova guia</small></span>
+                        <q-icon name="open_in_new" />
+                      </a>
+                      <footer v-if="templateMediaAssets[parameter.key]" class="template-media-preview__meta">
+                        <q-icon name="cloud_done" color="positive" />
+                        <span>{{ templateMediaAssets[parameter.key].filename }}</span>
+                        <q-badge v-if="templateMediaAssets[parameter.key].mimeType" color="grey-7" :label="templateMediaAssets[parameter.key].mimeType" />
+                      </footer>
+                    </div>
+                  </section>
+                </template>
               </div>
               <q-btn
                 round
@@ -954,6 +1296,7 @@ onBeforeUnmount(() => {
                 aria-label="Enviar mensagem"
                 :loading="sending"
                 :disable="!selectedCanCompose
+                  || (sendMode === 'template' && templateMediaUploadPending)
                   || (sendMode === 'quick' ? !draft.trim() : !templateId)"
                 @click="sendMessage"
               />
@@ -1235,6 +1578,113 @@ onBeforeUnmount(() => {
 
 .template-composer > :first-child {
   grid-column: 1 / -1;
+}
+
+.template-media-field {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 9px;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid rgba(22, 130, 109, 0.16);
+  border-radius: 13px;
+  background: rgba(239, 251, 248, 0.76);
+}
+
+.template-media-field__header,
+.template-media-field__header > div,
+.template-media-preview__meta,
+.template-media-preview__document {
+  display: flex;
+  align-items: center;
+}
+
+.template-media-field__header {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.template-media-field__header > div {
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.template-media-mode {
+  overflow: hidden;
+  border: 1px solid rgba(22, 130, 109, 0.12);
+  border-radius: 9px;
+}
+
+.template-media-progress {
+  margin-top: -5px;
+}
+
+.template-media-preview {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(3, 21, 21, 0.08);
+  border-radius: 11px;
+  background: #fff;
+}
+
+.template-media-preview__image,
+.template-media-preview__video {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  background: #edf5f3;
+}
+
+.template-media-preview__image {
+  min-height: 130px;
+}
+
+.template-media-preview__video {
+  object-fit: contain;
+}
+
+.template-media-preview__document {
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  color: #176e60;
+  text-decoration: none;
+}
+
+.template-media-preview__document span {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.template-media-preview__document strong,
+.template-media-preview__document small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-media-preview__document small {
+  color: #71827f;
+}
+
+.template-media-preview__meta {
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(3, 21, 21, 0.07);
+  color: #5f7671;
+  font-size: 0.7rem;
+}
+
+.template-media-preview__meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer-lock {

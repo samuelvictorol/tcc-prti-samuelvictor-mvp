@@ -76,14 +76,9 @@ function isSafeExternalHttpUrl(value) {
 function isSafePublicHttpsUrl(value) {
   try {
     const url = new URL(String(value));
-    const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-    if (url.protocol !== 'https:' || !hostname || url.username || url.password) return false;
+    if (url.protocol !== 'https:') return false;
     if (url.port && url.port !== '443') return false;
-    if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) return false;
-    const ipVersion = net.isIP(hostname);
-    if (ipVersion === 4 && isPrivateIpv4(hostname)) return false;
-    if (ipVersion === 6 && (hostname === '::1' || hostname === '::' || hostname.startsWith('fc') || hostname.startsWith('fd') || hostname.startsWith('fe8') || hostname.startsWith('fe9') || hostname.startsWith('fea') || hostname.startsWith('feb'))) return false;
-    return true;
+    return hasSafePublicHostname(url);
   } catch (_error) {
     return false;
   }

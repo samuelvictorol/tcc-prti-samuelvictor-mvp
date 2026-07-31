@@ -8,10 +8,11 @@ const hpp = require('hpp');
 const morgan = require('morgan');
 const { env } = require('./config/env');
 const loadRoutes = require('./routes/loader');
-const { requestContext, ipBlock, apiLimiter, webhookLimiter } = require('./middlewares/security');
+const { requestContext, ipBlock, apiLimiter, webhookLimiter, mediaLimiter } = require('./middlewares/security');
 const { notFound, errorHandler } = require('./middlewares/error');
+const { safeRequestPath } = require('./utils/request-path');
 
-morgan.token('safe-path', (req) => req.path || '/');
+morgan.token('safe-path', safeRequestPath);
 
 function corsOptions() {
   return {
@@ -25,6 +26,11 @@ function corsOptions() {
   };
 }
 
+function isPublicMediaDownload(req) {
+  return ['GET', 'HEAD'].includes(req.method)
+    && String(req.path || '').startsWith('/media/');
+}
+
 function createApp() {
   const app = express();
   app.disable('x-powered-by');
@@ -34,7 +40,9 @@ function createApp() {
   app.use(cors(corsOptions()));
   app.use(ipBlock);
   app.use(env.apiPrefix + '/webhooks', webhookLimiter);
-  app.use(env.apiPrefix, apiLimiter);
+  app.use(env.apiPrefix, (req, res, next) => (
+    isPublicMediaDownload(req) ? mediaLimiter(req, res, next) : apiLimiter(req, res, next)
+  ));
   app.use(compression());
   app.use(cookieParser());
   app.use(express.json({
@@ -44,13 +52,11 @@ function createApp() {
   app.use(express.urlencoded({ extended: false, limit: '100kb' }));
   app.use(mongoSanitize({ replaceWith: '_' }));
   app.use(hpp());
-  app.use(morgan(env.nodeEnv === 'production'
-    ? ':remote-addr - :method :safe-path :status :res[content-length] - :response-time ms'
-    : 'dev'));
+  app.use(morgan(':remote-addr - :method :safe-path :status :res[content-length] - :response-time ms'));
   loadRoutes(app);
   app.use(notFound);
   app.use(errorHandler);
   return app;
 }
 
-module.exports = { createApp, corsOptions };
+module.exports = { createApp, corsOptions, isPublicMediaDownload };

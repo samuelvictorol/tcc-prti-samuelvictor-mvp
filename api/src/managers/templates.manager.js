@@ -12,6 +12,26 @@ const {
 } = require('../utils/system-templates');
 const { telegramTemplateDefinition } = require('../dtos/templates.dto');
 const { telegramDefinitionFromTemplate, telegramTemplateBody, extractVariables } = require('../utils/telegram-templates');
+const templateMediaManager = require('./template-media.manager');
+
+function templateMediaAssetIds(template = {}) {
+  return templateMediaManager.normalizeAssetIds(
+    (template.payload?.builder?.components || []).flatMap((component) => (
+      (component.parameters || []).map((parameter) => parameter.mediaAssetId)
+    ))
+  );
+}
+
+async function cleanupDetachedTemplateMedia(assetIds) {
+  const ids = templateMediaManager.normalizeAssetIds(assetIds);
+  if (!ids.length) return { removed: 0 };
+  const referenced = await Template.distinct(
+    'payload.builder.components.parameters.mediaAssetId',
+    { 'payload.builder.components.parameters.mediaAssetId': { $in: ids } }
+  );
+  const referencedSet = new Set(referenced.map(String));
+  return templateMediaManager.removeRetained(ids.filter((id) => !referencedSet.has(id)));
+}
 
 function clean(input) {
   const output = { ...input };
@@ -234,7 +254,14 @@ function assertSystemIdentityUnchanged(existing, input) {
 async function create(input, actorId) {
   const normalized = normalize(input);
   validateTemplate(normalized);
-  return serialize(await Template.create({ ...clean(normalized), createdBy: actorId, updatedBy: actorId }));
+  const mediaAssetIds = templateMediaAssetIds(normalized);
+  await templateMediaManager.retain(mediaAssetIds);
+  try {
+    return serialize(await Template.create({ ...clean(normalized), createdBy: actorId, updatedBy: actorId }));
+  } catch (error) {
+    await cleanupDetachedTemplateMedia(mediaAssetIds).catch(() => {});
+    throw error;
+  }
 }
 
 async function getById(id) {
@@ -284,11 +311,22 @@ async function update(id, input, actorId) {
   }
   const normalized = normalize(merged);
   validateTemplate(normalized);
+  const previousMediaAssetIds = templateMediaAssetIds(existing);
+  const nextMediaAssetIds = templateMediaAssetIds(normalized);
+  await templateMediaManager.retain(nextMediaAssetIds);
   const changed = Object.fromEntries(Object.keys(input).map((key) => [key, normalized[key]]));
   for (const derivedKey of ['templateType', 'whatsappCloudPreset', 'externalTemplateName', 'languageCode', 'body', 'html', 'subject', 'payload', 'variables']) {
     if (normalized[derivedKey] !== existing[derivedKey]) changed[derivedKey] = normalized[derivedKey];
   }
-  const template = await Template.findByIdAndUpdate(id, { $set: { ...clean(changed), updatedBy: actorId } }, { new: true, runValidators: true }).lean();
+  let template;
+  try {
+    template = await Template.findByIdAndUpdate(id, { $set: { ...clean(changed), updatedBy: actorId } }, { new: true, runValidators: true }).lean();
+  } catch (error) {
+    await cleanupDetachedTemplateMedia(nextMediaAssetIds.filter((assetId) => !previousMediaAssetIds.includes(assetId))).catch(() => {});
+    throw error;
+  }
+  await cleanupDetachedTemplateMedia(previousMediaAssetIds.filter((assetId) => !nextMediaAssetIds.includes(assetId)))
+    .catch((error) => console.error('[template-media detach cleanup]', error.message));
   return serialize(template);
 }
 
@@ -313,6 +351,8 @@ async function remove(id) {
   }
   const result = await Template.deleteOne({ _id: id });
   if (!result.deletedCount) throw new ApiError(404, 'Template nao encontrado');
+  await cleanupDetachedTemplateMedia(templateMediaAssetIds(existing))
+    .catch((error) => console.error('[template-media delete cleanup]', error.message));
   return { id: String(id), removed: true };
 }
 
@@ -327,5 +367,7 @@ module.exports = {
   ensureSystemTemplates,
   retireSystemTemplates,
   serializeTemplate: serialize,
+  templateMediaAssetIds,
+  cleanupDetachedTemplateMedia,
   isSystemTemplate
 };

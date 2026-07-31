@@ -13,6 +13,8 @@ export function notificationTemplateVariableDefinitions(template = {}, channel =
       label: source.label || existing.label || fallback.label || key,
       type: source.type || existing.type || fallback.type || 'text',
       example: source.example ?? existing.example ?? fallback.example ?? '',
+      mediaSource: source.mediaSource || existing.mediaSource || fallback.mediaSource || '',
+      mediaAssetId: source.mediaAssetId || existing.mediaAssetId || fallback.mediaAssetId || '',
       channels: [...new Set([...(existing.channels || []), channel].filter(Boolean))],
     })
   }
@@ -33,6 +35,8 @@ export function notificationTemplateVariableDefinitions(template = {}, channel =
         label: parameter.label,
         type: parameter.type,
         example: parameter.example,
+        mediaSource: parameter.mediaSource,
+        mediaAssetId: parameter.mediaAssetId,
       })
     }
   }
@@ -266,6 +270,14 @@ const variableDefinitions = computed(() => tab.value === 'global'
   : tab.value === 'template' && selectedTemplate.value
     ? notificationTemplateVariableDefinitions(selectedTemplate.value, form.channel)
     : [])
+const variableSelectionKey = computed(() => JSON.stringify({
+  tab: tab.value,
+  channel: form.channel,
+  templateId: form.templateId,
+  templateSetId: form.templateSetId,
+  selectionMode: globalSelectionMode.value,
+  templateIds: form.templateIds,
+}))
 
 const selectedRecipients = computed(() => form.contactIds.length + form.groupIds.length)
 const previewVariables = computed(() => Object.fromEntries(variableDefinitions.value.map((definition) => [
@@ -323,6 +335,15 @@ watch(() => form.channel, () => {
     form.templateId = null
   }
 })
+
+watch([variableDefinitions, variableSelectionKey], ([definitions]) => {
+  form.variableValues = Object.fromEntries((definitions || []).map((definition) => [
+    definition.key,
+    ['image', 'video', 'document'].includes(definition.type) && definition.example
+      ? String(definition.example)
+      : '',
+  ]))
+}, { immediate: true })
 
 const deliveryColumns = [
   { name: 'createdAt', label: 'Quando', field: 'createdAt', align: 'left' },

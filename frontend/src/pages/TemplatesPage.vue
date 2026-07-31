@@ -92,6 +92,57 @@ export const META_PARAMETER_OPTIONS = Object.freeze([
   Object.freeze({ label: 'Código do cupom', value: 'coupon_code' }),
 ])
 
+export const META_MEDIA_PARAMETER_TYPES = Object.freeze(['image', 'video', 'document'])
+export const META_LANGUAGE_OPTIONS = Object.freeze([
+  Object.freeze({ label: 'Português (Brasil) — pt_BR', value: 'pt_BR' }),
+  Object.freeze({ label: 'Inglês (Estados Unidos) — en_US', value: 'en_US' }),
+])
+
+export const META_PARAMETER_DEFAULTS = Object.freeze({
+  text: Object.freeze({ key: 'texto', label: 'Texto' }),
+  currency: Object.freeze({ key: 'valor_moeda', label: 'Valor monetário' }),
+  date_time: Object.freeze({ key: 'data_hora', label: 'Data e hora' }),
+  image: Object.freeze({ key: 'imagem_cabecalho', label: 'Link da imagem' }),
+  video: Object.freeze({ key: 'video_cabecalho', label: 'Link do vídeo' }),
+  document: Object.freeze({ key: 'arquivo_cabecalho', label: 'Link do arquivo' }),
+  payload: Object.freeze({ key: 'resposta_botao', label: 'Resposta do botão' }),
+  coupon_code: Object.freeze({ key: 'codigo_cupom', label: 'Código do cupom' }),
+})
+
+export function isCloudMediaParameter(type) {
+  return META_MEDIA_PARAMETER_TYPES.includes(String(type || ''))
+}
+
+export function cloudParameterDefault(type = 'text') {
+  return META_PARAMETER_DEFAULTS[type] || META_PARAMETER_DEFAULTS.text
+}
+
+export function cloudMediaExampleLabel(type) {
+  if (type === 'image') return 'Link da imagem'
+  if (type === 'video') return 'Link do vídeo'
+  if (type === 'document') return 'Link do arquivo'
+  return 'Valor de exemplo'
+}
+
+export function cloudMediaAccept(type) {
+  if (type === 'image') return 'image/jpeg,image/png'
+  if (type === 'video') return 'video/mp4,video/3gpp'
+  if (type === 'document') return '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,application/pdf,text/plain'
+  return undefined
+}
+
+export function cloudMediaMaxBytes(type) {
+  if (type === 'image') return 5 * 1024 * 1024
+  if (type === 'video') return 16 * 1024 * 1024
+  if (type === 'document') return 100 * 1024 * 1024
+  return 0
+}
+
+export function cloudMediaLimitLabel(type) {
+  const bytes = cloudMediaMaxBytes(type)
+  return bytes ? `${Math.round(bytes / 1024 / 1024)} MB` : ''
+}
+
 let cloudBuilderSequence = 0
 
 function nextCloudBuilderId(prefix) {
@@ -109,15 +160,23 @@ export function normalizeCloudVariableKey(value, fallback = 'campo') {
 }
 
 export function createCloudParameter(overrides = {}) {
+  const defaults = cloudParameterDefault(overrides.type || 'text')
   return {
     id: overrides.id || nextCloudBuilderId('parameter'),
     type: overrides.type || 'text',
-    key: overrides.key || '',
+    key: overrides.key || defaults.key,
     parameterName: overrides.parameterName || overrides.parameter_name || '',
-    label: overrides.label || '',
+    label: overrides.label || defaults.label,
     example: overrides.example || '',
     currencyCode: overrides.currencyCode || 'BRL',
     filename: overrides.filename || '',
+    mediaSource: overrides.mediaSource || overrides.media_source || (overrides.mediaAssetId || overrides.assetId ? 'upload' : 'url'),
+    mediaAssetId: overrides.mediaAssetId || overrides.assetId || overrides.media_id || '',
+    mimeType: overrides.mimeType || overrides.mime_type || '',
+    mediaType: overrides.mediaType || overrides.media_type || '',
+    uploadedFilename: overrides.uploadedFilename || overrides.uploaded_filename || '',
+    uploadFile: null,
+    uploading: false,
   }
 }
 
@@ -148,6 +207,11 @@ export function buildCustomWhatsAppCloudDefinition(input) {
       example: String(parameter.example || '').trim(),
       currencyCode: parameter.type === 'currency' ? String(parameter.currencyCode || 'BRL').toUpperCase() : undefined,
       filename: parameter.type === 'document' ? String(parameter.filename || '').trim() || undefined : undefined,
+      mediaSource: isCloudMediaParameter(parameter.type) ? String(parameter.mediaSource || 'url') : undefined,
+      mediaAssetId: isCloudMediaParameter(parameter.type) ? String(parameter.mediaAssetId || '').trim() || undefined : undefined,
+      mimeType: isCloudMediaParameter(parameter.type) ? String(parameter.mimeType || '').trim() || undefined : undefined,
+      mediaType: isCloudMediaParameter(parameter.type) ? String(parameter.mediaType || parameter.type).trim() || undefined : undefined,
+      uploadedFilename: isCloudMediaParameter(parameter.type) ? String(parameter.uploadedFilename || '').trim() || undefined : undefined,
     })),
   }))
   const variables = [...new Set(builderComponents.flatMap((component) => component.parameters.map((parameter) => parameter.key)))]
@@ -162,6 +226,65 @@ export function buildCustomWhatsAppCloudDefinition(input) {
     variables,
     payload: {
       builder: { version: 1, components: builderComponents },
+    },
+  }
+}
+
+function customPreviewParameter(parameter = {}) {
+  const fallback = String(parameter.example || `{{${normalizeCloudVariableKey(parameter.key)}}}`).trim()
+  const parameterName = String(parameter.parameterName || '').trim()
+  const named = parameterName ? { parameter_name: parameterName } : {}
+  if (parameter.type === 'image') return { type: 'image', image: { link: fallback }, ...named }
+  if (parameter.type === 'video') return { type: 'video', video: { link: fallback }, ...named }
+  if (parameter.type === 'document') {
+    return {
+      type: 'document',
+      document: {
+        link: fallback,
+        ...(String(parameter.filename || parameter.uploadedFilename || '').trim()
+          ? { filename: String(parameter.filename || parameter.uploadedFilename).trim() }
+          : {}),
+      },
+      ...named,
+    }
+  }
+  if (parameter.type === 'currency') {
+    return {
+      type: 'currency',
+      currency: {
+        fallback_value: fallback,
+        code: String(parameter.currencyCode || 'BRL').toUpperCase(),
+        amount_1000: 0,
+      },
+      ...named,
+    }
+  }
+  if (parameter.type === 'date_time') return { type: 'date_time', date_time: { fallback_value: fallback }, ...named }
+  if (parameter.type === 'payload') return { type: 'payload', payload: fallback }
+  if (parameter.type === 'coupon_code') return { type: 'coupon_code', coupon_code: fallback }
+  return { type: 'text', text: fallback, ...named }
+}
+
+export function buildCustomWhatsAppCloudPreviewPayload(input = {}) {
+  const components = (input.components || [])
+    .filter((component) => Array.isArray(component.parameters) && component.parameters.length)
+    .map((component) => ({
+      type: component.type,
+      ...(component.type === 'button' ? {
+        sub_type: component.subType === 'otp_copy_code' ? 'url' : component.subType,
+        index: String(component.index ?? 0),
+      } : {}),
+      parameters: component.parameters.map(customPreviewParameter),
+    }))
+
+  return {
+    messaging_product: 'whatsapp',
+    to: '{{telefone_do_contato}}',
+    type: 'template',
+    template: {
+      name: String(input.templateName || 'nome_exato_na_meta').trim(),
+      language: { code: String(input.languageCode || 'pt_BR').trim() },
+      ...(components.length ? { components } : {}),
     },
   }
 }
@@ -230,13 +353,14 @@ export function renderWhatsAppCloudPreview(value) {
 </script>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import DOMPurify from 'dompurify'
 import { useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import ContextHelp from '../components/ContextHelp.vue'
 import TelegramTemplateBuilder from '../components/TelegramTemplateBuilder.vue'
+import { emailHtmlToPlainText, looksLikeFlattenedEmailHtml } from '../services/email-templates.js'
 import { asList, errorMessage, fetchAll, http, paginationOf, unwrap } from '../services/http.js'
 import {
   TEMPLATE_SET_CHANNELS,
@@ -261,6 +385,7 @@ const $q = useQuasar()
 const loading = ref(false)
 const saving = ref(false)
 const dialog = ref(false)
+const cloudPreviewMode = ref('visual')
 const tab = ref('all')
 const search = ref('')
 const editingId = ref(null)
@@ -285,6 +410,7 @@ const linkSetDialog = ref(false)
 const linkSetSaving = ref(false)
 const linkSetTemplate = ref(null)
 const linkSetIds = ref([])
+const pendingCloudMediaAssetIds = new Set()
 
 const channelOptions = [
   { label: 'Telegram', value: 'telegram', icon: 'send_to_mobile' },
@@ -336,6 +462,44 @@ const cloudPreviewText = computed(() => (
     ? form.description || form.metadata.approvedName || 'Descreva o conteúdo aprovado na Meta.'
     : renderWhatsAppCloudPreview(form.cloudPreset)
 ))
+const cloudPreviewPayload = computed(() => {
+  if (isCustomCloudTemplate.value) {
+    return buildCustomWhatsAppCloudPreviewPayload({
+      templateName: form.metadata.approvedName,
+      languageCode: form.metadata.language,
+      components: form.cloudComponents,
+    })
+  }
+  const definition = buildWhatsAppCloudTemplateDefinition(form.cloudPreset)
+  return {
+    messaging_product: 'whatsapp',
+    to: '{{telefone_do_contato}}',
+    type: 'template',
+    template: {
+      name: definition.externalTemplateName,
+      language: { code: definition.languageCode },
+      ...(definition.payload?.components?.length ? { components: definition.payload.components } : {}),
+    },
+  }
+})
+const cloudPreviewPayloadJson = computed(() => JSON.stringify(cloudPreviewPayload.value, null, 2))
+const cloudHeaderMediaPreview = computed(() => {
+  if (!isCustomCloudTemplate.value) return null
+  const header = form.cloudComponents.find((component) => component.type === 'header')
+  const parameter = header?.parameters?.find((item) => isCloudMediaParameter(item.type))
+  const url = String(parameter?.example || '').trim()
+  if (!parameter || !url) return null
+  return {
+    type: parameter.type,
+    url,
+    filename: String(parameter.filename || parameter.uploadedFilename || '').trim() || 'Documento',
+    uploaded: parameter.mediaSource === 'upload',
+  }
+})
+const cloudMediaPreviewFailed = ref(false)
+watch(() => cloudHeaderMediaPreview.value?.url, () => {
+  cloudMediaPreviewFailed.value = false
+})
 
 const columns = [
   { name: 'name', label: 'Template', field: 'name', align: 'left', sortable: true },
@@ -411,6 +575,12 @@ const safePreview = computed(() => {
   escaped.textContent = body
   return `<p>${escaped.innerHTML.replace(/\n/g, '<br>')}</p>`
 })
+
+const flattenedEmailHtml = computed(() => (
+  form.channel === 'email'
+  && form.format === 'html'
+  && looksLikeFlattenedEmailHtml(form.body)
+))
 
 const telegramMediaPreview = computed(() => {
   if (form.channel !== 'telegram') return null
@@ -670,11 +840,13 @@ async function saveTemplateSetLinks() {
 }
 
 function openCreate(channel = tab.value) {
+  cleanupPendingCloudMedia().catch(() => {})
   editingId.value = null
   Object.assign(form, emptyForm(), { channel: channel === 'all' ? 'telegram' : channel })
   if (form.channel === 'email') form.format = 'html'
   if (form.channel === 'telegram') form.format = 'telegram_text'
   if (form.channel === 'whatsapp_cloud') applyCloudPreset('order_confirmation', { suggestName: true })
+  cloudPreviewMode.value = 'visual'
   dialog.value = true
 }
 
@@ -702,6 +874,7 @@ function applyCloudPreset(value, { suggestName = false } = {}) {
 }
 
 function onChannelChange(value) {
+  if (value !== 'whatsapp_cloud') cleanupPendingCloudMedia().catch(() => {})
   if (value === 'email') {
     form.format = 'html'
     return
@@ -729,7 +902,8 @@ function addCloudComponent() {
 }
 
 function removeCloudComponent(index) {
-  form.cloudComponents.splice(index, 1)
+  const [component] = form.cloudComponents.splice(index, 1)
+  for (const parameter of component?.parameters || []) discardPendingCloudMedia(parameter.mediaAssetId)
 }
 
 function moveItem(list, index, direction) {
@@ -744,19 +918,60 @@ function addCloudParameter(component) {
     $q.notify({ type: 'warning', message: component.type === 'header' ? 'O cabeçalho aceita somente um parâmetro.' : 'Cada botão aceita somente um parâmetro.' })
     return
   }
-  const usedKeys = new Set(form.cloudComponents.flatMap((item) => item.parameters.map((parameter) => parameter.key)))
-  let position = usedKeys.size + 1
-  while (usedKeys.has(`campo_${position}`)) position += 1
-  component.parameters.push(createCloudParameter({
-    type: component.type === 'button' && component.subType === 'copy_code'
+  const type = component.type === 'button' && component.subType === 'copy_code'
       ? 'coupon_code'
       : component.type === 'button' && component.subType === 'quick_reply'
         ? 'payload'
-        : 'text',
-    key: `campo_${position}`,
-    label: `Campo ${position}`,
+        : 'text'
+  const defaults = cloudParameterDefault(type)
+  component.parameters.push(createCloudParameter({
+    type,
+    key: uniqueCloudParameterKey(defaults.key),
+    label: defaults.label,
     example: '',
   }))
+}
+
+function uniqueCloudParameterKey(base, currentParameter = null) {
+  const normalized = normalizeCloudVariableKey(base)
+  const used = new Set(form.cloudComponents.flatMap((component) => component.parameters
+    .filter((parameter) => parameter !== currentParameter)
+    .map((parameter) => normalizeCloudVariableKey(parameter.key))))
+  if (!used.has(normalized)) return normalized
+  let suffix = 2
+  while (used.has(`${normalized}_${suffix}`)) suffix += 1
+  return `${normalized}_${suffix}`
+}
+
+function onCloudParameterTypeChange(parameter) {
+  discardPendingCloudMedia(parameter.mediaAssetId)
+  const defaults = cloudParameterDefault(parameter.type)
+  const autoKeys = Object.values(META_PARAMETER_DEFAULTS).map((item) => item.key)
+  const autoLabels = Object.values(META_PARAMETER_DEFAULTS).map((item) => item.label)
+  if (!parameter.key || /^campo_\d+$/.test(parameter.key) || autoKeys.some((key) => parameter.key === key || parameter.key.startsWith(`${key}_`))) {
+    parameter.key = uniqueCloudParameterKey(defaults.key, parameter)
+  }
+  if (!parameter.label || /^Campo \d+$/.test(parameter.label) || autoLabels.includes(parameter.label)) {
+    parameter.label = defaults.label
+  }
+  if (isCloudMediaParameter(parameter.type)) {
+    parameter.example = ''
+    parameter.mediaSource = 'url'
+    parameter.mediaAssetId = ''
+    parameter.mimeType = ''
+    parameter.mediaType = parameter.type
+    parameter.uploadedFilename = ''
+    parameter.uploadFile = null
+    if (parameter.type !== 'document') parameter.filename = ''
+  } else {
+    parameter.example = ''
+    parameter.mediaSource = 'url'
+    parameter.mediaAssetId = ''
+    parameter.mimeType = ''
+    parameter.mediaType = ''
+    parameter.uploadedFilename = ''
+    parameter.uploadFile = null
+  }
 }
 
 function parameterOptionsFor(component) {
@@ -776,7 +991,10 @@ function onCloudComponentTypeChange(component) {
   const allowed = new Set(parameterOptionsFor(component).map((option) => option.value))
   const fallbackType = parameterOptionsFor(component)[0]?.value || 'text'
   for (const parameter of component.parameters) {
-    if (!allowed.has(parameter.type)) parameter.type = fallbackType
+    if (!allowed.has(parameter.type)) {
+      parameter.type = fallbackType
+      onCloudParameterTypeChange(parameter)
+    }
   }
 }
 
@@ -785,14 +1003,125 @@ function onCloudButtonSubTypeChange(component) {
 }
 
 function removeCloudParameter(component, index) {
-  component.parameters.splice(index, 1)
+  const [parameter] = component.parameters.splice(index, 1)
+  discardPendingCloudMedia(parameter?.mediaAssetId)
+}
+
+function cloudMediaAssetIds() {
+  return form.cloudComponents.flatMap((component) => (
+    (component.parameters || []).map((parameter) => String(parameter.mediaAssetId || '').trim()).filter(Boolean)
+  ))
+}
+
+async function discardPendingCloudMedia(assetId) {
+  const id = String(assetId || '').trim()
+  if (!id || !pendingCloudMediaAssetIds.has(id)) return
+  pendingCloudMediaAssetIds.delete(id)
+  await http.delete(`/media/${id}`).catch(() => {})
+}
+
+async function cleanupPendingCloudMedia(keepIds = []) {
+  const keep = new Set(keepIds.map(String))
+  await Promise.all([...pendingCloudMediaAssetIds]
+    .filter((id) => !keep.has(id))
+    .map((id) => discardPendingCloudMedia(id)))
+}
+
+function onCloudMediaSourceChange(parameter, source) {
+  discardPendingCloudMedia(parameter.mediaAssetId)
+  parameter.mediaSource = source
+  parameter.example = ''
+  parameter.mediaAssetId = ''
+  parameter.mimeType = ''
+  parameter.mediaType = parameter.type
+  parameter.uploadedFilename = ''
+  parameter.uploadFile = null
+}
+
+function componentHelpTitle(component) {
+  if (component.type === 'header') return 'Cabeçalho do template na Meta'
+  if (component.type === 'button') return 'Botão do template na Meta'
+  return 'Corpo do template na Meta'
+}
+
+function componentHelpText(component) {
+  if (component.type === 'header') {
+    return [
+      'No criador oficial da Meta, o cabeçalho pode ser texto ou uma amostra de imagem, vídeo ou documento. Repita aqui exatamente o mesmo tipo aprovado.',
+      'Cabeçalhos de mídia aceitam um único parâmetro. O arquivo pode vir de um link HTTPS público ou do upload seguro para o Notify Flow.',
+    ]
+  }
+  if (component.type === 'button') {
+    return [
+      'Escolha o mesmo subtipo configurado no criador da Meta e informe o índice visual do botão, começando em 0.',
+      'URL dinâmica e copiar código usam um parâmetro; botões estáticos não precisam ser adicionados ao payload.',
+    ]
+  }
+  return [
+    'Cada variável do corpo deve aparecer na mesma ordem do modelo aprovado na Meta.',
+    'Se o modelo usa parâmetros nomeados, preencha todos os nomes deste componente; se usa {{1}}, {{2}}, mantenha os nomes Meta vazios.',
+  ]
+}
+
+function parameterHelpText(parameter) {
+  if (parameter.type === 'image') return ['Use a mesma imagem de cabeçalho esperada pelo modelo aprovado.', 'O link precisa ser HTTPS e acessível pela Meta, ou você pode enviar a imagem para o Notify Flow.']
+  if (parameter.type === 'video') return ['Use um vídeo MP4 ou 3GPP compatível com o cabeçalho aprovado na Meta.', 'O upload gera um link hospedado pelo Notify Flow para compor o payload automaticamente.']
+  if (parameter.type === 'document') return ['Use um documento compatível com o cabeçalho aprovado e, se desejar, informe o nome exibido ao destinatário.', 'O arquivo enviado fica associado ao template e o link é montado automaticamente no payload.']
+  if (parameter.type === 'currency') return ['Informe um exemplo legível e o código ISO de três letras, como BRL.', 'No disparo, o Notify Flow converte o valor para o objeto currency exigido pela Meta.']
+  if (parameter.type === 'date_time') return ['O exemplo ajuda o operador a reconhecer o campo de data e hora.', 'O valor será convertido para date_time no payload final.']
+  return ['A variável interna identifica este valor dentro do Notify Flow.', 'O nome Meta só deve ser preenchido quando o modelo oficial usa parâmetros nomeados em vez de posições como {{1}}.']
+}
+
+async function uploadCloudParameterMedia(parameter, selectedFile) {
+  const file = Array.isArray(selectedFile) ? selectedFile[0] : selectedFile
+  if (!file) return
+  parameter.uploading = true
+  try {
+    await discardPendingCloudMedia(parameter.mediaAssetId)
+    parameter.example = ''
+    parameter.mediaAssetId = ''
+    parameter.mimeType = ''
+    parameter.uploadedFilename = ''
+    const body = new FormData()
+    body.append('file', file)
+    body.append('mediaType', parameter.type)
+    body.append('purpose', 'template')
+    const uploaded = unwrap(await http.post('/media', body, { timeout: 600000 })) || {}
+    if (!uploaded.url) throw new Error('O servidor não retornou o link público da mídia.')
+    if (uploaded.mediaType && uploaded.mediaType !== parameter.type) {
+      throw new Error(`O arquivo enviado é do tipo ${uploaded.mediaType}, mas este campo exige ${parameter.type}.`)
+    }
+    parameter.mediaSource = 'upload'
+    parameter.example = uploaded.url
+    parameter.mediaAssetId = uploaded.id || ''
+    if (parameter.mediaAssetId) pendingCloudMediaAssetIds.add(String(parameter.mediaAssetId))
+    parameter.mimeType = uploaded.mimeType || file.type || ''
+    parameter.mediaType = uploaded.mediaType || parameter.type
+    parameter.uploadedFilename = uploaded.filename || file.name || ''
+    if (parameter.type === 'document' && !parameter.filename) parameter.filename = uploaded.filename || file.name || ''
+    $q.notify({ type: 'positive', message: 'Mídia enviada e vinculada ao template.' })
+  } catch (error) {
+    parameter.uploadFile = null
+    $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível enviar a mídia.') })
+  } finally {
+    parameter.uploading = false
+  }
+}
+
+function onCloudMediaRejected(parameter, rejectedEntries = []) {
+  const reason = rejectedEntries[0]?.failedPropValidation
+  const fallback = `Use um arquivo compatível de até ${cloudMediaLimitLabel(parameter.type)}.`
+  $q.notify({
+    type: 'warning',
+    message: reason === 'max-file-size' ? `O arquivo excede o limite de ${cloudMediaLimitLabel(parameter.type)}.` : fallback,
+  })
 }
 
 function customCloudValidationError() {
   if (!form.metadata.approvedName.trim()) return 'Informe o nome exato aprovado na Meta.'
   if (!/^[a-z0-9_]{1,512}$/.test(form.metadata.approvedName.trim())) return 'O nome Meta aceita somente letras minúsculas, números e sublinhado.'
   if (!form.metadata.language.trim()) return 'Informe o idioma aprovado na Meta.'
-  if (!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(form.metadata.language.trim())) return 'Use um idioma Meta válido, como pt_BR ou en_US.'
+  if (!META_LANGUAGE_OPTIONS.some((option) => option.value === form.metadata.language.trim())) return 'Escolha pt_BR ou en_US, conforme o idioma aprovado na Meta.'
   const parameters = form.cloudComponents.flatMap((component) => component.parameters)
   if (form.cloudComponents.filter((component) => component.type === 'header').length > 1) return 'Use no máximo um componente de cabeçalho.'
   if (form.cloudComponents.filter((component) => component.type === 'body').length > 1) return 'Use no máximo um componente de corpo.'
@@ -806,6 +1135,21 @@ function customCloudValidationError() {
     return new Set(componentKeys).size !== componentKeys.length
   })) return 'Cada parâmetro do mesmo componente deve usar uma variável diferente.'
   if (parameters.some((parameter) => !String(parameter.label || '').trim())) return 'Informe um rótulo para cada parâmetro.'
+  for (const parameter of parameters.filter((item) => isCloudMediaParameter(item.type))) {
+    if (!String(parameter.example || '').trim() && !String(parameter.mediaAssetId || '').trim()) {
+      return `Informe o ${cloudMediaExampleLabel(parameter.type).toLowerCase()} ou faça o upload da mídia.`
+    }
+    if (parameter.mediaSource !== 'upload') {
+      try {
+        const url = new URL(String(parameter.example || ''))
+        if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) throw new Error('invalid')
+      } catch {
+        return `${cloudMediaExampleLabel(parameter.type)} deve usar uma URL HTTPS pública.`
+      }
+    } else if (!/^[a-f\d]{24}$/i.test(String(parameter.mediaAssetId || ''))) {
+      return `Faça o upload do arquivo para preencher ${cloudMediaExampleLabel(parameter.type).toLowerCase()}.`
+    }
+  }
   for (const component of form.cloudComponents) {
     const metaNames = component.parameters.map((parameter) => String(parameter.parameterName || '').trim())
     if (component.type === 'button' && metaNames.some(Boolean)) return 'Botões usam parâmetros posicionais; remova o nome Meta do botão.'
@@ -818,6 +1162,7 @@ function customCloudValidationError() {
 }
 
 function openEdit(template) {
+  cleanupPendingCloudMedia().catch(() => {})
   const channel = normalizedChannel(template.channel || template.type)
   if (channel === 'global') {
     $q.notify({ type: 'info', message: 'Templates globais antigos ficam disponíveis apenas para consulta. Crie um template separado por canal.' })
@@ -839,16 +1184,29 @@ function openEdit(template) {
     variablesText: Array.isArray(variables) ? variables.join(', ') : String(variables || ''),
     metadata: {
       approvedName: template.externalTemplateName || metadata.approvedName || template.approvedName || '',
-      language: template.languageCode || metadata.language || template.language || 'pt_BR',
+      language: META_LANGUAGE_OPTIONS.some((option) => option.value === (template.languageCode || metadata.language || template.language))
+        ? (template.languageCode || metadata.language || template.language)
+        : 'pt_BR',
     },
     telegramDefinition: channel === 'telegram' ? telegramDefinitionFromTemplate(template) : createTelegramDefinition('text'),
   })
   if (channel === 'whatsapp_cloud' && cloudPreset !== 'custom') applyCloudPreset(cloudPreset)
+  cloudPreviewMode.value = 'visual'
   dialog.value = true
 }
 
 async function save() {
   saving.value = true
+  if (flattenedEmailHtml.value) {
+    $q.notify({
+      type: 'negative',
+      message: 'O conteúdo parece HTML colado como texto.',
+      caption: 'Cole novamente o código-fonte mantendo as tags entre < e >.',
+      timeout: 7000,
+    })
+    saving.value = false
+    return
+  }
   const validationError = isCustomCloudTemplate.value ? customCloudValidationError() : null
   if (validationError) {
     $q.notify({ type: 'warning', message: validationError })
@@ -874,6 +1232,7 @@ async function save() {
           })
         : buildWhatsAppCloudTemplateDefinition(form.cloudPreset))
     : null
+  const isEmailHtml = form.channel === 'email' && form.format === 'html'
   const payload = {
     name: form.name,
     channel: form.channel,
@@ -881,8 +1240,12 @@ async function save() {
     format: cloudDefinition?.templateType || (telegramDefinition ? `telegram_${telegramDefinition.kind}` : form.format),
     subject: form.channel === 'email' ? form.subject || undefined : undefined,
     description: cloudDefinition?.description || form.description || undefined,
-    body: cloudDefinition?.body || (telegramDefinition ? telegramDefinitionBody(telegramDefinition) : form.body),
-    html: form.channel === 'email' && form.format === 'html' ? form.body : undefined,
+    body: cloudDefinition?.body || (telegramDefinition
+      ? telegramDefinitionBody(telegramDefinition)
+      : isEmailHtml
+        ? emailHtmlToPlainText(form.body)
+        : form.body),
+    html: form.channel === 'email' ? (isEmailHtml ? form.body : null) : undefined,
     variables: cloudDefinition?.variables || (telegramDefinition ? telegramVariables(telegramDefinition) : form.variablesText.split(',').map((item) => item.trim()).filter(Boolean)),
     payload: cloudDefinition?.payload || (telegramDefinition ? { telegram: telegramDefinition } : null),
     whatsappCloudPreset: cloudDefinition?.whatsappCloudPreset,
@@ -892,6 +1255,8 @@ async function save() {
   try {
     if (editingId.value) await http.put(`/templates/${editingId.value}`, payload)
     else await http.post('/templates', payload)
+    for (const id of cloudMediaAssetIds()) pendingCloudMediaAssetIds.delete(id)
+    await cleanupPendingCloudMedia()
     dialog.value = false
     $q.notify({ type: 'positive', message: 'Template salvo com sucesso.' })
     await loadTemplates()
@@ -901,6 +1266,14 @@ async function save() {
     saving.value = false
   }
 }
+
+watch(dialog, (open) => {
+  if (!open) cleanupPendingCloudMedia().catch(() => {})
+})
+
+onBeforeUnmount(() => {
+  cleanupPendingCloudMedia().catch(() => {})
+})
 
 function remove(template) {
   if (isSystemTemplateRecord(template)) {
@@ -1424,12 +1797,15 @@ onMounted(loadPageData)
                     >
                       <template #prepend><q-icon name="verified" color="primary" /></template>
                     </q-input>
-                    <q-input
-                      v-model.trim="form.metadata.language"
+                    <q-select
+                      v-model="form.metadata.language"
                       outlined
                       stack-label
-                      label="Código do idioma *"
-                      hint="Exemplo: pt_BR ou en_US"
+                      emit-value
+                      map-options
+                      :options="META_LANGUAGE_OPTIONS"
+                      label="Idioma aprovado *"
+                      hint="Selecione exatamente o idioma da versão aprovada na Meta"
                       class="template-field language-field"
                       :rules="[(value) => Boolean(value) || 'Informe o idioma']"
                     />
@@ -1476,6 +1852,11 @@ onMounted(loadPageData)
                       <header class="component-card-header">
                         <span class="component-order">{{ componentIndex + 1 }}</span>
                         <div><strong>Componente</strong><span>Ordem idêntica ao template aprovado</span></div>
+                        <ContextHelp
+                          :title="componentHelpTitle(component)"
+                          tooltip="Como configurar este componente"
+                          :text="componentHelpText(component)"
+                        />
                         <q-space />
                         <q-btn flat round dense icon="arrow_upward" :disable="componentIndex === 0" aria-label="Mover componente para cima" @click="moveItem(form.cloudComponents, componentIndex, -1)" />
                         <q-btn flat round dense icon="arrow_downward" :disable="componentIndex === form.cloudComponents.length - 1" aria-label="Mover componente para baixo" @click="moveItem(form.cloudComponents, componentIndex, 1)" />
@@ -1519,17 +1900,103 @@ onMounted(loadPageData)
                         <div v-for="(parameter, parameterIndex) in component.parameters" :key="parameter.id" class="custom-parameter-card">
                           <div class="parameter-card-actions">
                             <span>{{ componentIndex + 1 }}.{{ parameterIndex + 1 }}</span>
+                            <ContextHelp
+                              title="Parâmetro do payload Meta"
+                              tooltip="Como preencher este parâmetro"
+                              :text="parameterHelpText(parameter)"
+                            />
                             <q-space />
                             <q-btn flat round dense icon="arrow_upward" :disable="parameterIndex === 0" aria-label="Mover parâmetro para cima" @click="moveItem(component.parameters, parameterIndex, -1)" />
                             <q-btn flat round dense icon="arrow_downward" :disable="parameterIndex === component.parameters.length - 1" aria-label="Mover parâmetro para baixo" @click="moveItem(component.parameters, parameterIndex, 1)" />
                             <q-btn flat round dense color="negative" icon="close" aria-label="Remover parâmetro" @click="removeCloudParameter(component, parameterIndex)" />
                           </div>
                           <div class="parameter-fields-grid">
-                            <q-select v-model="parameter.type" outlined stack-label emit-value map-options :options="parameterOptionsFor(component)" label="Tipo Meta *" class="template-field" />
+                            <q-select
+                              v-model="parameter.type"
+                              outlined
+                              stack-label
+                              emit-value
+                              map-options
+                              :options="parameterOptionsFor(component)"
+                              label="Tipo Meta *"
+                              class="template-field"
+                              @update:model-value="onCloudParameterTypeChange(parameter)"
+                            />
                             <q-input v-model.trim="parameter.key" outlined stack-label maxlength="64" label="Variável interna *" hint="Exemplo: nome_cliente" class="template-field" @blur="parameter.key = normalizeCloudVariableKey(parameter.key)" />
                             <q-input v-if="component.type !== 'button'" v-model.trim="parameter.parameterName" outlined stack-label maxlength="64" label="Nome do parâmetro na Meta" hint="Opcional. Preencha se o modelo usa {{nome_cliente}} em vez de {{1}}" class="template-field" />
                             <q-input v-model.trim="parameter.label" outlined stack-label label="Rótulo no disparo *" hint="Exemplo: Nome do cliente" class="template-field" />
-                            <q-input v-model.trim="parameter.example" outlined stack-label label="Valor de exemplo" hint="Ajuda quem fará o envio" class="template-field" />
+                            <template v-if="isCloudMediaParameter(parameter.type)">
+                              <div class="media-source-picker full-span">
+                                <div>
+                                  <strong>Origem da mídia</strong>
+                                  <span>Use uma URL pública ou hospede o arquivo no Notify Flow.</span>
+                                </div>
+                                <q-btn-toggle
+                                  v-model="parameter.mediaSource"
+                                  no-caps
+                                  unelevated
+                                  toggle-color="primary"
+                                  color="white"
+                                  text-color="primary"
+                                  :options="[
+                                    { label: 'Link HTTPS', value: 'url', icon: 'link' },
+                                    { label: 'Fazer upload', value: 'upload', icon: 'cloud_upload' },
+                                  ]"
+                                  @update:model-value="onCloudMediaSourceChange(parameter, $event)"
+                                />
+                              </div>
+                              <q-input
+                                v-model.trim="parameter.example"
+                                outlined
+                                stack-label
+                                :readonly="parameter.mediaSource === 'upload'"
+                                :label="`${cloudMediaExampleLabel(parameter.type)} *`"
+                                :hint="parameter.mediaSource === 'upload' ? 'Preenchido automaticamente após o upload' : 'URL HTTPS pública e acessível pela Meta'"
+                                class="template-field full-span media-link-field"
+                              >
+                                <template #prepend><q-icon name="link" color="primary" /></template>
+                                <template #append>
+                                  <q-btn
+                                    v-if="parameter.example"
+                                    flat
+                                    round
+                                    dense
+                                    icon="open_in_new"
+                                    aria-label="Abrir mídia em nova guia"
+                                    type="a"
+                                    :href="parameter.example"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  />
+                                </template>
+                              </q-input>
+                              <q-file
+                                v-if="parameter.mediaSource === 'upload'"
+                                v-model="parameter.uploadFile"
+                                outlined
+                                stack-label
+                                clearable
+                                :accept="cloudMediaAccept(parameter.type)"
+                                :max-file-size="cloudMediaMaxBytes(parameter.type)"
+                                :loading="parameter.uploading"
+                                :disable="parameter.uploading"
+                                label="Selecionar arquivo para enviar"
+                                :hint="`O arquivo será hospedado pelo Notify Flow e associado a este template · limite ${cloudMediaLimitLabel(parameter.type)}.`"
+                                class="template-field full-span media-upload-field"
+                                @update:model-value="uploadCloudParameterMedia(parameter, $event)"
+                                @rejected="onCloudMediaRejected(parameter, $event)"
+                              >
+                                <template #prepend><q-icon name="cloud_upload" color="primary" /></template>
+                                <template #append>
+                                  <q-badge v-if="parameter.mediaAssetId" color="positive" label="Upload concluído" />
+                                </template>
+                              </q-file>
+                              <div v-if="parameter.mediaSource === 'upload' && parameter.uploadedFilename" class="uploaded-media-meta full-span">
+                                <q-icon name="task_alt" color="positive" />
+                                <span><strong>{{ parameter.uploadedFilename }}</strong><small>{{ parameter.mimeType || 'Tipo validado pelo servidor' }}</small></span>
+                              </div>
+                            </template>
+                            <q-input v-else v-model.trim="parameter.example" outlined stack-label label="Valor de exemplo" hint="Ajuda quem fará o envio" class="template-field" />
                             <template v-if="parameter.type === 'currency'">
                               <q-input v-model.trim="parameter.currencyCode" outlined stack-label maxlength="3" label="Código da moeda" hint="Exemplo: BRL" class="template-field" />
                             </template>
@@ -1585,7 +2052,27 @@ onMounted(loadPageData)
 
                   <div class="content-editor">
                     <div class="field-heading">Conteúdo *</div>
-                    <q-editor v-if="form.channel === 'email' && form.format === 'html'" v-model="form.body" min-height="260px" :toolbar="[['bold', 'italic', 'underline'], ['quote', 'unordered', 'ordered'], ['link'], ['undo', 'redo']]" />
+                    <template v-if="form.channel === 'email' && form.format === 'html'">
+                      <q-input
+                        v-model="form.body"
+                        outlined
+                        stack-label
+                        type="textarea"
+                        :rows="18"
+                        spellcheck="false"
+                        wrap="off"
+                        label="Código HTML *"
+                        hint="Cole o código-fonte com as tags completas, por exemplo: &lt;div&gt;...&lt;/div&gt;. A prévia ao lado atualiza automaticamente."
+                        class="html-source-editor template-field"
+                        input-class="html-source-editor__input"
+                        :rules="[(value) => Boolean(value) || 'Cole ou escreva o HTML do email']"
+                      />
+                      <q-banner v-if="flattenedEmailHtml" rounded class="flattened-html-warning">
+                        <template #avatar><q-icon name="code_off" color="negative" /></template>
+                        <strong>Este conteúdo perdeu as tags HTML.</strong>
+                        Cole novamente o código-fonte mantendo os sinais <code>&lt;</code> e <code>&gt;</code>.
+                      </q-banner>
+                    </template>
                     <q-input v-else v-model="form.body" outlined stack-label type="textarea" autogrow label="Mensagem" class="template-field" :rules="[(value) => Boolean(value) || 'Escreva a mensagem']" />
                   </div>
                 </section>
@@ -1593,8 +2080,27 @@ onMounted(loadPageData)
             </div>
 
             <aside class="preview-column">
-              <div class="preview-label"><span>Prévia em tempo real</span><q-badge color="primary" :label="channelLabel(form.channel)" /></div>
-              <div class="preview-email">
+              <div class="preview-label">
+                <span>Prévia em tempo real</span>
+                <div class="preview-label-actions">
+                  <q-badge color="primary" :label="channelLabel(form.channel)" />
+                  <q-btn-toggle
+                    v-if="form.channel === 'whatsapp_cloud'"
+                    v-model="cloudPreviewMode"
+                    dense
+                    no-caps
+                    unelevated
+                    toggle-color="primary"
+                    color="white"
+                    text-color="primary"
+                    :options="[
+                      { label: 'Visual', value: 'visual', icon: 'visibility' },
+                      { label: 'Payload', value: 'payload', icon: 'data_object' },
+                    ]"
+                  />
+                </div>
+              </div>
+              <div v-if="form.channel !== 'whatsapp_cloud' || cloudPreviewMode === 'visual'" class="preview-email" :class="{ 'whatsapp-template-preview': form.channel === 'whatsapp_cloud' }">
                 <div v-if="form.channel === 'email'" class="preview-subject"><strong>Assunto:</strong> {{ form.subject || 'Sem assunto' }}</div>
                 <div v-if="form.channel === 'whatsapp_cloud'" class="preview-meta-header">
                   <q-icon name="verified" color="primary" />
@@ -1603,6 +2109,36 @@ onMounted(loadPageData)
                     <span>{{ isCustomCloudTemplate ? form.metadata.approvedName || 'nome_exato_na_meta' : selectedCloudPreset.templateName }}</span>
                   </div>
                 </div>
+                <div v-if="cloudHeaderMediaPreview && !cloudMediaPreviewFailed" class="preview-media cloud-header-media">
+                  <img
+                    v-if="cloudHeaderMediaPreview.type === 'image'"
+                    :src="cloudHeaderMediaPreview.url"
+                    alt="Prévia da imagem do cabeçalho WhatsApp"
+                    referrerpolicy="no-referrer"
+                    @error="cloudMediaPreviewFailed = true"
+                  />
+                  <video
+                    v-else-if="cloudHeaderMediaPreview.type === 'video'"
+                    :src="cloudHeaderMediaPreview.url"
+                    controls
+                    preload="metadata"
+                    @error="cloudMediaPreviewFailed = true"
+                  />
+                  <a
+                    v-else
+                    :href="cloudHeaderMediaPreview.url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="preview-document"
+                  >
+                    <q-icon name="description" size="34px" />
+                    <span><strong>{{ cloudHeaderMediaPreview.filename }}</strong><small>Documento do cabeçalho</small></span>
+                    <q-icon name="open_in_new" />
+                  </a>
+                </div>
+                <q-banner v-if="cloudHeaderMediaPreview && cloudMediaPreviewFailed" dense rounded class="preview-media-error">
+                  Não foi possível carregar esta mídia no navegador. Confira se o link é público; o servidor validará novamente antes do envio.
+                </q-banner>
                 <div v-if="telegramMediaPreview && !telegramMediaPreviewFailed" class="preview-media">
                   <img
                     v-if="telegramMediaPreview.kind === 'photo'"
@@ -1623,6 +2159,13 @@ onMounted(loadPageData)
                   O navegador não conseguiu carregar esta mídia. O servidor validará novamente o link durante o envio.
                 </q-banner>
                 <div class="preview-frame" v-html="safePreview" />
+              </div>
+              <div v-else class="preview-payload-card">
+                <div class="preview-payload-heading">
+                  <div><strong>Payload montado automaticamente</strong><span>Os exemplos abaixo serão substituídos pelos dados do disparo.</span></div>
+                  <q-icon name="data_object" color="primary" size="24px" />
+                </div>
+                <pre>{{ cloudPreviewPayloadJson }}</pre>
               </div>
               <div class="preview-warning" :class="{ 'cloud-preview-note': form.channel === 'whatsapp_cloud' }">
                 <q-icon :name="form.channel === 'whatsapp_cloud' ? 'info' : 'security'" color="primary" />
@@ -2117,6 +2660,73 @@ onMounted(loadPageData)
   gap: 14px;
 }
 
+.parameter-fields-grid > .full-span {
+  grid-column: 1 / -1;
+}
+
+.media-source-picker {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(22, 134, 111, 0.14);
+  border-radius: 13px;
+  background: rgba(39, 183, 159, 0.06);
+}
+
+.media-source-picker > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.media-source-picker strong {
+  color: #183c35;
+  font-size: 0.84rem;
+}
+
+.media-source-picker span {
+  color: #637875;
+  font-size: 0.74rem;
+}
+
+.media-link-field :deep(.q-field__native),
+.media-upload-field :deep(.q-field__native) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uploaded-media-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  margin-top: -4px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: rgba(30, 164, 108, 0.08);
+  color: #32675c;
+}
+
+.uploaded-media-meta > span {
+  display: grid;
+  min-width: 0;
+}
+
+.uploaded-media-meta strong,
+.uploaded-media-meta small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uploaded-media-meta small {
+  color: #6b827e;
+}
+
 .parameters-heading {
   margin: 17px 0 10px;
   padding-top: 14px;
@@ -2224,6 +2834,28 @@ onMounted(loadPageData)
   font-weight: 750;
 }
 
+.html-source-editor :deep(.html-source-editor__input) {
+  min-height: 330px !important;
+  overflow: auto !important;
+  color: #173c36;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.flattened-html-warning {
+  margin-top: 12px;
+  border: 1px solid rgba(194, 55, 75, 0.24);
+  background: rgba(194, 55, 75, 0.07);
+  color: #74333d;
+  font-size: 0.78rem;
+}
+
+.flattened-html-warning strong {
+  display: block;
+}
+
 .preview-column {
   position: sticky;
   top: 0;
@@ -2238,10 +2870,23 @@ onMounted(loadPageData)
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   margin-bottom: 13px;
   font-size: 0.78rem;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.preview-label-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.preview-label-actions :deep(.q-btn) {
+  font-size: 0.68rem;
 }
 
 .preview-email {
@@ -2249,6 +2894,39 @@ onMounted(loadPageData)
   background: #fff;
   box-shadow: 0 12px 35px rgba(3, 62, 55, 0.08);
   overflow: hidden;
+}
+
+.whatsapp-template-preview {
+  padding-bottom: 16px;
+  background-color: #efeae2;
+  background-image: radial-gradient(rgba(25, 107, 92, 0.055) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+.whatsapp-template-preview .preview-meta-header {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.whatsapp-template-preview .preview-frame,
+.whatsapp-template-preview .preview-media,
+.whatsapp-template-preview .preview-media-error {
+  width: calc(100% - 28px);
+  margin-right: auto;
+  margin-left: 14px;
+  background: #fff;
+}
+
+.whatsapp-template-preview .preview-frame {
+  padding: 2px 12px 10px;
+  border-radius: 0 0 12px 12px;
+  box-shadow: 0 5px 13px rgba(43, 55, 52, 0.12);
+}
+
+.whatsapp-template-preview .cloud-header-media {
+  margin-top: 16px;
+  padding-bottom: 0;
+  border: 0;
+  border-radius: 12px 12px 0 0;
 }
 
 .preview-subject {
@@ -2326,6 +3004,81 @@ onMounted(loadPageData)
   background: rgba(242, 169, 59, 0.12);
   color: #73551f;
   font-size: 0.76rem;
+}
+
+.preview-document {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 10px;
+  background: #edf3f2;
+  color: #175f54;
+  text-decoration: none;
+}
+
+.preview-document > span {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.preview-document strong,
+.preview-document small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-document small {
+  color: #6b7e7b;
+}
+
+.preview-payload-card {
+  overflow: hidden;
+  border: 1px solid rgba(3, 21, 21, 0.1);
+  border-radius: 16px;
+  background: #0f2522;
+  box-shadow: 0 12px 35px rgba(3, 62, 55, 0.1);
+}
+
+.preview-payload-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #f7fffd;
+}
+
+.preview-payload-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.preview-payload-heading strong {
+  color: #173c36;
+  font-size: 0.82rem;
+}
+
+.preview-payload-heading span {
+  color: #657b77;
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.preview-payload-card pre {
+  max-height: 500px;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  color: #b9f6e8;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .preview-warning {
@@ -2446,6 +3199,27 @@ onMounted(loadPageData)
 
   .component-card-header {
     flex-wrap: wrap;
+  }
+
+  .media-source-picker,
+  .preview-label {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .media-source-picker :deep(.q-btn-group),
+  .preview-label-actions :deep(.q-btn-group) {
+    width: 100%;
+  }
+
+  .media-source-picker :deep(.q-btn),
+  .preview-label-actions :deep(.q-btn) {
+    flex: 1;
+  }
+
+  .preview-label-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .parameter-row {

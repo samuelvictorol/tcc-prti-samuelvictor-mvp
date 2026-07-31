@@ -60,6 +60,13 @@ const webhookLimiter = rateLimit({
   legacyHeaders: false
 });
 
+const mediaLimiter = rateLimit({
+  windowMs: env.rateLimitWindowMs,
+  limit: env.mediaRateLimitMax,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false
+});
+
 const authLimiter = rateLimit({
   windowMs: env.rateLimitWindowMs,
   limit: env.authRateLimitMax,
@@ -94,6 +101,6 @@ const settingsRevealLimiter = rateLimit({
 });
 
 module.exports = {
-  requestContext, ipBlock, registerSecurityStrike, apiLimiter, webhookLimiter, authLimiter,
+  requestContext, ipBlock, registerSecurityStrike, apiLimiter, webhookLimiter, mediaLimiter, authLimiter,
   profileCodeRequestLimiter, profileCodeVerifyLimiter, settingsRevealLimiter
 };

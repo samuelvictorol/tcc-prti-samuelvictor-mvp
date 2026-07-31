@@ -210,6 +210,32 @@ function normalizeBuilder(builder) {
       }
       if (parameterType === 'currency' && parameter.currencyCode) output.currencyCode = String(parameter.currencyCode).toUpperCase().slice(0, 3);
       if (parameterType === 'document' && parameter.filename) output.filename = String(parameter.filename).slice(0, 240);
+      if (['image', 'document', 'video'].includes(parameterType)) {
+        const mediaSource = String(parameter.mediaSource || 'url').trim().toLowerCase();
+        if (!['url', 'upload'].includes(mediaSource)) {
+          templateError('Origem da midia invalida', { componentIndex, parameterIndex, mediaSource });
+        }
+        output.mediaSource = mediaSource;
+        const mediaAssetId = String(parameter.mediaAssetId || '').trim();
+        if (mediaAssetId) {
+          if (!/^[a-f\d]{24}$/i.test(mediaAssetId)) {
+            templateError('Identificador da midia armazenada invalido', { componentIndex, parameterIndex });
+          }
+          output.mediaAssetId = mediaAssetId;
+        }
+        if (mediaSource === 'upload' && !mediaAssetId) {
+          templateError('Upload de midia exige o identificador do arquivo armazenado', { componentIndex, parameterIndex });
+        }
+        const mimeType = String(parameter.mimeType || '').trim().toLowerCase();
+        if (mimeType) output.mimeType = mimeType.slice(0, 160);
+        const mediaType = String(parameter.mediaType || parameterType).trim().toLowerCase();
+        if (mediaType !== parameterType) {
+          templateError('Tipo da midia armazenada difere do parametro Meta', { componentIndex, parameterIndex, mediaType, parameterType });
+        }
+        output.mediaType = mediaType;
+        const uploadedFilename = String(parameter.uploadedFilename || '').trim();
+        if (uploadedFilename) output.uploadedFilename = uploadedFilename.slice(0, 240);
+      }
       return output;
     });
     const namedCount = parameters.filter((parameter) => parameter.parameterName).length;

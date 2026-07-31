@@ -607,6 +607,71 @@ test('builder custom omite componentes vazios do payload final sem perder o meta
   });
 });
 
+test('builder preserva a associacao da midia hospedada sem expor metadata no payload Meta', () => {
+  const builder = {
+    version: 1,
+    components: [{
+      id: 'header-media',
+      type: 'header',
+      parameters: [{
+        id: 'header-image',
+        type: 'image',
+        key: 'imagem_cabecalho',
+        label: 'Link da imagem',
+        example: 'https://notify.example/api/media/token-assinado',
+        mediaSource: 'upload',
+        mediaAssetId: '507f1f77bcf86cd799439011',
+        mimeType: 'image/png',
+        mediaType: 'image',
+        uploadedFilename: 'cabecalho.png'
+      }]
+    }]
+  };
+
+  const normalized = normalizeBuilder(builder);
+  assert.deepEqual(normalized.components[0].parameters[0], builder.components[0].parameters[0]);
+  assert.equal(createTemplateSchema.safeParse({
+    body: {
+      name: 'Aviso com imagem',
+      channel: 'whatsapp_cloud',
+      templateType: 'approved_template',
+      body: 'Aviso com cabecalho de imagem',
+      payload: { builder },
+      variables: ['imagem_cabecalho'],
+      whatsappCloudPreset: 'custom',
+      externalTemplateName: 'aviso_com_imagem',
+      languageCode: 'pt_BR'
+    }
+  }).success, true);
+
+  const message = buildCustomTemplateMessage({
+    name: 'aviso_com_imagem',
+    languageCode: 'pt_BR',
+    builder,
+    variables: { imagem_cabecalho: builder.components[0].parameters[0].example }
+  });
+  assert.deepEqual(message.template.components[0].parameters[0], {
+    type: 'image',
+    image: { link: 'https://notify.example/api/media/token-assinado' }
+  });
+  assert.doesNotMatch(JSON.stringify(message), /mediaAssetId|mediaSource|uploadedFilename|mimeType/);
+  assert.throws(
+    () => normalizeBuilder({
+      version: 1,
+      components: [{
+        type: 'header',
+        parameters: [{
+          type: 'video',
+          key: 'video_cabecalho',
+          label: 'Video',
+          mediaSource: 'upload'
+        }]
+      }]
+    }),
+    /identificador do arquivo armazenado/
+  );
+});
+
 test('builder custom envia parameter_name para templates Meta com parametros nomeados', () => {
   const message = buildCustomTemplateMessage({
     name: 'pedido_nomeado_v1',

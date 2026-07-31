@@ -13,6 +13,7 @@ const contactsManager = require('./managers/contacts.manager');
 const templatesManager = require('./managers/templates.manager');
 const termsManager = require('./managers/terms.manager');
 const conversationBackupScheduler = require('./services/conversation-backup-scheduler.service');
+const templateMediaCleanup = require('./services/template-media-cleanup.service');
 
 let server;
 let shuttingDown = false;
@@ -50,6 +51,7 @@ async function start() {
   telegramManager.refreshWebhookRegistration()
     .catch((error) => console.error('[telegram webhook refresh]', error.message));
   conversationBackupScheduler.start();
+  templateMediaCleanup.start();
   return server;
 }
 
@@ -58,6 +60,7 @@ async function shutdown(signal) {
   shuttingDown = true;
   console.log('[api] encerrando por ' + signal);
   conversationBackupScheduler.stop();
+  templateMediaCleanup.stop();
   if (server) await new Promise((resolve) => server.close(resolve));
   await queueService.closeQueue();
   await disconnectRedis();

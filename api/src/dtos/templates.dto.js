@@ -1,4 +1,4 @@
-const { z, idParams, booleanQuery, paginationQuery } = require('./common.dto');
+const { z, objectId, idParams, booleanQuery, paginationQuery } = require('./common.dto');
 const { CHANNELS } = require('../enums/channels');
 
 const TEMPLATE_CHANNELS = [CHANNELS.TELEGRAM, CHANNELS.WHATSAPP_CLOUD, CHANNELS.EMAIL, CHANNELS.GLOBAL];
@@ -11,7 +11,12 @@ const whatsappBuilderParameter = z.object({
   label: z.string().min(1).max(160),
   example: z.union([z.string().max(1000), z.number()]).nullish(),
   currencyCode: z.string().length(3).regex(/^[A-Za-z]{3}$/).optional(),
-  filename: z.string().min(1).max(240).optional()
+  filename: z.string().min(1).max(240).optional(),
+  mediaSource: z.enum(['url', 'upload']).optional(),
+  mediaAssetId: objectId.optional(),
+  mimeType: z.string().min(3).max(160).regex(/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i).optional(),
+  mediaType: z.enum(['image', 'video', 'document']).optional(),
+  uploadedFilename: z.string().min(1).max(240).optional()
 });
 
 const whatsappBuilderComponent = z.object({
@@ -47,6 +52,33 @@ const whatsappBuilderComponent = z.object({
       if (expectedType && parameter.type !== expectedType) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ['parameters', parameterIndex, 'type'], message: component.subType + ' exige ' + expectedType });
       }
+    }
+    const isMedia = ['image', 'document', 'video'].includes(parameter.type);
+    const hasMediaMetadata = parameter.mediaSource !== undefined
+      || parameter.mediaAssetId !== undefined
+      || parameter.mimeType !== undefined
+      || parameter.mediaType !== undefined
+      || parameter.uploadedFilename !== undefined;
+    if (!isMedia && hasMediaMetadata) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['parameters', parameterIndex],
+        message: 'Metadados de upload sao exclusivos de image, document e video'
+      });
+    }
+    if (isMedia && parameter.mediaType && parameter.mediaType !== parameter.type) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['parameters', parameterIndex, 'mediaType'],
+        message: 'O tipo da midia armazenada difere do parametro Meta'
+      });
+    }
+    if (isMedia && parameter.mediaSource === 'upload' && !parameter.mediaAssetId) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['parameters', parameterIndex, 'mediaAssetId'],
+        message: 'Upload de midia exige o identificador do arquivo armazenado'
+      });
     }
   });
   const namedCount = component.parameters.filter((parameter) => parameter.parameterName).length;

@@ -69,6 +69,7 @@ O prefixo padrão é `/api`. Rotas administrativas exigem `Authorization: Bearer
 | Grupos | CRUD `/contact-groups`; `/groups` é alias |
 | Privacidade | export, exclusão e consentimento em `/privacy/contacts/:id` |
 | Templates | CRUD `/templates` |
+| Mídia de templates | upload autenticado `POST /media` (`multipart/form-data`, campo `file`) e leitura pública por URL assinada `GET /media/:token` |
 | Notificações | lista/criação/stats/issues/detalhe/retry/cancel em `/notifications` |
 | Conversas | lista, mensagens, leitura, limpeza e remoção em `/conversations` |
 | Logs | `GET /logs` com paginação/filtros |
@@ -82,6 +83,8 @@ O prefixo padrão é `/api`. Rotas administrativas exigem `Authorization: Bearer
 | WhatsApp Cloud | status, presets e envio em `/whatsapp-cloud` |
 | Meta webhook | `GET/POST /webhooks/whatsapp-cloud` |
 | Gmail | status/envio em `/email`; `/gmail` é alias |
+
+Uploads de cabeçalho para templates oficiais são armazenados como binário no GridFS (`templateMedia.files`/`templateMedia.chunks`), nunca como base64 dentro do documento do template. A resposta contém `id`, `url`, `mimeType`, `mediaType`, `filename` e `size`; o builder salva a URL e o identificador associado ao parâmetro de imagem, vídeo ou documento. Rascunhos não utilizados expiram em 24 horas, mídias de um disparo direto expiram em 7 dias e os arquivos vinculados a um template salvo são retidos enquanto houver referência. A URL é uma capability assinada estável que a Meta pode baixar sem o token administrativo. Em produção, `PUBLIC_APP_URL` (ou `MEDIA_PUBLIC_BASE_URL`) precisa apontar para o domínio HTTPS público.
 
 ### Chats oficiais do WhatsApp
 

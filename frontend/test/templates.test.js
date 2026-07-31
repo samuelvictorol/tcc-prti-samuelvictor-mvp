@@ -1,11 +1,18 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 import {
+  META_LANGUAGE_OPTIONS,
   WHATSAPP_CLOUD_PRESETS,
   buildCustomWhatsAppCloudDefinition,
+  buildCustomWhatsAppCloudPreviewPayload,
   buildWhatsAppCloudTemplateDefinition,
+  cloudMediaAccept,
+  cloudMediaExampleLabel,
+  cloudMediaMaxBytes,
   cloudBuilderFromTemplate,
+  createCloudParameter,
   createCloudComponent,
   findWhatsAppCloudPreset,
   renderWhatsAppCloudPreview,
@@ -113,5 +120,102 @@ describe('templates oficiais do WhatsApp Cloud', () => {
       subType: 'copy_code',
       parameters: [{ type: 'coupon_code', key: 'cupom' }],
     })
+  })
+
+  it('pré-configura variáveis e rótulos amigáveis para cada mídia Meta', () => {
+    expect(createCloudParameter({ type: 'image' })).toMatchObject({ key: 'imagem_cabecalho', label: 'Link da imagem', mediaSource: 'url' })
+    expect(createCloudParameter({ type: 'video' })).toMatchObject({ key: 'video_cabecalho', label: 'Link do vídeo', mediaType: '' })
+    expect(createCloudParameter({ type: 'document' })).toMatchObject({ key: 'arquivo_cabecalho', label: 'Link do arquivo' })
+    expect(cloudMediaExampleLabel('document')).toBe('Link do arquivo')
+    expect(cloudMediaAccept('image')).toBe('image/jpeg,image/png')
+    expect(cloudMediaAccept('image')).not.toContain('webp')
+    expect(cloudMediaMaxBytes('image')).toBe(5 * 1024 * 1024)
+    expect(cloudMediaMaxBytes('video')).toBe(16 * 1024 * 1024)
+    expect(cloudMediaMaxBytes('document')).toBe(100 * 1024 * 1024)
+  })
+
+  it('preserva no builder os metadados da mídia hospedada pelo Notify Flow', () => {
+    const definition = buildCustomWhatsAppCloudDefinition({
+      templateName: 'aviso_com_imagem',
+      languageCode: 'pt_BR',
+      components: [createCloudComponent({
+        type: 'header',
+        parameters: [{
+          type: 'image',
+          key: 'imagem_cabecalho',
+          label: 'Link da imagem',
+          example: 'https://notify.example/media/asset-1',
+          mediaSource: 'upload',
+          mediaAssetId: 'asset-1',
+          mimeType: 'image/png',
+          mediaType: 'image',
+          uploadedFilename: 'capa.png',
+        }],
+      })],
+    })
+
+    expect(definition.payload.builder.components[0].parameters[0]).toMatchObject({
+      mediaSource: 'upload',
+      mediaAssetId: 'asset-1',
+      mimeType: 'image/png',
+      mediaType: 'image',
+      uploadedFilename: 'capa.png',
+    })
+  })
+
+  it.each([
+    ['image', 'https://notify.example/capa.png', 'image'],
+    ['video', 'https://notify.example/video.mp4', 'video'],
+  ])('mostra o payload Meta formatado para %s', (type, url, payloadKey) => {
+    const payload = buildCustomWhatsAppCloudPreviewPayload({
+      templateName: 'midias_aprovadas',
+      languageCode: 'pt_BR',
+      components: [{ type: 'header', parameters: [{ type, key: 'midia', example: url }] }],
+    })
+
+    expect(payload.template.components[0].parameters[0]).toEqual({
+      type,
+      [payloadKey]: { link: url },
+    })
+  })
+
+  it('mostra o payload Meta formatado para documento e preserva o nome do arquivo', () => {
+    const payload = buildCustomWhatsAppCloudPreviewPayload({
+      templateName: 'midias_aprovadas',
+      languageCode: 'pt_BR',
+      components: [{
+        type: 'header',
+        parameters: [{ type: 'document', key: 'arquivo', example: 'https://notify.example/arquivo.pdf', filename: 'arquivo.pdf' }],
+      }],
+    })
+
+    expect(payload).toMatchObject({
+      messaging_product: 'whatsapp',
+      type: 'template',
+      template: {
+        name: 'midias_aprovadas',
+        language: { code: 'pt_BR' },
+        components: [{
+          type: 'header',
+          parameters: [{ type: 'document', document: { link: 'https://notify.example/arquivo.pdf', filename: 'arquivo.pdf' } }],
+        }],
+      },
+    })
+  })
+
+  it('oferece somente os idiomas suportados no formulário amigável', () => {
+    expect(META_LANGUAGE_OPTIONS.map((option) => option.value)).toEqual(['pt_BR', 'en_US'])
+  })
+
+  it('oferece upload multipart, prévia visual e inspeção do payload sem JSON manual', () => {
+    const source = readFileSync(new URL('../src/pages/TemplatesPage.vue', import.meta.url), 'utf8')
+    expect(source).toContain("body.append('file', file)")
+    expect(source).toContain("http.post('/media', body, { timeout: 600000 })")
+    expect(source).toContain("body.append('mediaType', parameter.type)")
+    expect(source).toContain("body.append('purpose', 'template')")
+    expect(source).toContain('<q-file')
+    expect(source).toContain("{ label: 'Payload', value: 'payload', icon: 'data_object' }")
+    expect(source).toContain('<pre>{{ cloudPreviewPayloadJson }}</pre>')
+    expect(source).toContain(':options="META_LANGUAGE_OPTIONS"')
   })
 })

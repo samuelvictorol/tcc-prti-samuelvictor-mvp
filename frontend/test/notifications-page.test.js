@@ -21,7 +21,14 @@ describe('compositor amigável de notificações', () => {
         builder: {
           components: [{
             type: 'header',
-            parameters: [{ key: 'imagem', label: 'Imagem principal', type: 'image', example: 'https://example.com/a.png' }],
+            parameters: [{
+              key: 'imagem',
+              label: 'Imagem principal',
+              type: 'image',
+              example: 'https://example.com/a.png',
+              mediaSource: 'upload',
+              mediaAssetId: '507f1f77bcf86cd799439011',
+            }],
           }],
         },
       },
@@ -30,9 +37,21 @@ describe('compositor amigável de notificações', () => {
     expect(definitions).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: 'protocolo', label: 'Número do protocolo' }),
       expect.objectContaining({ key: 'nomeCampanha' }),
-      expect.objectContaining({ key: 'imagem', type: 'image' }),
+      expect.objectContaining({
+        key: 'imagem',
+        type: 'image',
+        mediaSource: 'upload',
+        mediaAssetId: '507f1f77bcf86cd799439011',
+      }),
     ]))
     expect(definitions.some((item) => item.key === 'displayName')).toBe(false)
+  })
+
+  it('preenche somente a mídia persistida e mantém exemplos textuais como dica', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
+
+    expect(source).toContain("['image', 'video', 'document'].includes(definition.type) && definition.example")
+    expect(source).toContain('form.variableValues = Object.fromEntries')
   })
 
   it('une a mesma variável usada por canais diferentes', () => {

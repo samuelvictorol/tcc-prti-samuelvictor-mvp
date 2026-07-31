@@ -7,12 +7,16 @@ vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 import {
   canSendCloudServiceMessage,
   canSendCloudChatMode,
+  cloudChatTemplateVariablesForSend,
   cloudChatTemplateParameters,
+  cloudTemplateMediaFileError,
   cloudConsentOf,
   cloudConsentSourceLabel,
   cloudConversationId,
   formatServiceWindow,
+  isValidCloudTemplateMediaUrl,
   mergeCloudMessages,
+  normalizeCloudTemplateMediaUpload,
   serviceWindowOf,
   upsertCloudConversation,
 } from '../src/pages/ChatsPage.vue'
@@ -146,6 +150,82 @@ describe('Chats oficiais do WhatsApp Cloud', () => {
     expect(cloudChatTemplateParameters({
       payload: { builder: { components: [{ parameters: [{ key: 'pedido', label: 'Pedido' }] }] } },
     })).toEqual([{ key: 'pedido', label: 'Pedido', type: 'text' }])
+  })
+
+  it('permite URL ou upload persistido nos cabeçalhos de imagem, vídeo e arquivo', () => {
+    const parameters = cloudChatTemplateParameters({
+      payload: {
+        builder: {
+          components: [{
+            type: 'header',
+            parameters: [{
+              key: 'imagem_cabecalho',
+              label: 'Imagem do cabeçalho',
+              type: 'image',
+              example: 'https://cdn.example.com/exemplo.png',
+            }],
+          }],
+        },
+      },
+    })
+    const asset = normalizeCloudTemplateMediaUpload({
+      data: {
+        url: 'https://notify.example.com/media/asset-1',
+        mimeType: 'image/png',
+        mediaType: 'image',
+        filename: 'campanha.png',
+        id: 'asset-1',
+      },
+    })
+
+    expect(parameters).toEqual([expect.objectContaining({
+      key: 'imagem_cabecalho',
+      type: 'image',
+      example: 'https://cdn.example.com/exemplo.png',
+    })])
+    expect(asset).toEqual({
+      id: 'asset-1',
+      url: 'https://notify.example.com/media/asset-1',
+      mimeType: 'image/png',
+      mediaType: 'image',
+      filename: 'campanha.png',
+    })
+    expect(cloudChatTemplateVariablesForSend(
+      parameters,
+      { imagem_cabecalho: asset.url },
+      { imagem_cabecalho: asset },
+    )).toEqual({ imagem_cabecalho: { link: asset.url } })
+    expect(cloudChatTemplateVariablesForSend(
+      [{ key: 'arquivo', type: 'document', filename: 'padrao.pdf' }],
+      { arquivo: 'https://notify.example.com/media/document-1' },
+      { arquivo: { url: 'https://notify.example.com/media/document-1', filename: 'relatorio.pdf' } },
+    )).toEqual({
+      arquivo: { link: 'https://notify.example.com/media/document-1', filename: 'relatorio.pdf' },
+    })
+    expect(cloudChatTemplateVariablesForSend(
+      [{ key: 'video', type: 'video' }],
+      { video: 'https://cdn.example.com/video.mp4' },
+      {},
+    )).toEqual({ video: 'https://cdn.example.com/video.mp4' })
+    expect(cloudTemplateMediaFileError(
+      { name: 'video.mp4', type: 'video/mp4', size: 17 * 1024 * 1024 },
+      'video',
+    )).toContain('16 MB')
+    expect(cloudTemplateMediaFileError(
+      { name: 'imagem.exe', type: 'image/png', size: 1024 },
+      'image',
+    )).toContain('compatível com imagem')
+    expect(isValidCloudTemplateMediaUrl('https://cdn.example.com/capa.png')).toBe(true)
+    expect(isValidCloudTemplateMediaUrl('https://')).toBe(false)
+    expect(isValidCloudTemplateMediaUrl('https://user:secret@example.com/capa.png')).toBe(false)
+
+    const chats = source('pages/ChatsPage.vue')
+    expect(chats).toContain("http.post('/media', multipart")
+    expect(chats).toContain("multipart.append('file', file, file.name)")
+    expect(chats).toContain("multipart.append('mediaType', parameter.type)")
+    expect(chats).toContain("multipart.append('purpose', 'dispatch')")
+    expect(chats).toContain("label: 'Enviar arquivo'")
+    expect(chats).toContain('class="template-media-preview"')
   })
 
   it('atualiza o chat em segundo plano sem reabrir o skeleton ou aceitar respostas obsoletas', () => {

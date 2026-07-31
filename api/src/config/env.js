@@ -1,6 +1,7 @@
 const path = require('node:path');
 const crypto = require('node:crypto');
 const dotenv = require('dotenv');
+const { isSafePublicHttpsUrl } = require('../utils/urls');
 
 dotenv.config({ path: process.env.DOTENV_PATH || path.resolve(process.cwd(), '.env') });
 
@@ -42,6 +43,7 @@ const env = {
   rateLimitWindowMs: number('RATE_LIMIT_WINDOW_MS', 60_000),
   rateLimitMax: number('RATE_LIMIT_MAX', 120),
   webhookRateLimitMax: number('WEBHOOK_RATE_LIMIT_MAX', 20_000),
+  mediaRateLimitMax: number('MEDIA_RATE_LIMIT_MAX', 20_000),
   authRateLimitMax: number('AUTH_RATE_LIMIT_MAX', 10),
   ipBlockAfter: number('IP_BLOCK_AFTER', 20),
   ipBlockSeconds: number('IP_BLOCK_SECONDS', 900),
@@ -95,6 +97,10 @@ env.profileSessionTtlSeconds = Math.min(
 );
 env.telegramBotUsername = process.env.TELEGRAM_BOT_USERNAME || null;
 env.whatsappCloudDisplayPhoneNumber = process.env.WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER || null;
+env.mediaPublicBaseUrl = String(process.env.MEDIA_PUBLIC_BASE_URL || env.publicAppUrl).replace(/\/+$/, '');
+env.mediaSigningSecret = process.env.MEDIA_SIGNING_SECRET || crypto.createHmac('sha256', env.inviteTokenSecret)
+  .update('notify-app:template-media-signing:v1')
+  .digest('hex');
 
 const productionRequired = [
   ['JWT_ACCESS_SECRET', env.jwtAccessSecret],
@@ -106,6 +112,12 @@ const productionRequired = [
 
 function validateEnv() {
   if (env.nodeEnv !== 'production') return;
+  if (!isSafePublicHttpsUrl(env.mediaPublicBaseUrl)) {
+    throw new Error('MEDIA_PUBLIC_BASE_URL (ou PUBLIC_APP_URL) deve ser uma URL HTTPS publica em producao');
+  }
+  if (process.env.MEDIA_SIGNING_SECRET && String(process.env.MEDIA_SIGNING_SECRET).length < 32) {
+    throw new Error('MEDIA_SIGNING_SECRET deve possuir ao menos 32 caracteres em producao');
+  }
   const unsafeMarkers = ['development', 'change-me', 'replace-with', 'notify-dev', 'dev-secret'];
   const unsafe = productionRequired.filter(([, value]) => {
     const candidate = String(value || '');
