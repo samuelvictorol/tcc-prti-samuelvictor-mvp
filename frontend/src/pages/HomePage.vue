@@ -235,6 +235,12 @@ function channelHasSavedCredentials(channel) {
   return Object.values(savedCredentialPreviews[channel] || {}).some(Boolean)
 }
 
+function channelConfigHeaderClass(channel) {
+  const tone = channel === 'whatsappCloud' ? 'whatsapp' : channel
+  const configured = app.isChannelEnabled(channel) ? ' channel-config-header--configured' : ''
+  return `channel-config-header channel-config-header--${tone} text-weight-bold${configured}`
+}
+
 function hideChannelCredentials(channel) {
   channelCredentialsVisible[channel] = false
   for (const field of channelCredentialFields[channel] || []) {
@@ -517,169 +523,176 @@ onBeforeUnmount(() => {
       </button>
     </section>
 
-    <q-card flat class="glass-card section-card useful-links-card q-mb-lg">
-      <div class="toolbar-row useful-links-card__header">
-        <div>
-          <div class="text-overline useful-links-eyebrow">Navegação personalizada</div>
-          <h2 class="section-title">Links úteis</h2>
-          <p class="section-copy">
-            Cadastre até {{ MAX_USEFUL_LINKS }} atalhos para aparecerem abaixo de Ajuda no menu lateral.
-          </p>
-        </div>
-        <q-btn
-          outline
-          color="primary"
-          no-caps
-          icon="add_link"
-          label="Adicionar link"
-          :disable="settings.usefulLinks.length >= MAX_USEFUL_LINKS"
-          @click="addUsefulLink"
+    <div class="settings-priority-stack">
+      <q-card flat class="glass-card section-card settings-collapse-card useful-links-card q-mb-lg" data-testid="useful-links-panel">
+        <q-expansion-item
+          icon="mdi-link-variant"
+          label="Links úteis"
+          :caption="`Cadastre até ${MAX_USEFUL_LINKS} atalhos para aparecerem abaixo de Ajuda no menu lateral.`"
+          header-class="settings-collapse-header text-weight-bold"
         >
-          <q-tooltip v-if="settings.usefulLinks.length >= MAX_USEFUL_LINKS">
-            Limite de {{ MAX_USEFUL_LINKS }} links atingido
-          </q-tooltip>
-        </q-btn>
-      </div>
+          <div class="settings-collapse-body settings-collapse-body--links">
+            <div class="toolbar-row useful-links-card__header">
+              <div class="text-overline useful-links-eyebrow">Navegação personalizada</div>
+              <q-btn
+                outline
+                color="primary"
+                no-caps
+                icon="add_link"
+                label="Adicionar link"
+                :disable="settings.usefulLinks.length >= MAX_USEFUL_LINKS"
+                @click="addUsefulLink"
+              >
+                <q-tooltip v-if="settings.usefulLinks.length >= MAX_USEFUL_LINKS">
+                  Limite de {{ MAX_USEFUL_LINKS }} links atingido
+                </q-tooltip>
+              </q-btn>
+            </div>
 
-      <div v-if="settings.usefulLinks.length" class="useful-link-list">
-        <article
-          v-for="(link, index) in settings.usefulLinks"
-          :key="`useful-link-${index}`"
-          class="useful-link-editor"
-        >
-          <div class="useful-link-editor__order" aria-hidden="true">{{ index + 1 }}</div>
-          <div class="useful-link-editor__fields">
-            <q-input
-              v-model="link.title"
-              outlined
-              label="Título"
-              maxlength="80"
-              counter
-              :aria-label="`Título do link útil ${index + 1}`"
-            />
-            <q-input
-              v-model="link.caption"
-              outlined
-              label="Descrição (opcional)"
-              maxlength="240"
-              counter
-              :aria-label="`Descrição do link útil ${index + 1}`"
-            />
-            <q-select
-              v-model="link.iconName"
-              outlined
-              emit-value
-              map-options
-              use-input
-              fill-input
-              hide-selected
-              input-debounce="0"
-              new-value-mode="add-unique"
-              :options="USEFUL_LINK_ICON_OPTIONS"
-              label="Nome do ícone MDI"
-              hint="Escolha uma opção ou informe, por exemplo, mdi-web."
-              :aria-label="`Ícone do link útil ${index + 1}`"
-            >
-              <template #prepend><q-icon :name="link.iconName || 'mdi-link-variant'" /></template>
-              <template #option="scope">
-                <q-item v-bind="scope.itemProps">
-                  <q-item-section avatar><q-icon :name="scope.opt.value" /></q-item-section>
-                  <q-item-section>
-                    <q-item-label>{{ scope.opt.label }}</q-item-label>
-                    <q-item-label caption>{{ scope.opt.value }}</q-item-label>
-                  </q-item-section>
-                </q-item>
-              </template>
-            </q-select>
-            <q-input
-              v-model="link.url"
-              outlined
-              type="url"
-              label="URL"
-              placeholder="https://exemplo.com/guia"
-              hint="Somente endereços HTTP ou HTTPS são aceitos."
-              :aria-label="`URL do link útil ${index + 1}`"
-            >
-              <template #prepend><q-icon name="mdi-open-in-new" /></template>
-            </q-input>
+            <div v-if="settings.usefulLinks.length" class="useful-link-list">
+              <article
+                v-for="(link, index) in settings.usefulLinks"
+                :key="`useful-link-${index}`"
+                class="useful-link-editor"
+              >
+                <div class="useful-link-editor__order" aria-hidden="true">{{ index + 1 }}</div>
+                <div class="useful-link-editor__fields">
+                  <q-input
+                    v-model="link.title"
+                    outlined
+                    label="Título"
+                    maxlength="80"
+                    counter
+                    :aria-label="`Título do link útil ${index + 1}`"
+                  />
+                  <q-input
+                    v-model="link.caption"
+                    outlined
+                    label="Descrição (opcional)"
+                    maxlength="240"
+                    counter
+                    :aria-label="`Descrição do link útil ${index + 1}`"
+                  />
+                  <q-select
+                    v-model="link.iconName"
+                    outlined
+                    emit-value
+                    map-options
+                    use-input
+                    fill-input
+                    hide-selected
+                    input-debounce="0"
+                    new-value-mode="add-unique"
+                    :options="USEFUL_LINK_ICON_OPTIONS"
+                    label="Nome do ícone MDI"
+                    hint="Escolha uma opção ou informe, por exemplo, mdi-web."
+                    :aria-label="`Ícone do link útil ${index + 1}`"
+                  >
+                    <template #prepend><q-icon :name="link.iconName || 'mdi-link-variant'" /></template>
+                    <template #option="scope">
+                      <q-item v-bind="scope.itemProps">
+                        <q-item-section avatar><q-icon :name="scope.opt.value" /></q-item-section>
+                        <q-item-section>
+                          <q-item-label>{{ scope.opt.label }}</q-item-label>
+                          <q-item-label caption>{{ scope.opt.value }}</q-item-label>
+                        </q-item-section>
+                      </q-item>
+                    </template>
+                  </q-select>
+                  <q-input
+                    v-model="link.url"
+                    outlined
+                    type="url"
+                    label="URL"
+                    placeholder="https://exemplo.com/guia"
+                    hint="Somente endereços HTTP ou HTTPS são aceitos."
+                    :aria-label="`URL do link útil ${index + 1}`"
+                  >
+                    <template #prepend><q-icon name="mdi-open-in-new" /></template>
+                  </q-input>
+                </div>
+                <div class="useful-link-editor__actions">
+                  <q-btn
+                    flat
+                    round
+                    dense
+                    icon="keyboard_arrow_up"
+                    :disable="index === 0"
+                    :aria-label="`Mover ${link.title || `link ${index + 1}`} para cima`"
+                    @click="moveUsefulLink(index, -1)"
+                  >
+                    <q-tooltip>Mover para cima</q-tooltip>
+                  </q-btn>
+                  <q-btn
+                    flat
+                    round
+                    dense
+                    icon="keyboard_arrow_down"
+                    :disable="index === settings.usefulLinks.length - 1"
+                    :aria-label="`Mover ${link.title || `link ${index + 1}`} para baixo`"
+                    @click="moveUsefulLink(index, 1)"
+                  >
+                    <q-tooltip>Mover para baixo</q-tooltip>
+                  </q-btn>
+                  <q-btn
+                    flat
+                    round
+                    dense
+                    color="negative"
+                    icon="delete_outline"
+                    :aria-label="`Remover ${link.title || `link ${index + 1}`}`"
+                    @click="removeUsefulLink(index)"
+                  >
+                    <q-tooltip>Remover link</q-tooltip>
+                  </q-btn>
+                </div>
+              </article>
+            </div>
+            <div v-else class="useful-links-empty">
+              <q-icon name="mdi-link-plus" />
+              <div>
+                <strong>Nenhum atalho personalizado</strong>
+                <span>Ajuda continuará disponível; seus links aparecerão logo abaixo dela.</span>
+              </div>
+            </div>
+
+            <div class="useful-links-card__footer">
+              <span>{{ settings.usefulLinks.length }}/{{ MAX_USEFUL_LINKS }} links cadastrados</span>
+              <q-btn
+                unelevated
+                color="primary"
+                no-caps
+                icon="save"
+                label="Salvar links úteis"
+                :loading="savingUsefulLinks"
+                @click="saveUsefulLinks"
+              />
+            </div>
           </div>
-          <div class="useful-link-editor__actions">
-            <q-btn
-              flat
-              round
-              dense
-              icon="keyboard_arrow_up"
-              :disable="index === 0"
-              :aria-label="`Mover ${link.title || `link ${index + 1}`} para cima`"
-              @click="moveUsefulLink(index, -1)"
-            >
-              <q-tooltip>Mover para cima</q-tooltip>
-            </q-btn>
-            <q-btn
-              flat
-              round
-              dense
-              icon="keyboard_arrow_down"
-              :disable="index === settings.usefulLinks.length - 1"
-              :aria-label="`Mover ${link.title || `link ${index + 1}`} para baixo`"
-              @click="moveUsefulLink(index, 1)"
-            >
-              <q-tooltip>Mover para baixo</q-tooltip>
-            </q-btn>
-            <q-btn
-              flat
-              round
-              dense
-              color="negative"
-              icon="delete_outline"
-              :aria-label="`Remover ${link.title || `link ${index + 1}`}`"
-              @click="removeUsefulLink(index)"
-            >
-              <q-tooltip>Remover link</q-tooltip>
-            </q-btn>
-          </div>
-        </article>
-      </div>
-      <div v-else class="useful-links-empty">
-        <q-icon name="mdi-link-plus" />
-        <div>
-          <strong>Nenhum atalho personalizado</strong>
-          <span>Ajuda continuará disponível; seus links aparecerão logo abaixo dela.</span>
-        </div>
-      </div>
+        </q-expansion-item>
+      </q-card>
 
-      <div class="useful-links-card__footer">
-        <span>{{ settings.usefulLinks.length }}/{{ MAX_USEFUL_LINKS }} links cadastrados</span>
-        <q-btn
-          unelevated
-          color="primary"
-          no-caps
-          icon="save"
-          label="Salvar links úteis"
-          :loading="savingUsefulLinks"
-          @click="saveUsefulLinks"
-        />
-      </div>
-    </q-card>
-
-    <section class="q-mb-lg">
+    <section class="credentials-panel q-mb-lg" data-testid="credentials-panel">
       <q-card flat class="glass-card section-card">
-        <div class="toolbar-row">
-          <div class="row items-center q-gutter-xs">
-            <h2 class="section-title">Credenciais e canais</h2>
-            <ContextHelp
-              title="Configurações independentes por canal"
-              tooltip="Entenda como as credenciais são salvas"
-              text="Salve cada provedor separadamente. Campos vazios mantêm os valores existentes e um canal incompleto não bloqueia os demais."
-            />
+        <div class="toolbar-row credentials-panel__header">
+          <div class="settings-panel-title">
+            <div class="settings-panel-title__icon"><q-icon name="settings_suggest" /></div>
+            <div class="row items-center q-gutter-xs">
+              <h2 class="section-title">Credenciais e canais</h2>
+              <ContextHelp
+                title="Configurações independentes por canal"
+                tooltip="Entenda como as credenciais são salvas"
+                text="Salve cada provedor separadamente. Campos vazios mantêm os valores existentes e um canal incompleto não bloqueia os demais."
+              />
+            </div>
           </div>
         </div>
 
         <q-expansion-item
-          icon="send_to_mobile"
+          icon="bi-telegram"
           label="Telegram"
           :caption="app.isChannelEnabled('telegram') ? 'Configurado e disponível' : undefined"
-          :header-class="app.isChannelEnabled('telegram') ? 'channel-config-header channel-config-header--configured text-weight-bold' : 'channel-config-header text-weight-bold'"
+          :header-class="channelConfigHeaderClass('telegram')"
         >
           <div class="form-grid q-pa-md">
             <div v-if="telegramBot" class="full-span telegram-bot-card">
@@ -746,10 +759,10 @@ onBeforeUnmount(() => {
         </q-expansion-item>
         <q-separator />
         <q-expansion-item
-          icon="cloud_sync"
+          icon="mdi-whatsapp"
           label="WhatsApp Cloud API"
           :caption="app.isChannelEnabled('whatsappCloud') ? 'Configurado e disponível' : undefined"
-          :header-class="app.isChannelEnabled('whatsappCloud') ? 'channel-config-header channel-config-header--configured text-weight-bold' : 'channel-config-header text-weight-bold'"
+          :header-class="channelConfigHeaderClass('whatsappCloud')"
         >
           <div class="form-grid q-pa-md">
             <div class="full-span credential-visibility" aria-live="polite">
@@ -842,10 +855,10 @@ onBeforeUnmount(() => {
         </q-expansion-item>
         <q-separator />
         <q-expansion-item
-          icon="mail"
+          icon="mdi-gmail"
           label="Gmail"
           :caption="app.isChannelEnabled('email') ? 'Configurado e disponível' : undefined"
-          :header-class="app.isChannelEnabled('email') ? 'channel-config-header channel-config-header--configured text-weight-bold' : 'channel-config-header text-weight-bold'"
+          :header-class="channelConfigHeaderClass('email')"
         >
           <div class="form-grid q-pa-md">
             <div class="full-span credential-visibility" aria-live="polite">
@@ -879,52 +892,61 @@ onBeforeUnmount(() => {
       </q-card>
 
     </section>
+    </div>
 
-    <q-card flat class="glass-card section-card whatsapp-permission-card q-mb-lg">
-      <div class="whatsapp-permission-card__icon"><q-icon name="send_to_mobile" /></div>
-      <div class="whatsapp-permission-card__copy">
-        <div class="row items-center q-gutter-xs">
-          <h2 class="section-title">Onboarding automático do Telegram</h2>
-          <ContextHelp
-            title="Comando de onboarding do Telegram"
-            tooltip="Entenda o onboarding automático"
-            :text="[
-              'Quando o usuário enviar este comando ao bot, ele será autorizado e receberá um menu com vínculo seguro de telefone, acesso ao Meu perfil e Ajuda. O comando dinâmico do WhatsApp também continua válido no Telegram e abre o mesmo menu.',
-              'Pode ser alterado; /notify-me permanece dinâmico conforme a configuração do WhatsApp.',
-            ]"
+    <q-card flat class="glass-card section-card settings-collapse-card q-mb-lg" data-testid="telegram-onboarding-panel">
+      <q-expansion-item
+        icon="bi-telegram"
+        label="Onboarding automático do Telegram"
+        caption="Configure o comando seguro que autoriza o contato e abre o menu do bot"
+        header-class="settings-collapse-header text-weight-bold"
+      >
+        <div class="settings-collapse-body whatsapp-permission-card whatsapp-permission-card--body">
+          <div class="whatsapp-permission-card__copy">
+            <div class="row items-center q-gutter-xs">
+              <strong>Configuração do comando</strong>
+              <ContextHelp
+                title="Comando de onboarding do Telegram"
+                tooltip="Entenda o onboarding automático"
+                :text="[
+                  'Quando o usuário enviar este comando ao bot, ele será autorizado e receberá um menu com vínculo seguro de telefone, acesso ao Meu perfil e Ajuda. O comando dinâmico do WhatsApp também continua válido no Telegram e abre o mesmo menu.',
+                  'Pode ser alterado; /notify-me permanece dinâmico conforme a configuração do WhatsApp.',
+                ]"
+              />
+            </div>
+            <code>START_VERIFY_TELEGRAM_PERMISSION</code>
+          </div>
+          <q-input
+            v-model="settings.telegramPermission.command"
+            outlined
+            label="Comando do onboarding Telegram"
+            placeholder="/verify-me"
+            maxlength="100"
+            counter
+            class="whatsapp-permission-card__input"
+            @keydown.enter.prevent="saveTelegramPermission"
+          />
+          <q-btn
+            color="primary"
+            unelevated
+            no-caps
+            icon="save"
+            label="Salvar comando Telegram"
+            :loading="savingTelegramPermission"
+            @click="saveTelegramPermission"
           />
         </div>
-        <code>START_VERIFY_TELEGRAM_PERMISSION</code>
-      </div>
-      <q-input
-        v-model="settings.telegramPermission.command"
-        outlined
-        label="Comando do onboarding Telegram"
-        placeholder="/verify-me"
-        maxlength="100"
-        counter
-        class="whatsapp-permission-card__input"
-        @keydown.enter.prevent="saveTelegramPermission"
-      />
-      <q-btn
-        color="primary"
-        unelevated
-        no-caps
-        icon="save"
-        label="Salvar comando Telegram"
-        :loading="savingTelegramPermission"
-        @click="saveTelegramPermission"
-      />
+      </q-expansion-item>
     </q-card>
 
-    <q-card flat class="glass-card section-card telegram-messages-card q-mb-lg">
+    <q-card flat class="glass-card section-card settings-collapse-card telegram-messages-card q-mb-lg" data-testid="telegram-messages-panel">
       <q-expansion-item
-        icon="forum"
+        icon="bi-telegram"
         label="Mensagens amigáveis do Telegram"
         caption="Personalize o onboarding sem alterar a lógica segura do bot"
-        header-class="text-weight-bold"
+        header-class="settings-collapse-header text-weight-bold"
       >
-        <div class="telegram-messages-card__body">
+        <div class="settings-collapse-body telegram-messages-card__body">
           <div class="telegram-messages-card__intro">
             <span>Marcadores disponíveis:</span>
             <q-chip dense outline color="info">{name}</q-chip>
@@ -999,53 +1021,61 @@ onBeforeUnmount(() => {
       </q-expansion-item>
     </q-card>
 
-    <q-card flat class="glass-card section-card whatsapp-permission-card whatsapp-permission-card--cloud q-mb-lg">
-      <div class="whatsapp-permission-card__icon"><q-icon name="how_to_reg" /></div>
-      <div class="whatsapp-permission-card__copy">
-        <div class="row items-center q-gutter-xs">
-          <h2 class="section-title">Autorização automática de contatos do WhatsApp</h2>
-          <ContextHelp
-            title="Quando um contato do WhatsApp é cadastrado"
-            tooltip="Entenda a autorização automática"
-            :text="[
-              'Mensagens recebidas pelo webhook oficial cadastram ou atualizam o contato e abrem a janela móvel de atendimento por 24 horas.',
-              'Quando o contato envia este comando exato, a permissão de notificações pela API oficial é concedida e auditada.',
-              'O botão Solicitar autorização, na aba Conversas do WhatsApp Cloud, usa o texto configurado abaixo e só funciona enquanto a janela de atendimento estiver aberta.',
-            ]"
+    <q-card flat class="glass-card section-card settings-collapse-card q-mb-lg" data-testid="whatsapp-auth-panel">
+      <q-expansion-item
+        icon="mdi-whatsapp"
+        label="Autorização automática de contatos do WhatsApp"
+        caption="Defina o comando e a mensagem usados para solicitar consentimento"
+        header-class="settings-collapse-header text-weight-bold"
+      >
+        <div class="settings-collapse-body whatsapp-permission-card whatsapp-permission-card--body whatsapp-permission-card--cloud">
+          <div class="whatsapp-permission-card__copy">
+            <div class="row items-center q-gutter-xs">
+              <strong>Configuração da autorização</strong>
+              <ContextHelp
+                title="Quando um contato do WhatsApp é cadastrado"
+                tooltip="Entenda a autorização automática"
+                :text="[
+                  'Mensagens recebidas pelo webhook oficial cadastram ou atualizam o contato e abrem a janela móvel de atendimento por 24 horas.',
+                  'Quando o contato envia este comando exato, a permissão de notificações pela API oficial é concedida e auditada.',
+                  'O botão Solicitar autorização, na aba Conversas do WhatsApp Cloud, usa o texto configurado abaixo e só funciona enquanto a janela de atendimento estiver aberta.',
+                ]"
+              />
+            </div>
+            <code>START_NOTIFY_WHATSAPP_PERMISSION</code>
+          </div>
+          <q-input
+            v-model="settings.whatsappPermission.command"
+            outlined
+            label="Texto de autorização"
+            placeholder="/notify-me"
+            maxlength="100"
+            counter
+            class="whatsapp-permission-card__input whatsapp-permission-card__input--command"
+            @keydown.enter.prevent="saveWhatsappPermission"
+          />
+          <q-btn
+            color="primary"
+            unelevated
+            no-caps
+            icon="save"
+            label="Salvar autorização"
+            :loading="savingWhatsappPermission"
+            @click="saveWhatsappPermission"
+          />
+          <q-input
+            v-model="settings.whatsappPermission.requestText"
+            outlined
+            type="textarea"
+            autogrow
+            label="Mensagem para solicitar autorização no chat"
+            hint="Use {command}; o sistema substituirá pelo comando configurado acima."
+            maxlength="1000"
+            counter
+            class="whatsapp-permission-card__input whatsapp-permission-card__input--message"
           />
         </div>
-        <code>START_NOTIFY_WHATSAPP_PERMISSION</code>
-      </div>
-      <q-input
-        v-model="settings.whatsappPermission.command"
-        outlined
-        label="Texto de autorização"
-        placeholder="/notify-me"
-        maxlength="100"
-        counter
-        class="whatsapp-permission-card__input whatsapp-permission-card__input--command"
-        @keydown.enter.prevent="saveWhatsappPermission"
-      />
-      <q-input
-        v-model="settings.whatsappPermission.requestText"
-        outlined
-        type="textarea"
-        autogrow
-        label="Mensagem para solicitar autorização no chat"
-        hint="Use {command}; o sistema substituirá pelo comando configurado acima."
-        maxlength="1000"
-        counter
-        class="whatsapp-permission-card__input whatsapp-permission-card__input--message"
-      />
-      <q-btn
-        color="primary"
-        unelevated
-        no-caps
-        icon="save"
-        label="Salvar autorização"
-        :loading="savingWhatsappPermission"
-        @click="saveWhatsappPermission"
-      />
+      </q-expansion-item>
     </q-card>
 
     <q-card flat class="glass-card section-card">
@@ -1167,17 +1197,68 @@ onBeforeUnmount(() => {
 }
 
 :deep(.channel-config-header) {
-  transition: background-color 160ms ease, color 160ms ease;
+  border-left: 4px solid transparent;
+  transition: background-color 160ms ease, color 160ms ease, box-shadow 160ms ease;
 }
 
-:deep(.channel-config-header--configured) {
-  background: rgba(218, 249, 240, 0.72);
+:deep(.channel-config-header .q-item__section--avatar) {
+  min-width: 58px;
+}
+
+:deep(.channel-config-header .q-item__section--avatar > .q-icon) {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  font-size: 22px;
+  place-items: center;
+}
+
+:deep(.channel-config-header--telegram) {
+  background: linear-gradient(105deg, rgba(91, 184, 245, 0.15), rgba(36, 139, 214, 0.045));
+  color: #245b7d;
+}
+
+:deep(.channel-config-header--telegram .q-item__section--avatar > .q-icon) {
+  background: rgba(36, 139, 214, 0.13);
+  color: #248bd6;
+}
+
+:deep(.channel-config-header--whatsapp) {
+  background: linear-gradient(105deg, rgba(71, 211, 162, 0.15), rgba(18, 140, 106, 0.045));
   color: #116b59;
-  box-shadow: inset 4px 0 0 #1a9f83;
 }
 
-:deep(.channel-config-header--configured .q-item__label--caption) {
-  color: #368273;
+:deep(.channel-config-header--whatsapp .q-item__section--avatar > .q-icon) {
+  background: rgba(18, 140, 106, 0.13);
+  color: #128c6a;
+}
+
+:deep(.channel-config-header--gmail) {
+  background: linear-gradient(105deg, rgba(242, 130, 126, 0.14), rgba(217, 81, 78, 0.04));
+  color: #91403e;
+}
+
+:deep(.channel-config-header--gmail .q-item__section--avatar > .q-icon) {
+  background: rgba(217, 81, 78, 0.12);
+  color: #d9514e;
+}
+
+:deep(.channel-config-header--telegram.channel-config-header--configured) {
+  box-shadow: inset 4px 0 0 #248bd6;
+}
+
+:deep(.channel-config-header--whatsapp.channel-config-header--configured) {
+  box-shadow: inset 4px 0 0 #128c6a;
+}
+
+:deep(.channel-config-header--gmail.channel-config-header--configured) {
+  box-shadow: inset 4px 0 0 #d9514e;
+}
+
+:deep(.channel-config-header .q-item__label--caption) {
+  color: currentColor;
+  opacity: 0.76;
 }
 
 .channel-icon {
@@ -1235,8 +1316,77 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+.settings-priority-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.credentials-panel {
+  order: -1;
+}
+
+.credentials-panel__header {
+  padding-bottom: 18px;
+}
+
+.settings-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.settings-panel-title__icon,
+:deep(.settings-collapse-header .q-item__section--avatar > .q-icon) {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  border-radius: 17px;
+  background: rgba(53, 188, 164, 0.14);
+  color: #137d6c;
+  font-size: 27px;
+  place-items: center;
+}
+
+.settings-collapse-card {
+  overflow: hidden;
+  padding: 0;
+}
+
+:deep(.settings-collapse-header) {
+  min-height: 84px;
+  padding: 16px 20px;
+}
+
+:deep(.settings-collapse-header .q-item__section--avatar) {
+  min-width: 66px;
+}
+
+:deep(.settings-collapse-header .q-item__label) {
+  color: #183e37;
+  font-size: 1rem;
+}
+
+:deep(.settings-collapse-header .q-item__label--caption) {
+  margin-top: 3px;
+  color: #607773;
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+.settings-collapse-body {
+  padding: 8px 20px 20px;
+  border-top: 1px solid rgba(3, 21, 21, 0.06);
+}
+
+.settings-collapse-body--links {
+  padding-inline: 0;
+  padding-bottom: 0;
+}
+
 .useful-links-card__header {
   align-items: flex-start;
+  padding: 12px 20px 18px;
 }
 
 .useful-links-eyebrow {
@@ -1425,20 +1575,9 @@ onBeforeUnmount(() => {
 
 .whatsapp-permission-card {
   display: grid;
-  grid-template-columns: auto minmax(260px, 1fr) minmax(260px, 0.85fr) auto;
+  grid-template-columns: minmax(240px, 0.85fr) minmax(260px, 1fr) auto;
   align-items: center;
   gap: 18px;
-}
-
-.whatsapp-permission-card__icon {
-  display: grid;
-  width: 52px;
-  height: 52px;
-  border-radius: 17px;
-  background: rgba(53, 188, 164, 0.14);
-  color: #137d6c;
-  font-size: 27px;
-  place-items: center;
 }
 
 .whatsapp-permission-card__copy code {
@@ -1459,12 +1598,8 @@ onBeforeUnmount(() => {
   align-items: start;
 }
 
-.whatsapp-permission-card--cloud .whatsapp-permission-card__icon {
-  grid-row: 1 / 3;
-}
-
 .whatsapp-permission-card--cloud .whatsapp-permission-card__input--message {
-  grid-column: 2 / 5;
+  grid-column: 1 / 4;
 }
 
 .telegram-messages-card {
@@ -1545,22 +1680,53 @@ onBeforeUnmount(() => {
   }
 
   .whatsapp-permission-card {
-    grid-template-columns: auto minmax(0, 1fr) minmax(260px, 0.9fr);
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 0.9fr);
   }
 
   .whatsapp-permission-card > .q-btn {
-    grid-column: 3;
+    grid-column: 2;
     justify-self: end;
   }
 
   .whatsapp-permission-card--cloud .whatsapp-permission-card__input--message {
-    grid-column: 2 / 4;
+    grid-column: 1 / 3;
   }
 }
 
 @media (max-width: 650px) {
   .channel-grid {
     grid-template-columns: 1fr;
+  }
+
+  :deep(.settings-collapse-header) {
+    min-height: 74px;
+    padding: 12px;
+  }
+
+  :deep(.settings-collapse-header .q-item__section--avatar) {
+    min-width: 58px;
+  }
+
+  .settings-panel-title__icon,
+  :deep(.settings-collapse-header .q-item__section--avatar > .q-icon) {
+    width: 46px;
+    height: 46px;
+    flex-basis: 46px;
+    border-radius: 15px;
+    font-size: 24px;
+  }
+
+  .settings-collapse-body {
+    padding: 8px 12px 16px;
+  }
+
+  .settings-collapse-body--links {
+    padding-inline: 0;
+    padding-bottom: 0;
+  }
+
+  .credentials-panel__header {
+    padding: 12px 12px 16px;
   }
 
   .useful-links-card__header,
@@ -1610,17 +1776,11 @@ onBeforeUnmount(() => {
     grid-template-columns: 1fr;
   }
 
-  .whatsapp-permission-card__icon {
-    width: 46px;
-    height: 46px;
-  }
-
   .whatsapp-permission-card > .q-btn {
     grid-column: auto;
     justify-self: stretch;
   }
 
-  .whatsapp-permission-card--cloud .whatsapp-permission-card__icon,
   .whatsapp-permission-card--cloud .whatsapp-permission-card__input--message {
     grid-row: auto;
     grid-column: auto;
