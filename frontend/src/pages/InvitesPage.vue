@@ -6,6 +6,7 @@ import EmptyState from '../components/EmptyState.vue'
 import { errorMessage, fetchAll, http, unwrap } from '../services/http.js'
 import {
   defaultInviteActionLink,
+  inviteChannelPresentation,
   safeInviteIconUrl,
   slugifyInviteTitle,
 } from '../services/public-invites.js'
@@ -321,8 +322,31 @@ onMounted(loadInvites)
               </div>
               <h2>{{ form.title || 'Seu convite' }}</h2>
               <p>{{ form.description || 'Explique por que a pessoa deve escolher um dos canais abaixo.' }}</p>
-              <button v-for="(link, index) in form.links.filter((item) => item.label)" :key="index" type="button">{{ link.label }}</button>
-              <small>Ao continuar, você será direcionado para o canal escolhido.</small>
+              <div class="preview-links">
+                <div
+                  v-for="(link, index) in form.links.filter((item) => item.label)"
+                  :key="index"
+                  :class="['preview-action', `preview-action--${inviteChannelPresentation(link.channel).tone}`]"
+                  aria-hidden="true"
+                >
+                  <span class="preview-action__icon"><q-icon :name="inviteChannelPresentation(link.channel).icon" /></span>
+                  <span class="preview-action__copy">
+                    <strong>{{ link.label }}</strong>
+                    <small>{{ inviteChannelPresentation(link.channel).caption }}</small>
+                  </span>
+                  <q-icon name="arrow_forward" />
+                </div>
+              </div>
+              <div class="preview-profile" aria-hidden="true">
+                <span class="preview-profile__icon"><q-icon name="manage_accounts" /></span>
+                <span class="preview-profile__copy">
+                  <small>Já possui cadastro?</small>
+                  <strong>Meu perfil e permissões</strong>
+                  <span>Revise seus dados e canais autorizados.</span>
+                </span>
+                <q-icon name="arrow_forward" />
+              </div>
+              <small class="preview-footnote">Ao continuar, você será direcionado para o canal escolhido.</small>
             </aside>
           </q-card-section>
           <q-separator />
@@ -465,18 +489,116 @@ onMounted(loadInvites)
   line-height: 1.55;
 }
 
-.public-preview button {
-  width: min(360px, 100%);
-  margin: 5px 0;
-  padding: 13px 18px;
-  border: 1px solid rgba(3, 21, 21, 0.12);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.84);
-  color: #031515;
-  font-weight: 750;
+.preview-links {
+  display: grid;
+  width: min(380px, 100%);
+  gap: 9px;
 }
 
-.public-preview small {
+.preview-action {
+  display: grid;
+  width: min(360px, 100%);
+  min-height: 60px;
+  margin: 0 auto;
+  padding: 8px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 17px;
+  grid-template-columns: 39px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 10px 23px rgba(3, 62, 55, 0.13);
+  color: #fff;
+  text-align: left;
+}
+
+.preview-action--whatsapp {
+  background: linear-gradient(135deg, #075e54, #0b7a62);
+}
+
+.preview-action--telegram {
+  background: linear-gradient(135deg, #0e5d88, #167eaa);
+}
+
+.preview-action--email {
+  background: linear-gradient(135deg, #8e2531, #b83f4a);
+}
+
+.preview-action--default {
+  background: linear-gradient(135deg, #075e54, #0b7a62);
+}
+
+.preview-action__icon,
+.preview-profile__icon {
+  display: grid;
+  width: 39px;
+  height: 39px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 22px;
+  place-items: center;
+}
+
+.preview-action__copy,
+.preview-profile__copy {
+  display: grid;
+  min-width: 0;
+  line-height: 1.18;
+}
+
+.preview-action__copy strong {
+  font-size: 0.82rem;
+}
+
+.preview-action__copy small {
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.6rem;
+  opacity: 1;
+}
+
+.preview-profile {
+  display: grid;
+  width: min(360px, 100%);
+  min-height: 72px;
+  margin-top: 13px;
+  padding: 9px 11px;
+  border: 1px solid rgba(5, 103, 91, 0.23);
+  border-radius: 18px;
+  grid-template-columns: 39px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 10px;
+  background: linear-gradient(135deg, rgba(255,255,255,.95), rgba(222,250,244,.95));
+  box-shadow: 0 10px 23px rgba(3, 62, 55, 0.11);
+  color: #073b35;
+  text-align: left;
+}
+
+.preview-profile__icon {
+  background: linear-gradient(145deg, #c8f7ec, #83ead7);
+  color: #087e73;
+}
+
+.preview-profile__copy small {
+  color: #168171;
+  font-size: 0.55rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  opacity: 1;
+  text-transform: uppercase;
+}
+
+.preview-profile__copy strong {
+  margin-top: 2px;
+  font-size: 0.78rem;
+}
+
+.preview-profile__copy span {
+  margin-top: 3px;
+  color: #52716c;
+  font-size: 0.6rem;
+}
+
+.preview-footnote {
   max-width: 350px;
   margin-top: 18px;
   opacity: 0.7;

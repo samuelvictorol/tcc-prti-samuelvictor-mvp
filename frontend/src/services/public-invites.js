@@ -22,6 +22,37 @@ export function normalizeWhatsappDisplayPhone(value) {
   return /^[1-9]\d{7,14}$/.test(digits) ? digits : ''
 }
 
+export function inviteChannelPresentation(type) {
+  const channel = String(type || '').trim().toLowerCase().replaceAll('-', '_')
+  const presentations = {
+    telegram: {
+      icon: 'bi-telegram',
+      tone: 'telegram',
+      caption: 'Inicie o bot e confirme sua autorização',
+    },
+    whatsapp: {
+      icon: 'mdi-whatsapp',
+      tone: 'whatsapp',
+      caption: 'Abra a conversa e envie o comando de autorização',
+    },
+    whatsapp_cloud: {
+      icon: 'mdi-whatsapp',
+      tone: 'whatsapp',
+      caption: 'Abra a conversa e envie o comando de autorização',
+    },
+    email: {
+      icon: 'mdi-gmail',
+      tone: 'email',
+      caption: 'Continue pelo seu endereço de e-mail',
+    },
+  }
+  return presentations[channel] || {
+    icon: 'arrow_outward',
+    tone: 'default',
+    caption: 'Continuar por este canal',
+  }
+}
+
 export function buildWhatsappInviteUrl(phoneNumber, permissionCommand = '/notify-me') {
   const phone = normalizeWhatsappDisplayPhone(phoneNumber)
   const command = String(permissionCommand || '/notify-me').trim() || '/notify-me'

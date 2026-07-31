@@ -6,6 +6,7 @@ import {
   buildWhatsappInviteUrl,
   defaultInviteActionLink,
   fallbackLegalDocument,
+  inviteChannelPresentation,
   normalizeWhatsappDisplayPhone,
   PUBLIC_LEGAL_TYPES,
   safeInviteIconUrl,
@@ -24,6 +25,11 @@ describe('convites públicos e documentos LGPD', () => {
   })
 
   it('gera ações oficiais de WhatsApp e Telegram a partir das configurações detectadas', () => {
+    expect(inviteChannelPresentation('whatsapp_cloud')).toMatchObject({ icon: 'mdi-whatsapp', tone: 'whatsapp' })
+    expect(inviteChannelPresentation('whatsapp-cloud')).toMatchObject({ icon: 'mdi-whatsapp', tone: 'whatsapp' })
+    expect(inviteChannelPresentation('telegram')).toMatchObject({ icon: 'bi-telegram', tone: 'telegram' })
+    expect(inviteChannelPresentation('email')).toMatchObject({ icon: 'mdi-gmail', tone: 'email' })
+    expect(inviteChannelPresentation('canal-personalizado')).toMatchObject({ icon: 'arrow_outward', tone: 'default' })
     expect(normalizeWhatsappDisplayPhone('+55 (11) 93123-4567')).toBe('5511931234567')
     expect(buildWhatsappInviteUrl('+55 (11) 93123-4567', '/notify-me'))
       .toBe('https://wa.me/5511931234567?text=%2Fnotify-me')
@@ -124,6 +130,10 @@ describe('convites públicos e documentos LGPD', () => {
     expect(publicPage).toContain('QRCode.toDataURL(qrTargetUrl.value')
     expect(publicPage).toContain('label="QR Code deste convite"')
     expect(publicPage).toContain('to="/meu-perfil"')
+    expect(publicPage).toContain('class="public-profile-link"')
+    expect(publicPage).toContain('inviteChannelPresentation(type).icon')
+    expect(inviteEditor).toContain('preview-profile')
+    expect(inviteEditor).toContain('inviteChannelPresentation(link.channel).icon')
     expect(inviteEditor).not.toContain("import QRCode from 'qrcode'")
   })
 
