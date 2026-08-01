@@ -7,16 +7,16 @@ vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 import {
   canSendCloudServiceMessage,
   canSendCloudChatMode,
+  cloudChatTemplateFixedVariables,
+  cloudChatTemplatePreview,
   cloudChatTemplateVariablesForSend,
   cloudChatTemplateParameters,
-  cloudTemplateMediaFileError,
   cloudConsentOf,
   cloudConsentSourceLabel,
   cloudConversationId,
   formatServiceWindow,
   isValidCloudTemplateMediaUrl,
   mergeCloudMessages,
-  normalizeCloudTemplateMediaUpload,
   serviceWindowOf,
   upsertCloudConversation,
 } from '../src/pages/ChatsPage.vue'
@@ -133,7 +133,7 @@ describe('Chats oficiais do WhatsApp Cloud', () => {
     expect(chats).toContain('template oficial aprovado pela Meta')
   })
 
-  it('permite texto na janela ou template depois do opt-in, com campos amigáveis', () => {
+  it('permite texto na janela ou template cadastrado depois do opt-in', () => {
     const open = {
       serviceWindow: { expiresAt: '2026-07-28T13:00:00.000Z' },
       consent: { authorized: false },
@@ -148,84 +148,86 @@ describe('Chats oficiais do WhatsApp Cloud', () => {
     expect(canSendCloudChatMode(optedIn, 'quick', now)).toBe(false)
     expect(canSendCloudChatMode(optedIn, 'template', now)).toBe(true)
     expect(cloudChatTemplateParameters({
-      payload: { builder: { components: [{ parameters: [{ key: 'pedido', label: 'Pedido' }] }] } },
-    })).toEqual([{ key: 'pedido', label: 'Pedido', type: 'text' }])
+      payload: { builder: { components: [{ type: 'body', parameters: [{ key: 'pedido', label: 'Pedido', fixedValue: '123' }] }] } },
+    })).toEqual([{
+      key: 'pedido',
+      label: 'Pedido',
+      type: 'text',
+      componentType: 'body',
+      fixedValue: '123',
+    }])
   })
 
-  it('permite URL ou upload persistido nos cabeçalhos de imagem, vídeo e arquivo', () => {
-    const parameters = cloudChatTemplateParameters({
+  it('não pede valores no chat e usa mídia, texto e botões já cadastrados', () => {
+    const template = {
+      description: 'Descrição interna que não deve ser usada na prévia',
       payload: {
         builder: {
-          components: [{
-            type: 'header',
-            parameters: [{
-              key: 'imagem_cabecalho',
-              label: 'Imagem do cabeçalho',
-              type: 'image',
-              example: 'https://cdn.example.com/exemplo.png',
-            }],
-          }],
+          components: [
+            {
+              type: 'header',
+              text: 'Olá {{cliente}}',
+              parameters: [
+                { key: 'cliente', label: 'Cliente', type: 'text', fixedValue: 'Ana' },
+                { key: 'imagem_cabecalho', label: 'Imagem', type: 'image', fixedValue: 'https://cdn.example.com/exemplo.png' },
+              ],
+            },
+            { type: 'body', text: 'Pedido {{1}} confirmado.', parameters: [{ key: 'pedido', type: 'text', fixedValue: '123' }] },
+            { type: 'footer', text: 'Notify Flow' },
+            { type: 'button', text: 'Acompanhar', url: 'https://example.com/{{pedido}}' },
+          ],
         },
       },
-    })
-    const asset = normalizeCloudTemplateMediaUpload({
-      data: {
-        url: 'https://notify.example.com/media/asset-1',
-        mimeType: 'image/png',
-        mediaType: 'image',
-        filename: 'campanha.png',
-        id: 'asset-1',
-      },
-    })
+    }
+    const parameters = cloudChatTemplateParameters(template)
 
-    expect(parameters).toEqual([expect.objectContaining({
+    expect(parameters).toEqual(expect.arrayContaining([expect.objectContaining({
       key: 'imagem_cabecalho',
       type: 'image',
-      example: 'https://cdn.example.com/exemplo.png',
-    })])
-    expect(asset).toEqual({
-      id: 'asset-1',
-      url: 'https://notify.example.com/media/asset-1',
-      mimeType: 'image/png',
+      fixedValue: 'https://cdn.example.com/exemplo.png',
+    })]))
+    expect(cloudChatTemplateFixedVariables(template)).toEqual({
+      cliente: 'Ana',
+      imagem_cabecalho: 'https://cdn.example.com/exemplo.png',
+      pedido: '123',
+    })
+    expect(cloudChatTemplateFixedVariables({
+      payload: { builder: { components: [{ parameters: [{ key: 'somenteExemplo', example: 'NÃO ENVIAR' }] }] } },
+    })).toEqual({})
+    expect(cloudChatTemplateVariablesForSend(parameters)).toEqual({
+      cliente: 'Ana',
+      imagem_cabecalho: 'https://cdn.example.com/exemplo.png',
+      pedido: '123',
+    })
+    expect(cloudChatTemplatePreview(template)).toEqual({
+      header: 'Olá Ana',
+      body: 'Pedido 123 confirmado.',
+      footer: 'Notify Flow',
       mediaType: 'image',
-      filename: 'campanha.png',
+      mediaUrl: 'https://cdn.example.com/exemplo.png',
+      buttons: [{ text: 'Acompanhar', url: 'https://example.com/123' }],
     })
-    expect(cloudChatTemplateVariablesForSend(
-      parameters,
-      { imagem_cabecalho: asset.url },
-      { imagem_cabecalho: asset },
-    )).toEqual({ imagem_cabecalho: { link: asset.url } })
-    expect(cloudChatTemplateVariablesForSend(
-      [{ key: 'arquivo', type: 'document', filename: 'padrao.pdf' }],
-      { arquivo: 'https://notify.example.com/media/document-1' },
-      { arquivo: { url: 'https://notify.example.com/media/document-1', filename: 'relatorio.pdf' } },
-    )).toEqual({
-      arquivo: { link: 'https://notify.example.com/media/document-1', filename: 'relatorio.pdf' },
-    })
-    expect(cloudChatTemplateVariablesForSend(
-      [{ key: 'video', type: 'video' }],
-      { video: 'https://cdn.example.com/video.mp4' },
-      {},
-    )).toEqual({ video: 'https://cdn.example.com/video.mp4' })
-    expect(cloudTemplateMediaFileError(
-      { name: 'video.mp4', type: 'video/mp4', size: 17 * 1024 * 1024 },
-      'video',
-    )).toContain('16 MB')
-    expect(cloudTemplateMediaFileError(
-      { name: 'imagem.exe', type: 'image/png', size: 1024 },
-      'image',
-    )).toContain('compatível com imagem')
     expect(isValidCloudTemplateMediaUrl('https://cdn.example.com/capa.png')).toBe(true)
     expect(isValidCloudTemplateMediaUrl('https://')).toBe(false)
     expect(isValidCloudTemplateMediaUrl('https://user:secret@example.com/capa.png')).toBe(false)
 
     const chats = source('pages/ChatsPage.vue')
-    expect(chats).toContain("http.post('/media', multipart")
-    expect(chats).toContain("multipart.append('file', file, file.name)")
-    expect(chats).toContain("multipart.append('mediaType', parameter.type)")
-    expect(chats).toContain("multipart.append('purpose', 'dispatch')")
-    expect(chats).toContain("label: 'Enviar arquivo'")
-    expect(chats).toContain('class="template-media-preview"')
+    expect(chats).not.toContain("http.post('/media', multipart")
+    expect(chats).not.toContain('v-model="templateVariables')
+    expect(chats).not.toContain("label: 'Enviar arquivo'")
+    expect(chats).toContain('class="chat-template-preview"')
+    expect(chats).toContain('Conteúdo e valores definidos no template cadastrado.')
+  })
+
+  it('mantém os valores oficiais do preset de confirmação sem pedir campos no chat', () => {
+    expect(cloudChatTemplateFixedVariables({
+      whatsappCloudPreset: 'order_confirmation',
+      variables: ['customerName', 'orderNumber', 'orderDate'],
+    })).toEqual({
+      customerName: 'John Doe',
+      orderNumber: '123456',
+      orderDate: 'Jul 20, 2026',
+    })
   })
 
   it('atualiza o chat em segundo plano sem reabrir o skeleton ou aceitar respostas obsoletas', () => {

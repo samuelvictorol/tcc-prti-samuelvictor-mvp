@@ -44,9 +44,59 @@ const PARAMETER_ALIASES = Object.freeze({
   orderDate: Object.freeze(['order_date'])
 });
 
-const CUSTOM_COMPONENT_TYPES = Object.freeze(['header', 'body', 'button']);
+const CUSTOM_COMPONENT_TYPES = Object.freeze(['header', 'body', 'footer', 'button']);
 const CUSTOM_PARAMETER_TYPES = Object.freeze(['text', 'currency', 'date_time', 'image', 'document', 'video', 'payload', 'coupon_code']);
 const BUTTON_SUB_TYPES = Object.freeze(['url', 'quick_reply', 'copy_code', 'otp_copy_code']);
+const FORBIDDEN_WHATSAPP_BUTTON_HOSTS = Object.freeze(['wa.me', 'whatsapp.com']);
+
+function buttonUrl(value, details = {}) {
+  let parsed;
+  try {
+    parsed = new URL(String(value));
+  } catch (_error) {
+    templateError('Botao exige URL HTTPS valida', details);
+  }
+  if (parsed.protocol.toLowerCase() === 'whatsapp:') {
+    templateError(
+      'Botao nao pode redirecionar para WhatsApp ou wa.me',
+      { ...details, protocol: parsed.protocol },
+      'WHATSAPP_TEMPLATE_BUTTON_URL_FORBIDDEN'
+    );
+  }
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+    templateError('Botao exige URL HTTPS valida, sem credenciais', details);
+  }
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, '');
+  if (FORBIDDEN_WHATSAPP_BUTTON_HOSTS.some((host) => hostname === host || hostname.endsWith('.' + host))) {
+    templateError(
+      'Botao nao pode redirecionar para WhatsApp ou wa.me',
+      { ...details, hostname },
+      'WHATSAPP_TEMPLATE_BUTTON_URL_FORBIDDEN'
+    );
+  }
+  return parsed.toString();
+}
+
+function meaningfulValue(value) {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'object') return !Array.isArray(value) && Object.keys(value).length > 0;
+  return false;
+}
+
+function normalizeFixedValue(value, details) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string') return value.slice(0, 100000);
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    let json;
+    try { json = JSON.stringify(value); } catch (_error) { json = null; }
+    if (!json || json.length > 100000) templateError('Valor fixo do parametro invalido', details);
+    return JSON.parse(json);
+  }
+  templateError('Valor fixo do parametro invalido', details);
+}
 
 function clonePreset(preset) {
   return {
@@ -120,7 +170,7 @@ function normalizeBuilder(builder) {
   const normalized = builder.components.map((component, componentIndex) => {
     const type = String(component.type || '').toLowerCase();
     if (!CUSTOM_COMPONENT_TYPES.includes(type)) templateError('Tipo de componente Meta invalido', { componentIndex, type });
-    if (['header', 'body'].includes(type)) {
+    if (['header', 'body', 'footer'].includes(type)) {
       if (seenSingletonTypes.has(type)) {
         templateError('Template permite no maximo um componente ' + type, { componentIndex, type });
       }
@@ -148,6 +198,30 @@ function normalizeBuilder(builder) {
     if (['header', 'button'].includes(type) && component.parameters.length > 1) {
       templateError(type + ' aceita no maximo um parametro', { componentIndex, type });
     }
+    if (type === 'footer' && component.parameters.length) {
+      templateError('Rodape Meta aceita somente texto fixo', { componentIndex, type });
+    }
+    const componentText = component.text === undefined || component.text === null
+      ? undefined
+      : String(component.text);
+    if (componentText && !['body', 'footer', 'button'].includes(type)) {
+      templateError('Texto fixo permitido somente em body, footer ou button', { componentIndex, type });
+    }
+    const textLimits = { body: 1024, footer: 60, button: 25 };
+    if (componentText && componentText.length > textLimits[type]) {
+      templateError('Texto do componente excede o limite da Meta', {
+        componentIndex,
+        type,
+        maxLength: textLimits[type]
+      });
+    }
+    const componentUrl = component.url === undefined || component.url === null || component.url === ''
+      ? undefined
+      : String(component.url).trim();
+    if (componentUrl && (type !== 'button' || subType !== 'url')) {
+      templateError('URL fixa e exclusiva de botao do tipo URL', { componentIndex, type, subType });
+    }
+    const normalizedComponentUrl = componentUrl ? buttonUrl(componentUrl, { componentIndex }) : undefined;
     const seenParameterIds = new Set();
     const parameters = component.parameters.map((parameter, parameterIndex) => {
       const parameterType = String(parameter.type || '').toLowerCase();
@@ -200,6 +274,8 @@ function normalizeBuilder(builder) {
         label: String(parameter.label || key).trim().slice(0, 160),
         example: parameter.example === undefined || parameter.example === null ? undefined : String(parameter.example).slice(0, 1000)
       };
+      const fixedValue = normalizeFixedValue(parameter.fixedValue, { componentIndex, parameterIndex, key });
+      if (fixedValue !== undefined) output.fixedValue = fixedValue;
       const parameterName = String(parameter.parameterName || parameter.parameter_name || '').trim();
       if (parameterName) {
         if (type === 'button') templateError('Botoes Meta usam parametros posicionais', { componentIndex, parameterIndex });
@@ -235,6 +311,23 @@ function normalizeBuilder(builder) {
         output.mediaType = mediaType;
         const uploadedFilename = String(parameter.uploadedFilename || '').trim();
         if (uploadedFilename) output.uploadedFilename = uploadedFilename.slice(0, 240);
+        const configuredMedia = output.fixedValue ?? output.example;
+        if (typeof configuredMedia === 'string' && configuredMedia.trim()) {
+          if (!/^https:\/\//i.test(configuredMedia.trim())) {
+            templateError('Link fixo de midia deve usar HTTPS', { componentIndex, parameterIndex, key });
+          }
+        } else if (configuredMedia && typeof configuredMedia === 'object') {
+          const link = configuredMedia.link;
+          if (link && !/^https:\/\//i.test(String(link))) {
+            templateError('Link fixo de midia deve usar HTTPS', { componentIndex, parameterIndex, key });
+          }
+        }
+      }
+      if (type === 'button' && subType === 'url') {
+        const configuredButtonValue = output.fixedValue ?? output.example;
+        if (typeof configuredButtonValue === 'string' && /^(?:https?:\/\/|whatsapp:)/i.test(configuredButtonValue.trim())) {
+          buttonUrl(configuredButtonValue.trim(), { componentIndex, parameterIndex, key });
+        }
       }
       return output;
     });
@@ -246,10 +339,79 @@ function normalizeBuilder(builder) {
       id,
       type,
       ...(type === 'button' ? { subType, index: String(buttonIndex) } : {}),
+      ...(componentText !== undefined ? { text: componentText } : {}),
+      ...(normalizedComponentUrl ? { url: normalizedComponentUrl } : {}),
       parameters
     };
   });
-  return { version: 1, components: normalized };
+  const category = builder.category === undefined ? undefined : String(builder.category).toLowerCase();
+  const mode = builder.mode === undefined ? undefined : String(builder.mode).toLowerCase();
+  if (category !== undefined && category !== 'marketing') templateError('Categoria do builder deve ser marketing', { category });
+  if (mode !== undefined && mode !== 'standard') templateError('Modo do builder deve ser standard', { mode });
+  return {
+    version: 1,
+    ...(category ? { category } : {}),
+    ...(mode ? { mode } : {}),
+    components: normalized
+  };
+}
+
+function marketingStandardError(message, details = {}) {
+  templateError(message, details, 'WHATSAPP_MARKETING_STANDARD_INVALID');
+}
+
+function assertMarketingStandardBuilder(builder) {
+  if (builder.category !== 'marketing' || builder.mode !== 'standard') {
+    marketingStandardError(
+      'Template custom novo exige categoria Marketing e modo Padrao',
+      { category: builder.category || null, mode: builder.mode || null }
+    );
+  }
+  const header = builder.components.filter((component) => component.type === 'header');
+  const body = builder.components.filter((component) => component.type === 'body');
+  const footer = builder.components.filter((component) => component.type === 'footer');
+  const buttons = builder.components.filter((component) => component.type === 'button');
+  if (header.length !== 1) {
+    marketingStandardError('Template Marketing Padrao exige exatamente um cabecalho de midia', { component: 'header' });
+  }
+  const headerParameters = header[0]?.parameters || [];
+  if (headerParameters.length !== 1 || !['image', 'video', 'document'].includes(headerParameters[0]?.type)) {
+    marketingStandardError(
+      'Cabecalho Marketing Padrao exige exatamente uma imagem, video ou documento',
+      { component: 'header' }
+    );
+  }
+  if (!meaningfulValue(headerParameters[0].fixedValue)) {
+    marketingStandardError(
+      'Midia do cabecalho exige fixedValue; example e apenas documentacao',
+      { component: 'header', parameter: headerParameters[0].key }
+    );
+  }
+  if (body.length !== 1 || !String(body[0]?.text || '').trim()) {
+    marketingStandardError('Template Marketing Padrao exige body com texto fixo', { component: 'body' });
+  }
+  if (footer.length && !String(footer[0].text || '').trim()) {
+    marketingStandardError('Rodape informado exige texto fixo', { component: 'footer' });
+  }
+  for (const button of buttons) {
+    if (button.subType !== 'url' || !String(button.text || '').trim() || !button.url || button.parameters.length) {
+      marketingStandardError(
+        'Botao Marketing Padrao exige texto e URL HTTPS fixa, sem parametros',
+        { component: 'button', index: button.index }
+      );
+    }
+  }
+  for (const component of builder.components) {
+    for (const parameter of component.parameters) {
+      if (!meaningfulValue(parameter.fixedValue)) {
+        marketingStandardError(
+          'Parametros do template novo exigem fixedValue; example nao e usado no envio',
+          { component: component.type, parameter: parameter.key }
+        );
+      }
+    }
+  }
+  return builder;
 }
 
 function placeholderForParameter(parameter) {
@@ -259,7 +421,7 @@ function placeholderForParameter(parameter) {
     return {
       type: 'currency',
       currency: {
-        fallback_value: parameter.example || placeholder,
+        fallback_value: placeholder,
         code: parameter.currencyCode || '{{' + parameter.key + '_code}}',
         amount_1000: '{{' + parameter.key + '_amount_1000}}'
       }
@@ -276,24 +438,40 @@ function placeholderForParameter(parameter) {
   return { type: 'payload', payload: placeholder };
 }
 
+function configuredParameterValue(parameter) {
+  if (meaningfulValue(parameter.fixedValue)) return parameter.fixedValue;
+  return undefined;
+}
+
+function storedParameterPayload(parameter) {
+  if (meaningfulValue(parameter.fixedValue)) {
+    return runtimeParameter(parameter, { [parameter.key]: parameter.fixedValue });
+  }
+  // `example` documenta a configuracao na UI/Meta, mas nunca representa um
+  // valor autorizado para uma entrega real.
+  return placeholderForParameter(parameter);
+}
+
 function builderComponents(builder) {
   const normalized = normalizeBuilder(builder);
-  return normalized.components.map((component) => ({
+  return normalized.components.filter((component) => component.parameters.length > 0).map((component) => ({
     type: component.type,
     ...(component.type === 'button' ? { sub_type: component.subType === 'otp_copy_code' ? 'url' : component.subType, index: component.index } : {}),
     parameters: component.parameters.map((parameter) => ({
-      ...placeholderForParameter(parameter),
+      ...storedParameterPayload(parameter),
       ...(parameter.parameterName ? { parameter_name: parameter.parameterName } : {})
     }))
   }));
 }
 
-function requiredVariable(variables, parameter) {
-  const value = variables?.[parameter.key];
-  if (value === undefined || value === null || value === '') {
+function resolvedParameterValue(variables, parameter) {
+  const hasExplicitValue = Object.prototype.hasOwnProperty.call(variables || {}, parameter.key)
+    && meaningfulValue(variables[parameter.key]);
+  const value = hasExplicitValue ? variables[parameter.key] : configuredParameterValue(parameter);
+  if (!meaningfulValue(value)) {
     templateError(
-      'Preencha todos os campos do template oficial',
-      { missingParameters: [parameter.key] },
+      'O template oficial nao possui valor fixo para todos os parametros',
+      { missingParameters: [parameter.key], canOverrideAtRuntime: true },
       'WHATSAPP_TEMPLATE_PARAMETERS_REQUIRED'
     );
   }
@@ -301,7 +479,7 @@ function requiredVariable(variables, parameter) {
 }
 
 function runtimeParameter(parameter, variables) {
-  const value = requiredVariable(variables, parameter);
+  const value = resolvedParameterValue(variables, parameter);
   if (parameter.type === 'text') {
     const text = typeof value === 'object' ? value.text : value;
     if (text === undefined || text === null) templateError('Parametro text invalido', { key: parameter.key });
@@ -319,14 +497,14 @@ function runtimeParameter(parameter, variables) {
     let currency;
     if (typeof value === 'object') {
       currency = {
-        fallback_value: String(value.fallbackValue ?? value.fallback_value ?? parameter.example ?? ''),
+        fallback_value: String(value.fallbackValue ?? value.fallback_value ?? ''),
         code: String(value.code ?? parameter.currencyCode ?? '').toUpperCase(),
         amount_1000: Number(value.amount1000 ?? value.amount_1000)
       };
     } else {
       const numeric = Number(value);
       currency = {
-        fallback_value: parameter.example || String(value),
+        fallback_value: String(value),
         code: String(parameter.currencyCode || '').toUpperCase(),
         amount_1000: Math.round(numeric * 1000)
       };
@@ -426,7 +604,7 @@ function officialTemplateInputForPreset(presetId) {
   };
 }
 
-function normalizeOfficialTemplateDefinition(input) {
+function normalizeOfficialTemplateDefinition(input, options = {}) {
   const inferredPreset = input.whatsappCloudPreset || presetFromTemplateName(input.externalTemplateName);
   if (inferredPreset === 'custom') {
     const name = String(input.externalTemplateName || '').trim();
@@ -434,12 +612,17 @@ function normalizeOfficialTemplateDefinition(input) {
     if (!/^[a-z0-9_]{1,512}$/.test(name)) templateError('Nome oficial Meta invalido', { field: 'externalTemplateName' });
     if (!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(languageCode)) templateError('Codigo de idioma Meta invalido', { field: 'languageCode' });
     const builder = normalizeBuilder(input.payload?.builder);
+    if (options.enforceMarketingStandard !== false) assertMarketingStandardBuilder(builder);
+    const fixedBody = builder.components.find((component) => component.type === 'body')?.text;
     return {
       ...input,
       templateType: 'approved_template',
       whatsappCloudPreset: 'custom',
       externalTemplateName: name,
       languageCode,
+      // `description` identifica o template apenas dentro do Notify Flow. O
+      // conteudo visivel vem exclusivamente do componente body cadastrado.
+      body: fixedBody || null,
       payload: { builder, components: builderComponents(builder) }
     };
   }
@@ -453,7 +636,7 @@ function normalizeOfficialTemplateDefinition(input) {
     whatsappCloudPreset: preset.id,
     externalTemplateName: preset.templateName,
     languageCode: preset.languageCode,
-    body: input.body || preset.preview,
+    body: input.body && input.body !== input.description ? input.body : preset.preview,
     payload: components.length ? { components } : {}
   };
 }
@@ -464,6 +647,7 @@ module.exports = {
   getTemplatePreset,
   presetFromTemplateName,
   normalizeBuilder,
+  assertMarketingStandardBuilder,
   builderComponents,
   buildOfficialTemplateMessage,
   buildCustomTemplateMessage,

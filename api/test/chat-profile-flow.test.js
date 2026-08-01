@@ -166,7 +166,7 @@ test('captura temporaria aceita email valido e permanece ativa apos valor invali
     return { id: contactId, email };
   };
   const contactId = '507f1f77bcf86cd799439012';
-  assert.match(chatProfileFlow.emailCapturePrompt(), /codigo de verificacao/i);
+  assert.match(chatProfileFlow.emailCapturePrompt(), /endereço válido/i);
   await chatProfileFlow.beginEmailCapture(contactId, 'whatsapp_cloud');
   await chatProfileFlow.beginEmailCapture(contactId, 'telegram');
 

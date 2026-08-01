@@ -3,6 +3,34 @@ const { CHANNELS } = require('../enums/channels');
 
 const TEMPLATE_CHANNELS = [CHANNELS.TELEGRAM, CHANNELS.WHATSAPP_CLOUD, CHANNELS.EMAIL, CHANNELS.GLOBAL];
 
+const FORBIDDEN_WHATSAPP_BUTTON_HOSTS = ['wa.me', 'whatsapp.com'];
+
+function isForbiddenWhatsappButtonUrl(value) {
+  try {
+    const url = new URL(String(value));
+    if (url.protocol.toLowerCase() === 'whatsapp:') return true;
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, '');
+    return FORBIDDEN_WHATSAPP_BUTTON_HOSTS.some((host) => hostname === host || hostname.endsWith('.' + host));
+  } catch (_error) {
+    return /^\s*whatsapp:/i.test(String(value));
+  }
+}
+
+function isHttpsUrl(value) {
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch (_error) {
+    return false;
+  }
+}
+
+const whatsappFixedValue = z.union([
+  z.string().max(100000),
+  z.number(),
+  z.record(z.unknown())
+]);
+
 const whatsappBuilderParameter = z.object({
   id: z.string().min(1).max(80).optional(),
   type: z.enum(['text', 'currency', 'date_time', 'image', 'document', 'video', 'payload', 'coupon_code']),
@@ -10,6 +38,7 @@ const whatsappBuilderParameter = z.object({
   parameterName: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/).optional(),
   label: z.string().min(1).max(160),
   example: z.union([z.string().max(1000), z.number()]).nullish(),
+  fixedValue: whatsappFixedValue.nullish(),
   currencyCode: z.string().length(3).regex(/^[A-Za-z]{3}$/).optional(),
   filename: z.string().min(1).max(240).optional(),
   mediaSource: z.enum(['url', 'upload']).optional(),
@@ -21,14 +50,17 @@ const whatsappBuilderParameter = z.object({
 
 const whatsappBuilderComponent = z.object({
   id: z.string().min(1).max(80).optional(),
-  type: z.enum(['header', 'body', 'button']),
+  type: z.enum(['header', 'body', 'footer', 'button']),
   subType: z.enum(['url', 'quick_reply', 'copy_code', 'otp_copy_code']).optional(),
   index: z.union([z.string().regex(/^[0-9]$/), z.number().int().min(0).max(9)]).optional(),
+  text: z.string().max(4096).nullish(),
+  url: z.string().max(2048).nullish(),
   parameters: z.array(whatsappBuilderParameter).max(20)
 }).superRefine((component, context) => {
   const allowedByType = {
     header: new Set(['text', 'image', 'document', 'video']),
-    body: new Set(['text', 'currency', 'date_time'])
+    body: new Set(['text', 'currency', 'date_time']),
+    footer: new Set()
   };
   if (component.type !== 'button' && (component.subType !== undefined || component.index !== undefined)) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'subType e index sao exclusivos de button' });
@@ -39,6 +71,33 @@ const whatsappBuilderComponent = z.object({
   }
   if (['header', 'button'].includes(component.type) && component.parameters.length > 1) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['parameters'], message: component.type + ' aceita no maximo um parametro' });
+  }
+  if (component.type === 'footer' && component.parameters.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['parameters'], message: 'Rodape Meta aceita somente texto fixo' });
+  }
+  if (component.text && component.type === 'header') {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['text'], message: 'Texto do cabecalho deve ser configurado como parametro' });
+  }
+  if (component.text && !['body', 'footer', 'button'].includes(component.type)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['text'], message: 'Texto fixo permitido somente em body, footer ou button' });
+  }
+  if (component.type === 'body' && String(component.text || '').length > 1024) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['text'], message: 'Corpo do template Meta aceita no maximo 1024 caracteres' });
+  }
+  if (component.type === 'footer' && String(component.text || '').length > 60) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['text'], message: 'Rodape do template Meta aceita no maximo 60 caracteres' });
+  }
+  if (component.type === 'button' && String(component.text || '').length > 25) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['text'], message: 'Texto do botao Meta aceita no maximo 25 caracteres' });
+  }
+  if (component.url && (component.type !== 'button' || component.subType !== 'url')) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['url'], message: 'URL fixa e exclusiva de botao do tipo URL' });
+  }
+  if (component.url && !isHttpsUrl(component.url)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['url'], message: 'Botao exige URL HTTPS valida, sem credenciais' });
+  }
+  if (component.url && isForbiddenWhatsappButtonUrl(component.url)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['url'], message: 'Botao nao pode redirecionar para WhatsApp ou wa.me' });
   }
   component.parameters.forEach((parameter, parameterIndex) => {
     if (allowedByType[component.type] && !allowedByType[component.type].has(parameter.type)) {
@@ -51,6 +110,16 @@ const whatsappBuilderComponent = z.object({
       const expectedType = { url: 'text', quick_reply: 'payload', copy_code: 'coupon_code', otp_copy_code: 'text' }[component.subType];
       if (expectedType && parameter.type !== expectedType) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ['parameters', parameterIndex, 'type'], message: component.subType + ' exige ' + expectedType });
+      }
+      if (component.subType === 'url') {
+        const fixedButtonValue = parameter.fixedValue ?? parameter.example;
+        if (typeof fixedButtonValue === 'string' && isForbiddenWhatsappButtonUrl(fixedButtonValue)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['parameters', parameterIndex, 'fixedValue'],
+            message: 'Botao nao pode redirecionar para WhatsApp ou wa.me'
+          });
+        }
       }
     }
     const isMedia = ['image', 'document', 'video'].includes(parameter.type);
@@ -89,9 +158,11 @@ const whatsappBuilderComponent = z.object({
 
 const whatsappBuilder = z.object({
   version: z.literal(1),
+  category: z.literal('marketing').optional(),
+  mode: z.literal('standard').optional(),
   components: z.array(whatsappBuilderComponent).max(20)
 }).superRefine((builder, context) => {
-  for (const singletonType of ['header', 'body']) {
+  for (const singletonType of ['header', 'body', 'footer']) {
     const indexes = builder.components
       .map((component, index) => component.type === singletonType ? index : -1)
       .filter((index) => index >= 0);

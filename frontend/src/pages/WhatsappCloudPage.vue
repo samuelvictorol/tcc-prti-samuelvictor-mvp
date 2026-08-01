@@ -1,9 +1,9 @@
 <script>
 const BUILTIN_PARAMETERS = Object.freeze({
   order_confirmation: Object.freeze([
-    Object.freeze({ key: 'customerName', label: 'Nome do cliente', example: 'John Doe', type: 'text', componentType: 'body' }),
-    Object.freeze({ key: 'orderNumber', label: 'Número do pedido', example: '123456', type: 'text', componentType: 'body' }),
-    Object.freeze({ key: 'orderDate', label: 'Data do pedido', example: 'Jul 20, 2026', type: 'text', componentType: 'body' }),
+    Object.freeze({ key: 'customerName', label: 'Nome do cliente', fixedValue: 'John Doe', example: 'John Doe', type: 'text', componentType: 'body' }),
+    Object.freeze({ key: 'orderNumber', label: 'Número do pedido', fixedValue: '123456', example: '123456', type: 'text', componentType: 'body' }),
+    Object.freeze({ key: 'orderDate', label: 'Data do pedido', fixedValue: 'Jul 20, 2026', example: 'Jul 20, 2026', type: 'text', componentType: 'body' }),
   ]),
   plain_text: Object.freeze([]),
   hello_world: Object.freeze([]),
@@ -141,6 +141,11 @@ function keyFromParameter(parameter, fallback) {
   return String(parameterPlaceholder(parameter)).match(/{{\s*([a-zA-Z0-9_]+)\s*}}/)?.[1] || fallback
 }
 
+function fixedLegacyParameterValue(parameter = {}) {
+  const value = parameterPlaceholder(parameter)
+  return /^{{\s*[a-zA-Z0-9_]+\s*}}$/.test(String(value).trim()) ? '' : value
+}
+
 export function templateParameterDefinitions(template = {}) {
   const builder = template.payload?.builder?.components
   if (Array.isArray(builder)) {
@@ -149,6 +154,7 @@ export function templateParameterDefinitions(template = {}) {
       parameterName: parameter.parameterName || '',
       label: parameter.label || `Campo ${parameterIndex + 1}`,
       example: parameter.example || '',
+      fixedValue: parameter.fixedValue ?? '',
       type: parameter.type || 'text',
       currencyCode: parameter.currencyCode || '',
       componentType: component.type || 'body',
@@ -165,6 +171,7 @@ export function templateParameterDefinitions(template = {}) {
     key: keyFromParameter(parameter, template.variables?.[parameterIndex] || `campo_${componentIndex + 1}_${parameterIndex + 1}`),
     label: `Campo ${parameterIndex + 1}`,
     example: '',
+    fixedValue: fixedLegacyParameterValue(parameter),
     type: parameter.type || 'text',
     componentType: component.type || 'body',
     componentIndex,
@@ -175,11 +182,70 @@ export function templateParameterDefinitions(template = {}) {
     key,
     label: `Campo ${index + 1}`,
     example: '',
+    fixedValue: '',
     type: 'text',
     componentType: 'body',
     componentIndex: 0,
     parameterIndex: index,
   }))
+}
+
+function meaningfulTemplateValue(value) {
+  if (value === undefined || value === null) return false
+  if (typeof value === 'string') return value.trim() !== ''
+  if (typeof value === 'number') return Number.isFinite(value)
+  return typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0
+}
+
+export function fixedTemplateVariableValues(template = {}) {
+  return Object.fromEntries(templateParameterDefinitions(template)
+    .filter((parameter) => meaningfulTemplateValue(parameter.fixedValue))
+    .map((parameter) => [parameter.key, parameter.fixedValue]))
+}
+
+function interpolateTemplateText(value = '', variables = {}, parameters = []) {
+  let output = String(value || '').replace(/{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}/g, (placeholder, key) => {
+    const replacement = variables[key]
+    return meaningfulTemplateValue(replacement) ? String(replacement) : placeholder
+  })
+  for (const [index, parameter] of parameters.entries()) {
+    const replacement = parameter.fixedValue
+    if (!meaningfulTemplateValue(replacement)) continue
+    const printable = typeof replacement === 'object'
+      ? replacement.text || replacement.link || replacement.id || ''
+      : replacement
+    output = output.replaceAll(`{{${index + 1}}}`, String(printable))
+  }
+  return output.trim()
+}
+
+export function whatsappDispatchTemplatePreview(template = {}) {
+  const components = template.payload?.builder?.components || []
+  const variables = fixedTemplateVariableValues(template)
+  const componentOf = (type) => components.find((component) => component.type === type)
+  const bodyComponent = componentOf('body')
+  const headerComponent = componentOf('header')
+  const footerComponent = componentOf('footer')
+  const mediaParameter = headerComponent?.parameters?.find((parameter) => ['image', 'video', 'document'].includes(parameter.type))
+  const mediaValue = mediaParameter?.fixedValue
+  const mediaUrl = typeof mediaValue === 'object'
+    ? mediaValue.link || mediaValue.url || ''
+    : mediaValue
+  return {
+    body: interpolateTemplateText(
+      bodyComponent?.text || template.body || 'Conteúdo controlado pelo template aprovado na Meta.',
+      variables,
+      bodyComponent?.parameters || [],
+    ),
+    header: interpolateTemplateText(headerComponent?.text || '', variables, headerComponent?.parameters || []),
+    footer: interpolateTemplateText(footerComponent?.text || '', variables, footerComponent?.parameters || []),
+    mediaType: mediaParameter?.type || '',
+    mediaUrl: String(mediaUrl || ''),
+    buttons: components.filter((component) => component.type === 'button').map((component) => ({
+      text: interpolateTemplateText(component.text || 'Ação', variables, component.parameters || []),
+      url: interpolateTemplateText(component.url || '', variables, component.parameters || []),
+    })),
+  }
 }
 
 export function selectedGroupEligibility(selectedGroupIds = [], groups = [], contacts = []) {
@@ -493,7 +559,6 @@ const form = reactive({
   contactId: null,
   groupIds: [],
   templateId: null,
-  variableValues: {},
 })
 
 const webhookEventFilters = reactive({
@@ -550,14 +615,13 @@ const officialTemplates = computed(() => templates.value.filter(isOfficialCloudT
 const templateOptions = computed(() => officialTemplates.value.map((template) => ({
   label: `${template.name || template.title}${template.languageCode ? ` · ${template.languageCode}` : ''}`,
   value: recordId(template),
-  description: template.description || template.body || '',
+  description: template.body || template.externalTemplateName || 'Template oficial Meta',
 })))
 
 const selectedTemplate = computed(() => officialTemplates.value.find((template) => String(recordId(template)) === String(form.templateId)) || null)
 const selectedTemplateParameters = computed(() => templateParameterDefinitions(selectedTemplate.value || {}))
-const selectedTemplateDescription = computed(() => selectedTemplate.value?.description
-  || selectedTemplate.value?.body
-  || 'Template oficial aprovado pela Meta.')
+const selectedTemplateFixedValues = computed(() => fixedTemplateVariableValues(selectedTemplate.value || {}))
+const selectedTemplatePreview = computed(() => whatsappDispatchTemplatePreview(selectedTemplate.value || {}))
 
 const groupEligibility = computed(() => selectedGroupEligibility(form.groupIds, groups.value, contacts.value))
 const lastDispatchId = computed(() => recordId(lastDispatch.value) || lastDispatch.value?.notificationId || null)
@@ -641,26 +705,6 @@ function statusColor(value = '') {
   return { delivered: 'positive', read: 'positive', sent: 'info', received: 'info', failed: 'negative', error: 'negative', skipped: 'warning' }[String(value).toLowerCase()] || 'grey-7'
 }
 
-function parameterIcon(type) {
-  return { text: 'text_fields', currency: 'payments', date_time: 'event', image: 'image', document: 'description', video: 'videocam', payload: 'touch_app', coupon_code: 'confirmation_number' }[type] || 'data_object'
-}
-
-function parameterHint(parameter) {
-  const namedPrefix = parameter.parameterName ? `Parâmetro Meta: {{${parameter.parameterName}}}. ` : ''
-  if (parameter.type === 'currency') return `${namedPrefix}${parameter.currencyCode ? `Moeda: ${parameter.currencyCode}. ` : ''}${parameter.example ? `Exemplo exibido: ${parameter.example}. ` : ''}Informe um valor numérico.`
-  if (parameter.example) return `${namedPrefix}Exemplo: ${parameter.example}`
-  if (['image', 'document', 'video'].includes(parameter.type)) return `${namedPrefix}Informe uma URL HTTPS acessível pela Meta`
-  if (parameter.type === 'currency') return 'Informe o valor de fallback exibido ao destinatário'
-  if (parameter.type === 'date_time') return 'Informe a data/hora no formato aprovado no template'
-  if (parameter.type === 'coupon_code') return 'Informe exatamente o código promocional que será copiado'
-  return `${namedPrefix}Variável interna: ${parameter.key}`
-}
-
-function inputType(parameter) {
-  if (parameter.type === 'currency') return 'number'
-  return ['image', 'document', 'video'].includes(parameter.type) ? 'url' : 'text'
-}
-
 function contactById(id) {
   return contacts.value.find((contact) => String(recordId(contact)) === String(id)) || null
 }
@@ -734,15 +778,6 @@ function newIdempotencyKey(prefix) {
   const value = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`
   return `${prefix}-${value}`
 }
-
-function resetTemplateValues() {
-  form.variableValues = Object.fromEntries(selectedTemplateParameters.value.map((parameter) => [
-    parameter.key,
-    parameter.type === 'currency' ? '' : parameter.example || '',
-  ]))
-}
-
-watch(() => form.templateId, resetTemplateValues)
 
 async function loadWebhookEvents({
   pagination = webhookEventPagination.value,
@@ -872,8 +907,8 @@ function validateSend() {
   if (form.recipientMode === 'contact' && !form.contactId) return 'Selecione um contato autorizado.'
   if (form.recipientMode === 'groups' && !form.groupIds.length) return 'Selecione ao menos um grupo.'
   if (!form.templateId) return 'Selecione um template oficial.'
-  const missing = selectedTemplateParameters.value.filter((parameter) => !String(form.variableValues[parameter.key] || '').trim())
-  if (missing.length) return `Preencha: ${missing.map((parameter) => parameter.label).join(', ')}.`
+  const missing = selectedTemplateParameters.value.filter((parameter) => !meaningfulTemplateValue(parameter.fixedValue))
+  if (missing.length) return `Revise o template cadastrado: faltam valores fixos em ${missing.map((parameter) => parameter.label).join(', ')}.`
   return null
 }
 
@@ -892,7 +927,7 @@ async function send() {
       contactIds: form.recipientMode === 'contact' ? [form.contactId] : [],
       groupIds: form.recipientMode === 'groups' ? form.groupIds : [],
       templateId: form.templateId,
-      content: { variables: { ...form.variableValues } },
+      content: { variables: selectedTemplateFixedValues.value },
       idempotencyKey: newIdempotencyKey('whatsapp-cloud'),
     })
     lastDispatch.value = unwrap(response) || {}
@@ -1150,33 +1185,41 @@ onBeforeUnmount(() => {
             <q-icon name="verified" />
             <div>
               <strong>{{ selectedTemplate.externalTemplateName }} · {{ selectedTemplate.languageCode || 'pt_BR' }}</strong>
-              <span>{{ selectedTemplateDescription }}</span>
+              <span>Conteúdo e valores definidos no template cadastrado.</span>
             </div>
           </div>
 
-          <section v-if="selectedTemplateParameters.length" class="parameter-form-section">
-            <div class="parameter-form-heading"><div><strong>Valores do template</strong><span>Preencha os campos na ordem configurada no template.</span></div><q-badge color="primary" :label="`${selectedTemplateParameters.length} campo(s)`" /></div>
-            <div class="parameter-form-grid">
-              <q-input
-                v-for="parameter in selectedTemplateParameters"
-                :key="parameter.key"
-                v-model="form.variableValues[parameter.key]"
-                outlined
-                stack-label
-                :type="inputType(parameter)"
-                :label="`${parameter.label} *`"
-                :hint="parameterHint(parameter)"
-                class="large-field"
-              >
-                <template #prepend><q-icon :name="parameterIcon(parameter.type)" color="primary" /></template>
-              </q-input>
+          <section v-if="selectedTemplate" class="dispatch-template-preview">
+            <div v-if="selectedTemplatePreview.mediaUrl" class="dispatch-template-preview__media">
+              <q-img
+                v-if="selectedTemplatePreview.mediaType === 'image'"
+                :src="selectedTemplatePreview.mediaUrl"
+                fit="cover"
+                loading="lazy"
+              />
+              <video
+                v-else-if="selectedTemplatePreview.mediaType === 'video'"
+                :src="selectedTemplatePreview.mediaUrl"
+                controls
+                preload="metadata"
+              />
+              <a v-else :href="selectedTemplatePreview.mediaUrl" target="_blank" rel="noopener noreferrer">
+                <q-icon name="description" /> Abrir documento do template
+              </a>
             </div>
+            <strong v-if="selectedTemplatePreview.header">{{ selectedTemplatePreview.header }}</strong>
+            <p>{{ selectedTemplatePreview.body }}</p>
+            <small v-if="selectedTemplatePreview.footer">{{ selectedTemplatePreview.footer }}</small>
+            <div v-if="selectedTemplatePreview.buttons.length" class="dispatch-template-preview__buttons">
+              <span v-for="button in selectedTemplatePreview.buttons" :key="`${button.text}-${button.url}`">
+                <q-icon name="open_in_new" /> {{ button.text }}
+              </span>
+            </div>
+            <q-banner dense rounded class="ready-template-banner">
+              <template #avatar><q-icon name="lock" color="primary" /></template>
+              Mídia, textos, rodapé e botões serão enviados exatamente como foram cadastrados neste template.
+            </q-banner>
           </section>
-
-          <q-banner v-else-if="selectedTemplate" rounded class="ready-template-banner">
-            <template #avatar><q-icon name="check_circle" color="primary" /></template>
-            Este template não exige valores adicionais e está pronto para envio.
-          </q-banner>
 
           <section v-if="form.recipientMode === 'groups' && form.groupIds.length" class="eligibility-panel">
             <header><div><strong>Elegibilidade da seleção</strong><span>{{ groupEligibility.contactIds.length }} contato(s) únicos nos grupos</span></div><div class="eligibility-counts"><q-badge color="positive" :label="`${groupEligibility.eligible.length} elegíveis`" /><q-badge color="warning" text-color="dark" :label="`${groupEligibility.ineligible.length} inelegíveis`" /></div></header>
@@ -1819,6 +1862,75 @@ onBeforeUnmount(() => {
   margin-top: 3px;
   font-size: 0.84rem;
   line-height: 1.45;
+}
+
+.dispatch-template-preview {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid rgba(22, 134, 111, 0.16);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(247, 253, 251, 0.98), rgba(226, 248, 242, 0.62));
+  color: #173f37;
+  overflow: hidden;
+}
+
+.dispatch-template-preview > strong,
+.dispatch-template-preview > p,
+.dispatch-template-preview > small {
+  overflow-wrap: anywhere;
+}
+
+.dispatch-template-preview > p {
+  margin: 0;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.dispatch-template-preview > small {
+  color: #687c78;
+}
+
+.dispatch-template-preview__media :deep(.q-img),
+.dispatch-template-preview__media video {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  border-radius: 13px;
+  background: #dfebe8;
+  object-fit: contain;
+}
+
+.dispatch-template-preview__media a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.76);
+  color: #13745f;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.dispatch-template-preview__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.dispatch-template-preview__buttons span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: 1px solid rgba(22, 134, 111, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.76);
+  color: #16745f;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .parameter-form-section,

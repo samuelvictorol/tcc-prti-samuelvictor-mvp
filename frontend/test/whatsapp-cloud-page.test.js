@@ -6,6 +6,7 @@ vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 
 import {
   dispatchDeliveryCount,
+  fixedTemplateVariableValues,
   formatWhatsappPublicNumber,
   humanizeWebhookKey,
   isOfficialCloudTemplateAvailable,
@@ -20,6 +21,7 @@ import {
   selectedGroupEligibility,
   templateParameterDefinitions,
   whatsappConnectionIdentity,
+  whatsappDispatchTemplatePreview,
   webhookEventFieldOptionsFrom,
   webhookEventPresentation,
   webhookEventSummary,
@@ -107,22 +109,74 @@ describe('disparo oficial WhatsApp Cloud', () => {
       whatsappCloudPreset: 'custom',
       payload: {
         builder: {
-          components: [{ type: 'header', parameters: [{ key: 'arquivo', label: 'Documento', example: 'https://example.com/a.pdf', type: 'document' }] }],
+          components: [{ type: 'header', parameters: [{ key: 'arquivo', label: 'Documento', fixedValue: 'https://example.com/a.pdf', type: 'document' }] }],
         },
       },
     })
-    expect(fields).toEqual([expect.objectContaining({ key: 'arquivo', label: 'Documento', type: 'document', componentType: 'header' })])
+    expect(fields).toEqual([expect.objectContaining({
+      key: 'arquivo',
+      label: 'Documento',
+      fixedValue: 'https://example.com/a.pdf',
+      type: 'document',
+      componentType: 'header',
+    })])
   })
 
-  it('expõe cupom de botão copy_code como campo amigável no disparo', () => {
-    const fields = templateParameterDefinitions({
+  it('usa somente os valores fixos cadastrados e mostra a prévia real do template', () => {
+    const template = {
+      body: 'Fallback',
+      description: 'Descrição interna não exibida',
       payload: {
         builder: {
-          components: [{ type: 'button', subType: 'copy_code', parameters: [{ key: 'cupom', label: 'Código promocional', type: 'coupon_code' }] }],
+          components: [
+            {
+              type: 'header',
+              text: 'Olá {{cliente}}',
+              parameters: [
+                { key: 'cliente', label: 'Cliente', type: 'text', fixedValue: 'Ana' },
+                { key: 'capa', label: 'Capa', type: 'image', fixedValue: 'https://example.com/capa.png' },
+              ],
+            },
+            { type: 'body', text: 'Seu pedido {{1}} chegou.', parameters: [{ key: 'pedido', type: 'text', fixedValue: '123' }] },
+            { type: 'footer', text: 'Notify Flow' },
+            { type: 'button', text: 'Abrir', url: 'https://example.com/{{pedido}}' },
+          ],
         },
       },
+    }
+
+    expect(fixedTemplateVariableValues(template)).toEqual({
+      cliente: 'Ana',
+      capa: 'https://example.com/capa.png',
+      pedido: '123',
     })
-    expect(fields).toEqual([expect.objectContaining({ key: 'cupom', type: 'coupon_code' })])
+    expect(fixedTemplateVariableValues({
+      payload: { builder: { components: [{ parameters: [{ key: 'somenteExemplo', example: 'NÃO ENVIAR' }] }] } },
+    })).toEqual({})
+    expect(whatsappDispatchTemplatePreview(template)).toEqual({
+      header: 'Olá Ana',
+      body: 'Seu pedido 123 chegou.',
+      footer: 'Notify Flow',
+      mediaType: 'image',
+      mediaUrl: 'https://example.com/capa.png',
+      buttons: [{ text: 'Abrir', url: 'https://example.com/123' }],
+    })
+
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/WhatsappCloudPage.vue', import.meta.url)), 'utf8')
+    expect(source).not.toContain('Valores do template')
+    expect(source).not.toContain('form.variableValues')
+    expect(source).toContain('Conteúdo e valores definidos no template cadastrado.')
+  })
+
+  it('não promove placeholder legado a valor fixo de envio', () => {
+    expect(templateParameterDefinitions({
+      payload: {
+        components: [{
+          type: 'body',
+          parameters: [{ type: 'text', text: '{{cliente}}' }],
+        }],
+      },
+    })[0]).toMatchObject({ key: 'cliente', fixedValue: '' })
   })
 
   it('normaliza a página remota de falhas e vincula os contatos locais', () => {

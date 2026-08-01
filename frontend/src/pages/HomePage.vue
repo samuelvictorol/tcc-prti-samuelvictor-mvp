@@ -468,7 +468,7 @@ onBeforeUnmount(() => {
   <q-page class="page-container">
     <PageHeader
       eyebrow="Visão operacional"
-      title="Sua central está sob controle"
+      title="Início e Configurações"
       description="Acompanhe a disponibilidade dos canais, proteja credenciais e observe cada evento da operação."
       icon="space_dashboard"
     >

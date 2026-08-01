@@ -100,7 +100,10 @@ function validateTemplate(input) {
 
 function normalize(input) {
   if (input.channel === 'whatsapp_cloud') {
-    const normalized = normalizeOfficialTemplateDefinition(input);
+    const internalSystemTemplate = input.systemManaged === true || Boolean(input.systemKey);
+    const normalized = normalizeOfficialTemplateDefinition(input, {
+      enforceMarketingStandard: !internalSystemTemplate
+    });
     return { ...normalized, templateType: normalized.templateType || 'approved_template' };
   }
   if (input.channel === 'telegram') {

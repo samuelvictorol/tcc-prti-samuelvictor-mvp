@@ -1,7 +1,16 @@
 <script>
 const AUTOMATIC_CONTACT_VARIABLES = new Set(['displayName', 'email', 'phone', 'telegramUsername'])
 
+const BUILTIN_WHATSAPP_FIXED_VALUES = Object.freeze({
+  order_confirmation: Object.freeze({
+    customerName: 'John Doe',
+    orderNumber: '123456',
+    orderDate: 'Jul 20, 2026',
+  }),
+})
+
 export function notificationTemplateVariableDefinitions(template = {}, channel = '') {
+  if (String(channel || '').replaceAll('-', '_') === 'whatsapp_cloud') return []
   const definitions = new Map()
   const add = (raw, fallback = {}) => {
     const key = String(typeof raw === 'string' ? raw : raw?.key || raw?.name || '').trim()
@@ -83,21 +92,85 @@ function previewInterpolate(value, variables = {}) {
   })
 }
 
+function whatsappPreset(template = {}) {
+  if (template.whatsappCloudPreset) return template.whatsappCloudPreset
+  if (template.externalTemplateName === 'jaspers_market_order_confirmation_v1') return 'order_confirmation'
+  if (template.externalTemplateName === 'jaspers_market_plain_text_v1') return 'plain_text'
+  if (template.externalTemplateName === 'hello_world') return 'hello_world'
+  return null
+}
+
+function parameterFixedValue(parameter = {}) {
+  return parameter.fixedValue
+}
+
+export function notificationWhatsAppFixedValues(template = {}) {
+  const values = { ...(BUILTIN_WHATSAPP_FIXED_VALUES[whatsappPreset(template)] || {}) }
+  for (const component of template.payload?.builder?.components || []) {
+    for (const parameter of component.parameters || []) {
+      const key = String(parameter.key || '').trim()
+      const value = parameterFixedValue(parameter)
+      if (!key || value === undefined || value === null || value === '') continue
+      values[key] = value
+      if (parameter.parameterName) values[parameter.parameterName] = value
+    }
+  }
+  return values
+}
+
+function whatsappComponentText(component = {}, variables = {}) {
+  let value = previewInterpolate(component.text || '', variables)
+  for (const [index, parameter] of (component.parameters || []).entries()) {
+    const fixedValue = parameterFixedValue(parameter)
+    if (fixedValue === undefined || fixedValue === null || fixedValue === '') continue
+    const printable = typeof fixedValue === 'object'
+      ? fixedValue.text || fixedValue.link || fixedValue.id || ''
+      : fixedValue
+    value = value.replaceAll(`{{${index + 1}}}`, String(printable))
+  }
+  return previewPlainText(value)
+}
+
+function whatsappMediaPreview(builderComponents = []) {
+  const header = builderComponents.find((component) => component.type === 'header')
+  const parameter = header?.parameters?.find((item) => ['image', 'video', 'document'].includes(item.type))
+  if (!parameter) return { mediaType: '', mediaUrl: '' }
+  const fixedValue = parameterFixedValue(parameter)
+  const mediaUrl = typeof fixedValue === 'object'
+    ? fixedValue.link || fixedValue.url || ''
+    : fixedValue
+  return { mediaType: parameter.type, mediaUrl: String(mediaUrl || '') }
+}
+
 export function notificationTemplatePreview(template = {}, channel = '', variables = {}) {
+  const normalizedChannel = String(channel || '').replaceAll('-', '_')
+  const whatsappValues = normalizedChannel === 'whatsapp_cloud'
+    ? notificationWhatsAppFixedValues(template)
+    : variables
+  const builderComponents = template.payload?.builder?.components || []
+  const bodyComponent = builderComponents.find((component) => component.type === 'body')
+  const footerComponent = builderComponents.find((component) => component.type === 'footer')
+  const headerComponent = builderComponents.find((component) => component.type === 'header')
+  const buttonComponents = builderComponents.filter((component) => component.type === 'button')
   const telegramDefinition = template.payload?.telegram
   const telegramText = telegramDefinition?.text || telegramDefinition?.caption
   const rawBody = channel === 'telegram'
     ? (telegramText || template.body)
     : channel === 'email'
       ? (template.html || template.body)
-      : template.body
-  const body = previewInterpolate(previewPlainText(rawBody), variables)
+      : (bodyComponent?.text || template.body)
+  const body = normalizedChannel === 'whatsapp_cloud' && bodyComponent?.text
+    ? whatsappComponentText(bodyComponent, whatsappValues)
+    : previewInterpolate(previewPlainText(rawBody), whatsappValues)
   const subject = channel === 'email'
     ? previewInterpolate(previewPlainText(template.subject || 'Sem assunto'), variables)
     : ''
   const officialName = channel === 'whatsapp_cloud'
     ? String(template.externalTemplateName || template.name || '').trim()
     : ''
+  const whatsappMedia = normalizedChannel === 'whatsapp_cloud'
+    ? whatsappMediaPreview(builderComponents)
+    : { mediaType: '', mediaUrl: '' }
   return {
     body: body || (channel === 'whatsapp_cloud'
       ? 'A prévia textual não foi informada; o payload usará os componentes cadastrados neste template.'
@@ -108,12 +181,26 @@ export function notificationTemplatePreview(template = {}, channel = '', variabl
     html: channel === 'email' && template.html
       ? previewInterpolate(String(template.html), variables)
       : '',
-    mediaType: channel === 'telegram' && ['photo', 'video'].includes(telegramDefinition?.kind)
-      ? telegramDefinition.kind
-      : '',
+    mediaType: normalizedChannel === 'whatsapp_cloud'
+      ? whatsappMedia.mediaType
+      : channel === 'telegram' && ['photo', 'video'].includes(telegramDefinition?.kind)
+        ? telegramDefinition.kind
+        : '',
     mediaUrl: channel === 'telegram' && ['photo', 'video'].includes(telegramDefinition?.kind)
       ? String(telegramDefinition.mediaUrl || '')
+      : whatsappMedia.mediaUrl,
+    header: normalizedChannel === 'whatsapp_cloud'
+      ? whatsappComponentText(headerComponent, whatsappValues)
       : '',
+    footer: normalizedChannel === 'whatsapp_cloud'
+      ? whatsappComponentText(footerComponent, whatsappValues)
+      : '',
+    buttons: normalizedChannel === 'whatsapp_cloud'
+      ? buttonComponents.map((component) => ({
+          text: whatsappComponentText(component, whatsappValues) || 'Ação',
+          url: previewInterpolate(component.url || '', whatsappValues),
+        }))
+      : [],
   }
 }
 
@@ -189,7 +276,6 @@ const form = reactive({
   templateId: null,
   templateSetId: null,
   templateIds: { telegram: null, whatsapp_cloud: null, email: null },
-  variableValues: {},
 })
 
 const channels = computed(() => [
@@ -260,30 +346,10 @@ const selectedGlobalChannelOptions = computed(() => notificationGlobalChannelOpt
   activeGlobalTemplateIds.value,
   globalSelectionMode.value,
 ))
-const selectedGlobalTemplates = computed(() => selectedGlobalChannelOptions.value
-  .map((channel) => ({ channel: channel.value, template: templateById(activeGlobalTemplateIds.value[channel.value]) }))
-  .filter((entry) => entry.template))
 const unavailableGlobalChannelOptions = computed(() => selectedGlobalChannelOptions.value
   .filter((channel) => !channel.enabled))
-const variableDefinitions = computed(() => tab.value === 'global'
-  ? mergeNotificationVariableDefinitions(selectedGlobalTemplates.value)
-  : tab.value === 'template' && selectedTemplate.value
-    ? notificationTemplateVariableDefinitions(selectedTemplate.value, form.channel)
-    : [])
-const variableSelectionKey = computed(() => JSON.stringify({
-  tab: tab.value,
-  channel: form.channel,
-  templateId: form.templateId,
-  templateSetId: form.templateSetId,
-  selectionMode: globalSelectionMode.value,
-  templateIds: form.templateIds,
-}))
 
 const selectedRecipients = computed(() => form.contactIds.length + form.groupIds.length)
-const previewVariables = computed(() => Object.fromEntries(variableDefinitions.value.map((definition) => [
-  definition.key,
-  form.variableValues[definition.key],
-])))
 const reviewItems = computed(() => {
   if (tab.value === 'quick') {
     const channel = channels.value.find((item) => item.value === form.channel)
@@ -303,7 +369,7 @@ const reviewItems = computed(() => {
     return [{
       ...channel,
       templateName: selectedTemplate.value.name || selectedTemplate.value.title || 'Template',
-      preview: notificationTemplatePreview(selectedTemplate.value, form.channel, previewVariables.value),
+      preview: notificationTemplatePreview(selectedTemplate.value, form.channel),
     }]
   }
   return selectedGlobalChannelOptions.value.map((channel) => {
@@ -311,7 +377,7 @@ const reviewItems = computed(() => {
     return {
       ...channel,
       templateName: template?.name || template?.title || 'Template',
-      preview: notificationTemplatePreview(template, channel.value, previewVariables.value),
+      preview: notificationTemplatePreview(template, channel.value),
     }
   })
 })
@@ -335,15 +401,6 @@ watch(() => form.channel, () => {
     form.templateId = null
   }
 })
-
-watch([variableDefinitions, variableSelectionKey], ([definitions]) => {
-  form.variableValues = Object.fromEntries((definitions || []).map((definition) => [
-    definition.key,
-    ['image', 'video', 'document'].includes(definition.type) && definition.example
-      ? String(definition.example)
-      : '',
-  ]))
-}, { immediate: true })
 
 const deliveryColumns = [
   { name: 'createdAt', label: 'Quando', field: 'createdAt', align: 'left' },
@@ -415,19 +472,6 @@ function notificationSummary(notification = {}) {
     { key: 'failed', label: 'Falhas', value: Number(summary.failed || 0), color: 'negative' },
     { key: 'skipped', label: 'Ignoradas', value: Number(summary.skipped || 0), color: 'warning' },
   ]
-}
-
-function variableInputType(definition = {}) {
-  return ['image', 'video', 'document'].includes(definition.type) ? 'url' : 'text'
-}
-
-function variableHint(definition = {}) {
-  const channelNamesByValue = Object.fromEntries(channels.value.map((channel) => [channel.value, channel.label]))
-  const usedBy = (definition.channels || []).map((channel) => channelNamesByValue[channel] || channel).join(', ')
-  const example = definition.example === undefined || definition.example === null || definition.example === ''
-    ? ''
-    : `Exemplo: ${definition.example}`
-  return [usedBy ? `Usado em ${usedBy}` : '', example].filter(Boolean).join(' · ')
 }
 
 function formatDate(value) {
@@ -517,9 +561,6 @@ async function loadData() {
 }
 
 function buildPayload() {
-  const variables = Object.fromEntries(variableDefinitions.value
-    .map((definition) => [definition.key, form.variableValues[definition.key]])
-    .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== ''))
   const templateIds = tab.value === 'global'
     && globalSelectionMode.value === 'manual'
     ? Object.fromEntries(enabledChannelOptions.value
@@ -540,7 +581,7 @@ function buildPayload() {
     content: {
       text: tab.value === 'quick' ? form.message : undefined,
       subject: tab.value === 'quick' ? form.subject || undefined : undefined,
-      variables,
+      variables: {},
     },
   }
 }
@@ -795,29 +836,6 @@ onMounted(loadData)
                 </section>
               </template>
 
-              <section v-if="panel !== 'quick' && variableDefinitions.length" class="full-span variable-fields">
-                <div class="variable-fields__heading">
-                  <q-icon name="tune" color="primary" />
-                  <div><strong>Dados variáveis</strong><span>O sistema monta o payload; preencha somente os campos usados pelos templates escolhidos.</span></div>
-                </div>
-                <div class="variable-fields__grid">
-                  <q-input
-                    v-for="definition in variableDefinitions"
-                    :key="definition.key"
-                    v-model="form.variableValues[definition.key]"
-                    outlined
-                    clearable
-                    :type="variableInputType(definition)"
-                    :label="definition.label"
-                    :hint="variableHint(definition)"
-                    :placeholder="definition.example === undefined ? undefined : String(definition.example || '')"
-                  />
-                </div>
-              </section>
-              <q-banner v-else-if="panel !== 'quick' && (panel !== 'global' || selectedGlobalTemplates.length)" rounded class="full-span no-variable-banner">
-                <template #avatar><q-icon name="check_circle" color="positive" /></template>
-                Os templates escolhidos não exigem valores adicionais.
-              </q-banner>
             </div>
           </q-tab-panel>
         </q-tab-panels>
@@ -1096,17 +1114,27 @@ onMounted(loadData)
               </div>
               <div class="review-message">
                 <span>Prévia da mensagem</span>
+                <strong v-if="item.preview.header" class="review-component-text">{{ item.preview.header }}</strong>
                 <div v-if="item.preview.mediaUrl" class="review-media">
                   <img
-                    v-if="item.preview.mediaType === 'photo'"
+                    v-if="['photo', 'image'].includes(item.preview.mediaType)"
                     :src="item.preview.mediaUrl"
-                    alt="Imagem do template Telegram"
+                    alt="Imagem do template"
                     referrerpolicy="no-referrer"
                   />
-                  <video v-else :src="item.preview.mediaUrl" controls preload="metadata" />
+                  <video v-else-if="item.preview.mediaType === 'video'" :src="item.preview.mediaUrl" controls preload="metadata" />
+                  <a v-else :href="item.preview.mediaUrl" target="_blank" rel="noopener noreferrer">
+                    <q-icon name="description" /> Abrir documento
+                  </a>
                 </div>
                 <div v-if="item.preview.html" class="review-html" v-html="safeReviewHtml(item.preview.html)" />
                 <p v-else>{{ item.preview.body }}</p>
+                <small v-if="item.preview.footer" class="review-footer">{{ item.preview.footer }}</small>
+                <div v-if="item.preview.buttons?.length" class="review-buttons">
+                  <span v-for="button in item.preview.buttons" :key="`${button.text}-${button.url}`">
+                    <q-icon name="open_in_new" /> {{ button.text }}
+                  </span>
+                </div>
               </div>
             </article>
           </div>
@@ -1131,7 +1159,6 @@ onMounted(loadData)
 .form-grid,
 .global-mode-selector,
 .global-template-grid,
-.variable-fields,
 .send-summary,
 .toolbar-row {
   min-width: 0;
@@ -1175,8 +1202,7 @@ onMounted(loadData)
   overflow-wrap: anywhere;
 }
 
-.global-template-grid,
-.variable-fields {
+.global-template-grid {
   display: grid;
   gap: 12px;
 }
@@ -1214,8 +1240,7 @@ onMounted(loadData)
   background: rgba(247, 254, 252, 0.76);
 }
 
-.global-template-card header,
-.variable-fields__heading {
+.global-template-card header {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -1226,35 +1251,13 @@ onMounted(loadData)
 }
 
 .global-template-card header strong,
-.global-template-card header span,
-.variable-fields__heading strong,
-.variable-fields__heading span {
+.global-template-card header span {
   display: block;
 }
 
-.global-template-card header span,
-.variable-fields__heading span {
+.global-template-card header span {
   color: #667a77;
   font-size: 0.72rem;
-}
-
-.variable-fields {
-  padding: 15px;
-  border: 1px solid rgba(36, 123, 160, 0.16);
-  border-radius: 15px;
-  background: rgba(234, 249, 255, 0.5);
-}
-
-.variable-fields__grid {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-.no-variable-banner {
-  border: 1px solid rgba(39, 183, 159, 0.18);
-  background: rgba(39, 183, 159, 0.07);
-  color: #385c56;
 }
 
 .global-availability-warning,
@@ -1723,6 +1726,40 @@ onMounted(loadData)
   border-radius: 12px;
   background: #e7f1ef;
   object-fit: contain;
+}
+
+.review-media a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #e7f6f2;
+  color: #13745f;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.review-component-text {
+  display: block;
+  margin-top: 8px;
+  color: #123f37;
+  overflow-wrap: anywhere;
+}
+
+.review-footer {
+  display: block;
+  margin-top: 8px;
+  color: #6b7f7b;
+  line-height: 1.4;
+}
+
+.review-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
 }
 
 .review-html {

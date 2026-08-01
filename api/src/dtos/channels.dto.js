@@ -39,7 +39,9 @@ const channelSendSchema = z.object({
       name: z.string().min(1).max(512).regex(/^[a-z0-9_]+$/),
       languageCode: z.string().min(2).max(20),
       builder: whatsappBuilder,
-      variables: z.record(z.unknown())
+      // Valores dinamicos continuam disponiveis para integracoes futuras, mas
+      // o fluxo comum usa os valores fixos persistidos no builder.
+      variables: z.record(z.unknown()).optional()
     }).optional(),
     payload: z.record(z.unknown()).optional()
   }).superRefine((body, context) => {

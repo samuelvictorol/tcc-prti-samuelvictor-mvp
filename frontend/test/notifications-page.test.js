@@ -10,6 +10,7 @@ import {
   notificationGlobalChannelOptions,
   notificationTemplatePreview,
   notificationTemplateVariableDefinitions,
+  notificationWhatsAppFixedValues,
 } from '../src/pages/NotificationsPage.vue'
 
 describe('compositor amigável de notificações', () => {
@@ -47,11 +48,13 @@ describe('compositor amigável de notificações', () => {
     expect(definitions.some((item) => item.key === 'displayName')).toBe(false)
   })
 
-  it('preenche somente a mídia persistida e mantém exemplos textuais como dica', () => {
+  it('não pede dados variáveis no fluxo comum de template ou conjunto', () => {
     const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
 
-    expect(source).toContain("['image', 'video', 'document'].includes(definition.type) && definition.example")
-    expect(source).toContain('form.variableValues = Object.fromEntries')
+    expect(source).not.toContain('Dados variáveis')
+    expect(source).not.toContain('form.variableValues')
+    expect(source).not.toContain('v-for="definition in variableDefinitions"')
+    expect(source).toContain('variables: {}')
   })
 
   it('une a mesma variável usada por canais diferentes', () => {
@@ -153,15 +156,49 @@ describe('compositor amigável de notificações', () => {
       html: '<p>Bem-vindo, <strong>Ana</strong>.</p><script>alert(1)</script>',
     }))
 
-    expect(notificationTemplatePreview({
+    const whatsappTemplate = {
       name: 'Pedido',
       externalTemplateName: 'order_confirmed',
       languageCode: 'pt_BR',
-      body: 'Pedido {{codigo}} confirmado.',
-    }, 'whatsapp_cloud', { codigo: 'ABC-123' })).toEqual(expect.objectContaining({
+      description: 'Descrição interna que não deve aparecer',
+      payload: {
+        builder: {
+          components: [
+            {
+              type: 'header',
+              parameters: [{ key: 'capa', type: 'image', fixedValue: 'https://cdn.example.com/capa.png' }],
+            },
+            {
+              type: 'body',
+              text: 'Pedido {{1}} confirmado para {{cliente}}.',
+              parameters: [
+                { key: 'codigo', fixedValue: 'ABC-123' },
+                { key: 'cliente', fixedValue: 'Ana' },
+              ],
+            },
+            { type: 'footer', text: 'Notify Flow' },
+            { type: 'button', text: 'Acompanhar', url: 'https://example.com/pedidos/{{codigo}}' },
+          ],
+        },
+      },
+    }
+    expect(notificationWhatsAppFixedValues(whatsappTemplate)).toEqual(expect.objectContaining({
+      codigo: 'ABC-123',
+      cliente: 'Ana',
+      capa: 'https://cdn.example.com/capa.png',
+    }))
+    expect(notificationWhatsAppFixedValues({
+      payload: { builder: { components: [{ parameters: [{ key: 'somenteExemplo', example: 'NÃO ENVIAR' }] }] } },
+    })).toEqual({})
+    expect(notificationTemplateVariableDefinitions(whatsappTemplate, 'whatsapp_cloud')).toEqual([])
+    expect(notificationTemplatePreview(whatsappTemplate, 'whatsapp_cloud', { codigo: 'IGNORADO' })).toEqual(expect.objectContaining({
       officialName: 'order_confirmed',
       languageCode: 'pt_BR',
-      body: 'Pedido ABC-123 confirmado.',
+      body: 'Pedido ABC-123 confirmado para Ana.',
+      footer: 'Notify Flow',
+      mediaType: 'image',
+      mediaUrl: 'https://cdn.example.com/capa.png',
+      buttons: [expect.objectContaining({ text: 'Acompanhar', url: 'https://example.com/pedidos/ABC-123' })],
     }))
 
     expect(notificationTemplatePreview({

@@ -516,26 +516,258 @@ test('cadastro WhatsApp Cloud aceita nomes legados e custom oficial com builder'
     payload: {
       builder: {
         version: 1,
-        components: [{
-          id: 'body-main',
-          type: 'body',
-          parameters: [{ id: 'customer', type: 'text', key: 'customerName', label: 'Cliente', example: 'Ana' }]
-        }]
+        category: 'marketing',
+        mode: 'standard',
+        components: [
+          {
+            id: 'header-main',
+            type: 'header',
+            parameters: [{
+              id: 'hero', type: 'image', key: 'heroUrl', label: 'Imagem',
+              fixedValue: 'https://cdn.example.com/hero.png'
+            }]
+          },
+          {
+            id: 'body-main',
+            type: 'body',
+            text: 'Confirmacao aprovada na Meta',
+            parameters: [{
+              id: 'customer', type: 'text', key: 'customerName', label: 'Cliente',
+              fixedValue: 'Ana', example: 'Exemplo documental'
+            }]
+          }
+        ]
       }
     }
   });
   assert.doesNotThrow(() => templatesManager.validateTemplateInput(custom));
   assert.equal(custom.externalTemplateName, 'pedido_aprovado_v2');
   assert.equal(custom.payload.builder.version, 1);
-  assert.deepEqual(custom.payload.components, [{
-    type: 'body',
-    parameters: [{ type: 'text', text: '{{customerName}}' }]
-  }]);
+  assert.deepEqual(custom.payload.components, [
+    { type: 'header', parameters: [{ type: 'image', image: { link: 'https://cdn.example.com/hero.png' } }] },
+    { type: 'body', parameters: [{ type: 'text', text: 'Ana' }] }
+  ]);
 
   assert.throws(() => templatesManager.normalizeTemplateInput({
     name: 'Incompleto', channel: 'whatsapp_cloud', whatsappCloudPreset: 'custom',
     externalTemplateName: 'nome_valido', languageCode: 'pt_BR', payload: {}
   }), (error) => error.code === 'WHATSAPP_TEMPLATE_BUILDER_INVALID');
+});
+
+test('template Marketing Padrao usa valores fixos sem transformar descricao interna em body', () => {
+  const builder = {
+    version: 1,
+    category: 'marketing',
+    mode: 'standard',
+    components: [
+      {
+        id: 'header-media',
+        type: 'header',
+        parameters: [{
+          id: 'hero',
+          type: 'image',
+          key: 'heroUrl',
+          label: 'Imagem principal',
+          fixedValue: 'https://cdn.example.com/campanha.png'
+        }]
+      },
+      {
+        id: 'body-main',
+        type: 'body',
+        text: 'Conteudo oficial aprovado na Meta.',
+        parameters: [{
+          id: 'audience',
+          type: 'text',
+          key: 'audience',
+          label: 'Publico',
+          fixedValue: 'Cliente Notify Flow'
+        }]
+      },
+      { id: 'footer-main', type: 'footer', text: 'Gerencie suas preferencias.', parameters: [] },
+      {
+        id: 'site-button',
+        type: 'button',
+        subType: 'url',
+        index: 0,
+        text: 'Abrir convite',
+        url: 'https://notify.example/invite/grupo-alpha',
+        parameters: []
+      }
+    ]
+  };
+  const normalized = templatesManager.normalizeTemplateInput({
+    name: 'Campanha Grupo Alpha',
+    description: 'Descricao visivel somente para o administrador.',
+    body: 'Descricao visivel somente para o administrador.',
+    channel: 'whatsapp_cloud',
+    whatsappCloudPreset: 'custom',
+    externalTemplateName: 'campanha_grupo_alpha',
+    languageCode: 'pt_BR',
+    payload: { builder }
+  });
+
+  assert.equal(normalized.description, 'Descricao visivel somente para o administrador.');
+  assert.equal(normalized.body, 'Conteudo oficial aprovado na Meta.');
+  assert.equal(normalized.payload.builder.category, 'marketing');
+  assert.equal(normalized.payload.builder.mode, 'standard');
+  assert.equal(normalized.payload.builder.components[2].type, 'footer');
+  assert.equal(normalized.payload.builder.components[3].url, 'https://notify.example/invite/grupo-alpha');
+  assert.deepEqual(normalized.payload.components, [
+    { type: 'header', parameters: [{ type: 'image', image: { link: 'https://cdn.example.com/campanha.png' } }] },
+    { type: 'body', parameters: [{ type: 'text', text: 'Cliente Notify Flow' }] }
+  ]);
+
+  assert.deepEqual(buildCustomTemplateMessage({
+    name: normalized.externalTemplateName,
+    languageCode: normalized.languageCode,
+    builder: normalized.payload.builder
+  }), {
+    type: 'template',
+    template: {
+      name: 'campanha_grupo_alpha',
+      language: { code: 'pt_BR' },
+      components: [
+        { type: 'header', parameters: [{ type: 'image', image: { link: 'https://cdn.example.com/campanha.png' } }] },
+        { type: 'body', parameters: [{ type: 'text', text: 'Cliente Notify Flow' }] }
+      ]
+    }
+  });
+  assert.equal(channelSendSchema.safeParse({ body: {
+    destination: '5511931234567',
+    customTemplate: {
+      name: normalized.externalTemplateName,
+      languageCode: normalized.languageCode,
+      builder: normalized.payload.builder
+    }
+  } }).success, true);
+});
+
+test('valores dinamicos opcionais sobrescrevem fixedValue sem promover example legado', () => {
+  const builder = {
+    version: 1,
+    components: [{
+      type: 'body',
+      text: 'Ola, {{1}}.',
+      parameters: [
+        { type: 'text', key: 'fixedName', label: 'Nome fixo', fixedValue: 'Nome cadastrado' },
+        { type: 'text', key: 'legacyCode', label: 'Codigo legado', example: 'COD-001' }
+      ]
+    }]
+  };
+
+  assert.throws(
+    () => buildCustomTemplateMessage({ name: 'fallback_fixo_v1', languageCode: 'pt_BR', builder }),
+    (error) => error.code === 'WHATSAPP_TEMPLATE_PARAMETERS_REQUIRED'
+      && error.details.missingParameters.includes('legacyCode')
+  );
+  assert.deepEqual(buildCustomTemplateMessage({
+    name: 'fallback_fixo_v1', languageCode: 'pt_BR', builder,
+    variables: { fixedName: 'Nome dinamico', legacyCode: 'COD-DINAMICO' }
+  }).template.components[0].parameters, [
+    { type: 'text', text: 'Nome dinamico' },
+    { type: 'text', text: 'COD-DINAMICO' }
+  ]);
+  assert.throws(
+    () => buildCustomTemplateMessage({
+      name: 'fallback_fixo_v1', languageCode: 'pt_BR', builder,
+      variables: { legacyCode: '' }
+    }),
+    (error) => error.code === 'WHATSAPP_TEMPLATE_PARAMETERS_REQUIRED'
+  );
+});
+
+test('builder rejeita botoes que redirecionam para WhatsApp ou wa.me', () => {
+  for (const url of [
+    'https://wa.me/5511999999999',
+    'https://api.whatsapp.com/send?phone=5511999999999',
+    'https://chat.whatsapp.com/convite',
+    'whatsapp://send?phone=5511999999999'
+  ]) {
+    const builder = {
+      version: 1,
+      category: 'marketing',
+      mode: 'standard',
+      components: [{
+        type: 'button', subType: 'url', index: 0, text: 'Abrir', url, parameters: []
+      }]
+    };
+    assert.throws(
+      () => normalizeBuilder(builder),
+      (error) => error.code === 'WHATSAPP_TEMPLATE_BUTTON_URL_FORBIDDEN'
+    );
+    assert.equal(createTemplateSchema.safeParse({ body: {
+      name: 'Botao inseguro',
+      channel: 'whatsapp_cloud',
+      whatsappCloudPreset: 'custom',
+      externalTemplateName: 'botao_inseguro',
+      languageCode: 'pt_BR',
+      payload: { builder }
+    } }).success, false);
+  }
+  assert.throws(
+    () => normalizeBuilder({
+      version: 1,
+      components: [{
+        type: 'button', subType: 'url', index: 0, text: 'Abrir',
+        url: 'https://notify.example/destino',
+        parameters: [{
+          type: 'text', key: 'destino', label: 'Destino', fixedValue: 'whatsapp://send?phone=5511999999999'
+        }]
+      }]
+    }),
+    (error) => error.code === 'WHATSAPP_TEMPLATE_BUTTON_URL_FORBIDDEN'
+  );
+});
+
+test('novos custom oficiais exigem o perfil completo Marketing Padrao', () => {
+  const base = {
+    name: 'Novo marketing',
+    channel: 'whatsapp_cloud',
+    whatsappCloudPreset: 'custom',
+    externalTemplateName: 'novo_marketing',
+    languageCode: 'pt_BR'
+  };
+  const builders = [
+    {
+      version: 1,
+      components: [
+        { type: 'header', parameters: [{ type: 'image', key: 'hero', label: 'Hero', fixedValue: 'https://cdn.example/hero.png' }] },
+        { type: 'body', text: 'Texto', parameters: [] }
+      ]
+    },
+    {
+      version: 1, category: 'marketing', mode: 'standard',
+      components: [{ type: 'body', text: 'Texto', parameters: [] }]
+    },
+    {
+      version: 1, category: 'marketing', mode: 'standard',
+      components: [
+        { type: 'header', parameters: [{ type: 'image', key: 'hero', label: 'Hero', example: 'https://cdn.example/hero.png' }] },
+        { type: 'body', text: 'Texto', parameters: [] }
+      ]
+    },
+    {
+      version: 1, category: 'marketing', mode: 'standard',
+      components: [
+        { type: 'header', parameters: [{ type: 'image', key: 'hero', label: 'Hero', fixedValue: 'https://cdn.example/hero.png' }] },
+        { type: 'body', parameters: [] }
+      ]
+    },
+    {
+      version: 1, category: 'marketing', mode: 'standard',
+      components: [
+        { type: 'header', parameters: [{ type: 'image', key: 'hero', label: 'Hero', fixedValue: 'https://cdn.example/hero.png' }] },
+        { type: 'body', text: 'Texto', parameters: [] },
+        { type: 'button', subType: 'quick_reply', index: 0, text: 'Responder', parameters: [] }
+      ]
+    }
+  ];
+  for (const builder of builders) {
+    assert.throws(
+      () => templatesManager.normalizeTemplateInput({ ...base, payload: { builder } }),
+      (error) => error.code === 'WHATSAPP_MARKETING_STANDARD_INVALID'
+    );
+  }
 });
 
 test('builder custom gera somente schema de envio Meta e suporta tipos comuns', () => {

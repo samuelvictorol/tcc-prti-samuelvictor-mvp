@@ -14,8 +14,13 @@ import {
   cloudBuilderFromTemplate,
   createCloudParameter,
   createCloudComponent,
+  createStandardMarketingComponents,
   findWhatsAppCloudPreset,
+  isForbiddenWhatsAppButtonUrl,
+  isValidHttpsTemplateUrl,
+  renderWhatsAppPreviewMarkup,
   renderWhatsAppCloudPreview,
+  standardMarketingComponentsFromTemplate,
 } from '../src/pages/TemplatesPage.vue'
 
 describe('templates oficiais do WhatsApp Cloud', () => {
@@ -207,6 +212,68 @@ describe('templates oficiais do WhatsApp Cloud', () => {
     expect(META_LANGUAGE_OPTIONS.map((option) => option.value)).toEqual(['pt_BR', 'en_US'])
   })
 
+  it('cria novos modelos no perfil Marketing/Padrão sem campos dinâmicos', () => {
+    const components = createStandardMarketingComponents()
+    const definition = buildCustomWhatsAppCloudDefinition({
+      templateName: 'notify_flow_image_notification',
+      languageCode: 'pt_BR',
+      description: 'Descrição usada apenas na biblioteca.',
+      components,
+    })
+
+    expect(definition).toMatchObject({
+      description: 'Descrição usada apenas na biblioteca.',
+      body: 'Você foi convidado para acompanhar nossas novidades. Toque no botão abaixo para saber mais.',
+      variables: [],
+      payload: {
+        builder: {
+          version: 1,
+          category: 'marketing',
+          mode: 'standard',
+        },
+      },
+    })
+    expect(definition.body).not.toContain('Descrição usada apenas')
+    expect(definition.payload.builder.components.map((component) => component.type))
+      .toEqual(['header', 'body', 'footer', 'button'])
+    expect(definition.payload.builder.components.at(-1)).toMatchObject({
+      text: 'Saiba mais',
+      url: 'https://seudominio.com/',
+    })
+  })
+
+  it('migra a amostra de mídia legada para valor fixo do perfil padrão', () => {
+    const components = standardMarketingComponentsFromTemplate({
+      body: 'Texto oficial',
+      payload: {
+        builder: {
+          components: [{
+            type: 'header',
+            parameters: [{ type: 'image', key: 'imagem', label: 'Imagem', example: 'https://example.com/capa.png' }],
+          }],
+        },
+      },
+    })
+    expect(components[0].parameters[0].fixedValue).toBe('https://example.com/capa.png')
+    expect(components.find((component) => component.type === 'body').text).toBe('Texto oficial')
+  })
+
+  it('bloqueia destinos do próprio WhatsApp e aceita páginas HTTPS externas', () => {
+    expect(isForbiddenWhatsAppButtonUrl('https://wa.me/5561999999999')).toBe(true)
+    expect(isForbiddenWhatsAppButtonUrl('https://api.whatsapp.com/send?phone=5561999999999')).toBe(true)
+    expect(isForbiddenWhatsAppButtonUrl('whatsapp://send?text=oi')).toBe(true)
+    expect(isForbiddenWhatsAppButtonUrl('https://notify-flow.example/convite')).toBe(false)
+    expect(isValidHttpsTemplateUrl('https://notify-flow.example/convite')).toBe(true)
+    expect(isValidHttpsTemplateUrl('http://notify-flow.example/convite')).toBe(false)
+  })
+
+  it('espelha a formatação básica aprovada no preview do WhatsApp sem aceitar HTML', () => {
+    expect(renderWhatsAppPreviewMarkup('*Grupo Alpha*\n_Convite_ ~antigo~'))
+      .toBe('<strong>Grupo Alpha</strong><br><em>Convite</em> <s>antigo</s>')
+    expect(renderWhatsAppPreviewMarkup('<img src=x onerror=alert(1)>'))
+      .toContain('&lt;img src=x onerror=alert(1)&gt;')
+  })
+
   it('oferece upload multipart, prévia visual e inspeção do payload sem JSON manual', () => {
     const source = readFileSync(new URL('../src/pages/TemplatesPage.vue', import.meta.url), 'utf8')
     expect(source).toContain("body.append('file', file)")
@@ -217,5 +284,10 @@ describe('templates oficiais do WhatsApp Cloud', () => {
     expect(source).toContain("{ label: 'Payload', value: 'payload', icon: 'data_object' }")
     expect(source).toContain('<pre>{{ cloudPreviewPayloadJson }}</pre>')
     expect(source).toContain(':options="META_LANGUAGE_OPTIONS"')
+    expect(source).toContain('v-model.trim="cloudStandardMedia.fixedValue"')
+    expect(source).toContain('v-model="cloudStandardBody.text"')
+    expect(source).toContain('v-model="cloudStandardFooter.text"')
+    expect(source).toContain('v-model.trim="cloudStandardButton.url"')
+    expect(source).not.toContain('label="Variável interna *"')
   })
 })

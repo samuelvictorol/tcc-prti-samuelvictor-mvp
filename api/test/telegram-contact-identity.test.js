@@ -280,7 +280,8 @@ test('opt-in com email existente ainda solicita o telefone nativo e usa mensagen
   assert.match(menu.text, /Convite TCC \(convite-tcc\)/);
   assert.match(menu.text, /\/notify-me/);
   assert.match(menu.text, /\/login/);
-  assert.match(menu.text, /cadastro já existia e foi encontrado/i);
+  assert.match(menu.text, /Bem Vindo\(a\) Novamente/i);
+  assert.match(menu.text, /atualizamos a autoriza/i);
   assert.equal(phonePrompt.text, 'Mensagem personalizada para vincular seu telefone.');
   assert.equal(phonePrompt.reply_markup.keyboard[0][0].request_contact, true);
 });
