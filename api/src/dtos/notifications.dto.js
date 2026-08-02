@@ -80,12 +80,29 @@ const listNotificationDeliveriesSchema = z.object({
   })
 });
 
+const externalErrorCode = z.string().regex(/^META_[0-9]{1,12}$/).max(32);
+const listExternalProviderIssuesSchema = z.object({
+  query: paginationQuery.extend({
+    errorCode: externalErrorCode.optional(),
+    status: z.enum(['queued', 'processing', 'sent', 'delivered', 'read', 'failed', 'skipped']).optional()
+  })
+});
+const externalProviderIssueSchema = z.object({ params: z.object({ errorCode: externalErrorCode }) });
+const externalDeliveryRetrySchema = z.object({
+  params: z.object({ id: objectId, deliveryId: objectId })
+});
+const externalDeliveryIdSchema = z.object({ params: z.object({ deliveryId: objectId }) });
+
 module.exports = {
   createNotificationSchema,
   notificationIdSchema,
   listNotificationsSchema,
   listDeliveryIssuesSchema,
   listNotificationDeliveriesSchema,
+  listExternalProviderIssuesSchema,
+  externalProviderIssueSchema,
+  externalDeliveryRetrySchema,
+  externalDeliveryIdSchema,
   notificationChannel,
   notificationTemplateIds
 };

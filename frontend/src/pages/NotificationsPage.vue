@@ -223,6 +223,170 @@ export function notificationDeliveryDetail(delivery = {}) {
   if (status === 'failed') return 'O provedor não concluiu esta entrega'
   return 'Aguardando atualização da fila'
 }
+
+function metaProviderCode(item = {}) {
+  const rawCode = item.providerCode
+    || item.metaCode
+    || item.errorCode
+    || item.code
+    || item.lastError?.code
+    || item.error?.code
+    || ''
+  const match = String(rawCode).toUpperCase().match(/(?:META[_\s-]*)?(\d{5,})/)
+  return match ? `META_${match[1]}` : ''
+}
+
+export function isExternalMetaDeliveryBlock(item = {}) {
+  const rawCode = String(item.providerCode || item.metaCode || item.errorCode || item.code || item.lastError?.code || item.error?.code || '').toUpperCase()
+  const provider = String(item.provider || item.errorProvider || item.source || item.lastError?.provider || '').toLowerCase()
+  const channel = String(item.channel || item.lastError?.channel || '').replaceAll('-', '_').toLowerCase()
+  const code = metaProviderCode(item)
+  const explicitlyExternal = item.external === true || item.isProviderError === true || item.errorScope === 'provider'
+  return Boolean(code)
+    && (rawCode.startsWith('META_') || provider.includes('meta') || explicitlyExternal)
+    && (!channel || channel === 'whatsapp_cloud' || channel === 'whatsapp')
+}
+
+function metaBlockDeliveryIds(item = {}) {
+  const source = item.deliveryIds
+    || item.retryableDeliveryIds
+    || item.deliveries
+    || item.items
+    || []
+  const values = Array.isArray(source) ? source : [source]
+  const ids = values.filter((value) => {
+    if (typeof value !== 'object' || !value) return true
+    if (value.retryable === false || value.manualRetryAvailable === false) return false
+    if (value.automaticRetryAttempts !== undefined) {
+      return String(value.status || '').toLowerCase() === 'failed'
+        && Number(value.automaticRetryAttempts || 0) >= 1
+    }
+    return true
+  }).map((value) => (
+    typeof value === 'object' && value
+      ? value.deliveryId || value.id || value._id
+      : value
+  )).filter(Boolean).map(String)
+  const ownId = item.deliveryId
+    || item.latestDeliveryId
+    || (!values.length && !item.groupId && !item.groupKey ? item.id || item._id : '')
+  if (ownId) ids.push(String(ownId))
+  return [...new Set(ids)]
+}
+
+function metaBlockContacts(item = {}) {
+  const source = item.contacts || item.affectedContacts || item.deliveries || item.items
+  const entries = Array.isArray(source) && source.length ? source : [item]
+  return entries
+    .map((entry) => {
+      const contact = entry?.contact || entry || {}
+      const id = contact.id || contact._id || entry?.contactId || ''
+      const name = contact.displayName || contact.name || contact.email || contact.phone || entry?.contactName || ''
+      return id || name ? { id: String(id || name), name: String(name || 'Contato não identificado') } : null
+    })
+    .filter(Boolean)
+}
+
+function metaBlockDeliveryRows(items = []) {
+  return items.flatMap((item) => {
+    const nested = item.deliveries || item.items
+    const entries = Array.isArray(nested) && nested.length ? nested : [item]
+    return entries.map((entry, index) => {
+      const contact = entry.contact || {}
+      return {
+        id: String(entry.deliveryId || entry.id || entry._id || `${metaProviderCode(entry) || 'meta'}-${index}`),
+        notificationId: String(entry.notificationId || entry.dispatchId || entry.campaignId || ''),
+        contactId: String(entry.contactId || contact.id || contact._id || ''),
+        contactName: String(entry.contactName || contact.displayName || contact.name || contact.email || contact.phone || 'Contato não identificado'),
+        status: String(entry.status || 'failed').toLowerCase(),
+        attempts: Number(entry.attempts ?? entry.attemptCount ?? 1) || 0,
+        automaticRetryAt: entry.automaticRetryAt || entry.autoRetryAt || entry.nextRetryAt || entry.scheduledAt || entry.retryNotBefore || entry.automaticRetryScheduledAt || null,
+        automaticRetryStatus: String(entry.automaticRetryStatus || entry.autoRetryStatus || entry.retryStatus || '').toLowerCase(),
+        automaticRetryAttempted: Boolean(entry.automaticRetryAttempted || entry.autoRetryAttempted || entry.autoRetryCount > 0 || entry.automaticRetryAttempts > 0 || entry.automaticRetryAttemptedAt),
+        detail: entry.message || entry.errorMessage || entry.lastError?.message || item.message || item.errorMessage || 'Bloqueio temporário informado pela Meta.',
+        updatedAt: entry.updatedAt || entry.lastOccurredAt || entry.failureAt || entry.createdAt || item.latestAt || null,
+        retryable: entry.retryable !== false
+          && entry.manualRetryAvailable !== false
+          && (entry.automaticRetryAttempts === undefined || (String(entry.status || '').toLowerCase() === 'failed' && Number(entry.automaticRetryAttempts || 0) >= 1)),
+      }
+    })
+  })
+}
+
+export function normalizeMetaDeliveryBlocks(payload = {}) {
+  const source = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload.items)
+      ? payload.items
+      : Array.isArray(payload.blocks)
+        ? payload.blocks
+        : Array.isArray(payload.groups)
+          ? payload.groups
+          : []
+  const grouped = new Map()
+
+  for (const item of source) {
+    if (!isExternalMetaDeliveryBlock(item)) continue
+    const code = metaProviderCode(item)
+    const category = String(item.category || item.errorCategory || item.reason || 'delivery_policy').toLowerCase()
+    const key = item.groupKey || `${code}:${category}`
+    const existing = grouped.get(key) || {
+      id: String(item.groupId || key),
+      groupKey: key,
+      code,
+      category,
+      message: item.message || item.errorMessage || item.lastError?.message || 'Entrega bloqueada temporariamente pela Meta.',
+      deliveryCount: 0,
+      contactCount: 0,
+      deliveryIds: [],
+      contacts: [],
+      automaticRetryAt: null,
+      automaticRetryStatus: 'not_scheduled',
+      automaticRetryAttempted: false,
+      retryable: true,
+      updatedAt: null,
+      rawItems: [],
+    }
+    const contacts = metaBlockContacts(item)
+    const itemDeliveryCount = Number(item.deliveryCount ?? item.affectedDeliveries ?? item.occurrences ?? item.totalDeliveries ?? item.total ?? 1) || 1
+    const itemContactCount = Number(item.contactCount ?? item.affectedContacts ?? item.uniqueContacts ?? item.totalContacts ?? contacts.length ?? 0) || 0
+    existing.deliveryCount += itemDeliveryCount
+    existing.contactCount += itemContactCount
+    existing.deliveryIds.push(...metaBlockDeliveryIds(item))
+    existing.contacts.push(...contacts)
+    existing.rawItems.push(item)
+
+    const deliveryRetryDates = (Array.isArray(item.deliveries) ? item.deliveries : [])
+      .map((delivery) => delivery.retryNotBefore || delivery.automaticRetryScheduledAt)
+      .filter(Boolean)
+      .sort((left, right) => new Date(left) - new Date(right))
+    const automaticRetryAt = item.automaticRetryAt || item.autoRetryAt || item.nextRetryAt || item.scheduledAt || deliveryRetryDates[0]
+    if (automaticRetryAt && (!existing.automaticRetryAt || new Date(automaticRetryAt) < new Date(existing.automaticRetryAt))) {
+      existing.automaticRetryAt = automaticRetryAt
+    }
+    const autoStatus = item.automaticRetryStatus
+      || item.autoRetryStatus
+      || item.retryStatus
+      || (Number(item.pendingAutomaticRetry || 0) > 0 ? 'scheduled' : Number(item.automaticRetryAttempted || 0) > 0 ? 'failed' : '')
+    if (autoStatus) existing.automaticRetryStatus = String(autoStatus).toLowerCase()
+    existing.automaticRetryAttempted ||= Boolean(Number(item.automaticRetryAttempted || 0) > 0 || item.autoRetryAttempted || item.autoRetryCount > 0)
+    existing.retryable &&= item.retryable !== false
+      && item.manualRetryAvailable !== false
+      && (item.currentFailures === undefined || (Number(item.currentFailures || 0) > 0 && Number(item.automaticRetryAttempted || 0) > 0))
+    const updatedAt = item.updatedAt || item.lastOccurredAt || item.latestAt || item.createdAt
+    if (updatedAt && (!existing.updatedAt || new Date(updatedAt) > new Date(existing.updatedAt))) existing.updatedAt = updatedAt
+    grouped.set(key, existing)
+  }
+
+  return [...grouped.values()].map((item) => {
+    item.deliveryIds = [...new Set(item.deliveryIds)]
+    item.contacts = [...new Map(item.contacts.map((contact) => [contact.id, contact])).values()]
+    item.deliveries = metaBlockDeliveryRows(item.rawItems)
+    item.deliveryCount = Math.max(item.deliveryCount, item.deliveryIds.length)
+    item.contactCount = Math.max(item.contactCount, item.contacts.length)
+    return item
+  })
+}
 </script>
 
 <script setup>
@@ -265,6 +429,13 @@ const dispatchDetailPagination = ref({
   rowsPerPage: 15,
   rowsNumber: 0,
 })
+const metaBlocks = ref([])
+const metaBlocksLoading = ref(false)
+const metaBlockRetryingIds = ref([])
+const metaBlockDetailDialog = ref(false)
+const selectedMetaBlock = ref(null)
+const metaRetryConfirmDialog = ref(false)
+const pendingMetaRetryBlock = ref(null)
 let dispatchDetailRequestSequence = 0
 
 const form = reactive({
@@ -420,6 +591,23 @@ const dispatchDetailColumns = [
   { name: 'updatedAt', label: 'Atualizado', field: 'updatedAt', align: 'left' },
 ]
 
+const metaBlockColumns = [
+  { name: 'code', label: 'Bloqueio da Meta', field: 'code', align: 'left' },
+  { name: 'deliveryCount', label: 'Disparos', field: 'deliveryCount', align: 'center' },
+  { name: 'contactCount', label: 'Usuários', field: 'contactCount', align: 'center' },
+  { name: 'automaticRetry', label: 'Retry automático', field: 'automaticRetryAt', align: 'left' },
+  { name: 'updatedAt', label: 'Última ocorrência', field: 'updatedAt', align: 'left' },
+  { name: 'actions', label: '', field: 'actions', align: 'right' },
+]
+
+const metaBlockDeliveryColumns = [
+  { name: 'contact', label: 'Contato', field: 'contactName', align: 'left' },
+  { name: 'dispatch', label: 'Disparo', field: 'notificationId', align: 'left' },
+  { name: 'automaticRetry', label: 'Retry automático', field: 'automaticRetryAt', align: 'left' },
+  { name: 'attempts', label: 'Tentativas', field: 'attempts', align: 'center' },
+  { name: 'detail', label: 'Detalhe', field: 'detail', align: 'left' },
+]
+
 function statusColor(status = '') {
   return {
     delivered: 'positive',
@@ -479,6 +667,115 @@ function formatDate(value) {
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
 }
 
+function automaticRetryLabel(block = {}) {
+  const status = String(block.automaticRetryStatus || '').toLowerCase()
+  if (['queued', 'scheduled', 'waiting', 'delayed'].includes(status) && block.automaticRetryAt) {
+    return `Agendado para ${formatDate(block.automaticRetryAt)}`
+  }
+  if (['processing', 'retrying'].includes(status)) return 'Tentativa automática em andamento'
+  if (['completed', 'succeeded', 'sent'].includes(status)) return 'Tentativa automática concluída'
+  if (block.automaticRetryAttempted || ['failed', 'exhausted'].includes(status)) {
+    return 'Tentativa automática já utilizada'
+  }
+  if (block.automaticRetryAt) return `Agendado para ${formatDate(block.automaticRetryAt)}`
+  return 'Aguardando agendamento de 24 horas'
+}
+
+function automaticRetryColor(block = {}) {
+  const status = String(block.automaticRetryStatus || '').toLowerCase()
+  if (['completed', 'succeeded', 'sent'].includes(status)) return 'positive'
+  if (block.automaticRetryAttempted || ['failed', 'exhausted'].includes(status)) return 'warning'
+  if (['processing', 'retrying'].includes(status)) return 'info'
+  return 'primary'
+}
+
+function metaBlockIsRetrying(block = {}) {
+  return metaBlockRetryingIds.value.includes(block.id)
+}
+
+async function loadMetaDeliveryBlocks({ showError = true } = {}) {
+  metaBlocksLoading.value = true
+  try {
+    const response = await http.get('/notifications/meta-delivery-blocks', {
+      params: { provider: 'meta', externalOnly: true, limit: 100 },
+    })
+    const normalized = normalizeMetaDeliveryBlocks(unwrap(response) || {})
+    const contactMap = new Map(contacts.value.map((contact) => [String(contact.id || contact._id), contact]))
+    metaBlocks.value = normalized.map((block) => {
+      const deliveries = block.deliveries.map((delivery) => {
+        const contact = contactMap.get(String(delivery.contactId || ''))
+        return {
+          ...delivery,
+          contactName: contact?.displayName || contact?.name || contact?.email || contact?.phone || delivery.contactName,
+        }
+      })
+      return {
+        ...block,
+        deliveries,
+        contacts: [...new Map(deliveries.map((delivery) => [delivery.contactId || delivery.contactName, {
+          id: delivery.contactId || delivery.contactName,
+          name: delivery.contactName,
+        }])).values()],
+      }
+    })
+  } catch (error) {
+    if (showError) {
+      $q.notify({
+        type: 'warning',
+        message: errorMessage(error, 'Não foi possível carregar os bloqueios temporários da Meta.'),
+      })
+    }
+  } finally {
+    metaBlocksLoading.value = false
+  }
+}
+
+function openMetaBlockDetails(block) {
+  selectedMetaBlock.value = block
+  metaBlockDetailDialog.value = true
+}
+
+async function retryMetaBlock(block) {
+  if (!block?.retryable || metaBlockIsRetrying(block)) return
+  const deliveryIds = [...new Set(block.deliveryIds || [])]
+  if (!deliveryIds.length) {
+    $q.notify({ type: 'warning', message: 'Não há entregas disponíveis para uma nova tentativa manual.' })
+    return
+  }
+  pendingMetaRetryBlock.value = block
+  metaRetryConfirmDialog.value = true
+}
+
+async function confirmMetaBlockRetry() {
+  const block = pendingMetaRetryBlock.value
+  if (!block || metaBlockIsRetrying(block)) return
+  const deliveryIds = [...new Set(block.deliveryIds || [])]
+  metaRetryConfirmDialog.value = false
+  metaBlockRetryingIds.value = [...metaBlockRetryingIds.value, block.id]
+  try {
+    const response = await http.post(
+      `/notifications/external-provider-issues/${encodeURIComponent(block.code)}/retry`,
+      { reason: 'manual_meta_provider_retry' },
+    )
+    const result = unwrap(response) || {}
+    const accepted = Number(result.queued || deliveryIds.length)
+    $q.notify({
+      type: 'positive',
+      message: `${accepted} nova(s) tentativa(s) solicitada(s).`,
+      caption: 'O processamento seguirá sem bloquear outros envios para estes contatos.',
+    })
+    await Promise.all([loadMetaDeliveryBlocks({ showError: false }), loadData({ includeMetaBlocks: false })])
+  } catch (error) {
+    $q.notify({
+      type: 'negative',
+      message: errorMessage(error, 'Não foi possível solicitar a nova tentativa manual.'),
+    })
+  } finally {
+    metaBlockRetryingIds.value = metaBlockRetryingIds.value.filter((id) => id !== block.id)
+    pendingMetaRetryBlock.value = null
+  }
+}
+
 async function loadDispatchDetails({ pagination = dispatchDetailPagination.value, showError = true } = {}) {
   const id = notificationId(selectedDispatch.value)
   if (!id) return
@@ -536,7 +833,7 @@ function filterDispatchDetails() {
   })
 }
 
-async function loadData() {
+async function loadData({ includeMetaBlocks = true } = {}) {
   loading.value = true
   try {
     await app.fetchStatus(true)
@@ -553,6 +850,7 @@ async function loadData() {
     templateSets.value = templateSetItems
     deliveries.value = asList(unwrap(notificationResponse), 'notifications')
     if (!form.channel && dispatchChannelOptions.value.length) form.channel = dispatchChannelOptions.value[0].value
+    if (includeMetaBlocks) await loadMetaDeliveryBlocks({ showError: false })
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error, 'Não foi possível preparar o disparador.') })
   } finally {
@@ -871,6 +1169,117 @@ onMounted(loadData)
       </aside>
     </section>
 
+    <q-card flat class="glass-card section-card q-mt-lg meta-blocks-card">
+      <div class="toolbar-row meta-blocks-toolbar">
+        <div>
+          <div class="meta-blocks-title-row">
+            <span class="meta-blocks-icon"><q-icon name="policy" /></span>
+            <div>
+              <h2 class="section-title">Bloqueios temporários da Meta</h2>
+              <p class="section-copy">Falhas externas agrupadas pelo motivo. Erros internos do Notify Flow não aparecem aqui.</p>
+            </div>
+          </div>
+        </div>
+        <q-btn
+          outline
+          color="primary"
+          no-caps
+          icon="refresh"
+          label="Atualizar"
+          :loading="metaBlocksLoading"
+          @click="loadMetaDeliveryBlocks()"
+        />
+      </div>
+
+      <q-banner rounded class="meta-retry-note q-mb-md">
+        <template #avatar><q-icon name="schedule_send" color="primary" /></template>
+        Cada entrega elegível recebe <strong>uma única tentativa automática após 24 horas</strong>.
+        Se ela falhar, uma nova tentativa só acontece pelo botão manual. O agendamento não bloqueia outros disparos para o contato.
+      </q-banner>
+
+      <EmptyState
+        v-if="!metaBlocksLoading && !metaBlocks.length"
+        icon="verified"
+        title="Nenhum bloqueio externo da Meta"
+        description="Quando a Meta recusar temporariamente uma entrega, o agrupamento e o retry aparecerão aqui."
+      />
+      <q-table
+        v-else
+        flat
+        :rows="metaBlocks"
+        :columns="metaBlockColumns"
+        row-key="id"
+        :loading="metaBlocksLoading"
+        :grid="$q.screen.lt.md"
+        :rows-per-page-options="[5, 10, 20]"
+        class="meta-blocks-table"
+      >
+        <template #body-cell-code="props">
+          <q-td :props="props" class="meta-block-code">
+            <q-badge color="deep-orange-8" :label="props.row.code" />
+            <strong>{{ props.row.message }}</strong>
+          </q-td>
+        </template>
+        <template #body-cell-deliveryCount="props"><q-td :props="props"><strong>{{ props.row.deliveryCount }}</strong></q-td></template>
+        <template #body-cell-contactCount="props"><q-td :props="props"><strong>{{ props.row.contactCount }}</strong></q-td></template>
+        <template #body-cell-automaticRetry="props">
+          <q-td :props="props">
+            <q-badge outline :color="automaticRetryColor(props.row)" :label="automaticRetryLabel(props.row)" />
+          </q-td>
+        </template>
+        <template #body-cell-updatedAt="props"><q-td :props="props">{{ formatDate(props.row.updatedAt) }}</q-td></template>
+        <template #body-cell-actions="props">
+          <q-td :props="props" class="meta-block-actions">
+            <q-btn flat round dense icon="manage_search" color="primary" aria-label="Ver detalhes do bloqueio" @click="openMetaBlockDetails(props.row)">
+              <q-tooltip>Ver usuários e entregas afetadas</q-tooltip>
+            </q-btn>
+            <q-btn
+              flat
+              round
+              dense
+              icon="replay"
+              color="deep-orange-8"
+              aria-label="Tentar novamente manualmente"
+              :disable="!props.row.retryable || !props.row.deliveryIds.length"
+              :loading="metaBlockIsRetrying(props.row)"
+              @click="retryMetaBlock(props.row)"
+            >
+              <q-tooltip>Tentar novamente agora; o automático ocorre somente uma vez</q-tooltip>
+            </q-btn>
+          </q-td>
+        </template>
+        <template #item="props">
+          <div class="meta-block-grid-item">
+            <article class="meta-block-mobile-card">
+              <header>
+                <q-badge color="deep-orange-8" :label="props.row.code" />
+                <span>{{ formatDate(props.row.updatedAt) }}</span>
+              </header>
+              <p>{{ props.row.message }}</p>
+              <div class="meta-block-mobile-card__counts">
+                <span><strong>{{ props.row.deliveryCount }}</strong> disparo(s)</span>
+                <span><strong>{{ props.row.contactCount }}</strong> usuário(s)</span>
+              </div>
+              <q-badge outline :color="automaticRetryColor(props.row)" :label="automaticRetryLabel(props.row)" />
+              <footer>
+                <q-btn flat no-caps color="primary" icon="manage_search" label="Detalhes" @click="openMetaBlockDetails(props.row)" />
+                <q-btn
+                  outline
+                  no-caps
+                  color="deep-orange-8"
+                  icon="replay"
+                  label="Tentar novamente"
+                  :disable="!props.row.retryable || !props.row.deliveryIds.length"
+                  :loading="metaBlockIsRetrying(props.row)"
+                  @click="retryMetaBlock(props.row)"
+                />
+              </footer>
+            </article>
+          </div>
+        </template>
+      </q-table>
+    </q-card>
+
     <q-card flat class="glass-card section-card q-mt-lg">
       <div class="toolbar-row">
         <div><h2 class="section-title">Atividade recente</h2><p class="section-copy">Últimos lotes e entregas registrados pela API.</p></div>
@@ -931,6 +1340,106 @@ onMounted(loadData)
         </template>
       </q-table>
     </q-card>
+
+    <q-dialog v-model="metaBlockDetailDialog" :maximized="$q.screen.lt.sm">
+      <q-card class="meta-block-dialog">
+        <q-card-section class="dispatch-detail-header">
+          <div>
+            <div class="text-overline text-deep-orange-8">Bloqueio externo do provedor</div>
+            <h2>{{ selectedMetaBlock?.code || 'Meta' }}</h2>
+            <p>{{ selectedMetaBlock?.message }}</p>
+          </div>
+          <q-btn flat round dense icon="close" v-close-popup aria-label="Fechar detalhes do bloqueio" />
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="meta-block-dialog__content scroll">
+          <div class="meta-block-detail-stats">
+            <div><span>Disparos afetados</span><strong>{{ selectedMetaBlock?.deliveryCount || 0 }}</strong></div>
+            <div><span>Usuários afetados</span><strong>{{ selectedMetaBlock?.contactCount || 0 }}</strong></div>
+            <div><span>Última ocorrência</span><strong>{{ formatDate(selectedMetaBlock?.updatedAt) }}</strong></div>
+          </div>
+
+          <q-banner rounded class="meta-retry-note q-my-md">
+            <template #avatar><q-icon name="schedule_send" color="primary" /></template>
+            <strong>{{ automaticRetryLabel(selectedMetaBlock || {}) }}</strong><br>
+            O sistema faz somente uma tentativa automática após 24 horas. Novos disparos para esses contatos continuam independentes desta espera.
+          </q-banner>
+
+          <section class="meta-block-deliveries">
+            <h3>Disparos e usuários afetados</h3>
+            <q-table
+              flat
+              bordered
+              :rows="selectedMetaBlock?.deliveries || []"
+              :columns="metaBlockDeliveryColumns"
+              row-key="id"
+              :grid="$q.screen.lt.md"
+              :rows-per-page-options="[5, 10, 20]"
+              class="meta-block-delivery-table"
+            >
+              <template #body-cell-contact="props">
+                <q-td :props="props"><strong>{{ props.row.contactName }}</strong><small>{{ props.row.contactId || 'ID não informado' }}</small></q-td>
+              </template>
+              <template #body-cell-dispatch="props">
+                <q-td :props="props"><strong>{{ props.row.notificationId || 'Disparo não identificado' }}</strong><small>{{ formatDate(props.row.updatedAt) }}</small></q-td>
+              </template>
+              <template #body-cell-automaticRetry="props">
+                <q-td :props="props"><q-badge outline :color="automaticRetryColor(props.row)" :label="automaticRetryLabel(props.row)" /></q-td>
+              </template>
+              <template #body-cell-detail="props"><q-td :props="props" class="meta-block-delivery-detail">{{ props.row.detail }}</q-td></template>
+              <template #item="props">
+                <div class="meta-block-delivery-grid-item">
+                  <article class="meta-block-delivery-mobile-card">
+                    <header><strong>{{ props.row.contactName }}</strong><span>{{ formatDate(props.row.updatedAt) }}</span></header>
+                    <small>{{ props.row.notificationId || 'Disparo não identificado' }}</small>
+                    <p>{{ props.row.detail }}</p>
+                    <q-badge outline :color="automaticRetryColor(props.row)" :label="automaticRetryLabel(props.row)" />
+                    <footer>{{ props.row.attempts }} tentativa(s)</footer>
+                  </article>
+                </div>
+              </template>
+            </q-table>
+          </section>
+
+          <section class="meta-block-explanation">
+            <h3>O que aconteceu</h3>
+            <p>Este registro veio da Meta/WhatsApp e não representa uma falha interna do Notify Flow. Bloqueios como o META_131049 podem ser aplicados temporariamente para preservar a qualidade e o engajamento do ecossistema.</p>
+          </section>
+        </q-card-section>
+        <q-separator />
+        <q-card-actions align="right" class="q-pa-md">
+          <q-btn flat no-caps label="Fechar" v-close-popup />
+          <q-btn
+            color="deep-orange-8"
+            unelevated
+            no-caps
+            icon="replay"
+            label="Tentar novamente"
+            :disable="!selectedMetaBlock?.retryable || !selectedMetaBlock?.deliveryIds?.length"
+            :loading="metaBlockIsRetrying(selectedMetaBlock || {})"
+            @click="retryMetaBlock(selectedMetaBlock)"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="metaRetryConfirmDialog" persistent>
+      <q-card class="meta-retry-confirm-card">
+        <q-card-section>
+          <div class="text-overline text-deep-orange-8">Retry manual</div>
+          <h2>Tentar novamente agora?</h2>
+          <p>
+            O retry manual será solicitado para {{ pendingMetaRetryBlock?.deliveryIds?.length || 0 }} entrega(s).
+            Essa ação não interfere em outros disparos ou filas dos contatos.
+          </p>
+        </q-card-section>
+        <q-separator />
+        <q-card-actions align="right" class="q-pa-md">
+          <q-btn flat no-caps label="Cancelar" @click="metaRetryConfirmDialog = false; pendingMetaRetryBlock = null" />
+          <q-btn color="deep-orange-8" unelevated no-caps icon="replay" label="Tentar novamente" @click="confirmMetaBlockRetry" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
 
     <q-dialog v-model="dispatchDetailDialog" :maximized="$q.screen.lt.sm">
       <q-card class="dispatch-detail-dialog">
@@ -1313,6 +1822,286 @@ onMounted(loadData)
 
 .safety-card {
   background: linear-gradient(145deg, rgba(255,255,255,.8), rgba(130,248,230,.15));
+}
+
+.meta-blocks-card {
+  border: 1px solid rgba(215, 104, 43, 0.14);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.88), rgba(255, 241, 230, 0.34));
+}
+
+.meta-blocks-toolbar,
+.meta-blocks-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.meta-blocks-toolbar {
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.meta-blocks-title-row > div {
+  min-width: 0;
+}
+
+.meta-blocks-icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  place-items: center;
+  border-radius: 14px;
+  background: rgba(225, 111, 52, 0.13);
+  color: #b64d20;
+  font-size: 24px;
+}
+
+.meta-retry-note {
+  border: 1px solid rgba(53, 188, 164, 0.22);
+  background: rgba(231, 251, 247, 0.7);
+  color: #315e56;
+  overflow-wrap: anywhere;
+}
+
+.meta-blocks-table {
+  width: 100%;
+  max-width: 100%;
+}
+
+.meta-blocks-table :deep(td),
+.meta-blocks-table :deep(th) {
+  max-width: 360px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.meta-block-code .q-badge,
+.meta-block-code strong {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+}
+
+.meta-block-code strong {
+  margin-top: 6px;
+  color: #4f4a46;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.meta-block-actions {
+  white-space: nowrap !important;
+}
+
+.meta-block-grid-item {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 4px;
+}
+
+.meta-block-mobile-card {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid rgba(215, 104, 43, 0.18);
+  border-radius: 16px;
+  background: rgba(255, 253, 251, 0.94);
+}
+
+.meta-block-mobile-card > header,
+.meta-block-mobile-card > footer,
+.meta-block-mobile-card__counts {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.meta-block-mobile-card > header span {
+  color: #788783;
+  font-size: 0.72rem;
+}
+
+.meta-block-mobile-card > p {
+  margin: 13px 0;
+  color: #405b56;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.meta-block-mobile-card__counts {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  color: #617570;
+  font-size: 0.76rem;
+}
+
+.meta-block-mobile-card > footer {
+  align-items: stretch;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(215, 104, 43, 0.12);
+}
+
+.meta-block-dialog {
+  display: flex;
+  width: min(760px, calc(100vw - 32px));
+  max-width: 760px;
+  max-height: min(88vh, 820px);
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 22px;
+  background: #fbfffe;
+}
+
+.meta-block-dialog__content {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 20px 22px;
+}
+
+.meta-block-detail-stats {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.meta-block-detail-stats > div {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid rgba(14, 89, 78, 0.11);
+  border-radius: 13px;
+  background: rgba(247, 254, 252, 0.82);
+}
+
+.meta-block-detail-stats span,
+.meta-block-detail-stats strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.meta-block-detail-stats span {
+  color: #71827f;
+  font-size: 0.7rem;
+}
+
+.meta-block-detail-stats strong {
+  margin-top: 4px;
+}
+
+.meta-block-deliveries h3,
+.meta-block-explanation h3 {
+  margin: 18px 0 8px;
+  color: #173c36;
+  font-size: 0.95rem;
+}
+
+.meta-block-delivery-table {
+  width: 100%;
+  max-width: 100%;
+  border-radius: 14px;
+}
+
+.meta-block-delivery-table :deep(td),
+.meta-block-delivery-table :deep(th) {
+  max-width: 260px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.meta-block-delivery-table :deep(td strong),
+.meta-block-delivery-table :deep(td small) {
+  display: block;
+}
+
+.meta-block-delivery-table :deep(td small) {
+  margin-top: 3px;
+  color: #758682;
+  font-size: 0.68rem;
+}
+
+.meta-block-delivery-detail {
+  color: #526b66;
+  line-height: 1.4;
+}
+
+.meta-block-delivery-grid-item {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 3px;
+}
+
+.meta-block-delivery-mobile-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(215, 104, 43, 0.16);
+  border-radius: 14px;
+  background: #fffdfb;
+}
+
+.meta-block-delivery-mobile-card > header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.meta-block-delivery-mobile-card > header strong,
+.meta-block-delivery-mobile-card > header span {
+  overflow-wrap: anywhere;
+}
+
+.meta-block-delivery-mobile-card > header span,
+.meta-block-delivery-mobile-card > small,
+.meta-block-delivery-mobile-card > footer {
+  color: #71827f;
+  font-size: 0.7rem;
+}
+
+.meta-block-delivery-mobile-card > small {
+  display: block;
+  margin-top: 4px;
+}
+
+.meta-block-delivery-mobile-card > p {
+  margin: 11px 0;
+  color: #4f6863;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.meta-block-delivery-mobile-card > footer {
+  margin-top: 9px;
+}
+
+.meta-retry-confirm-card {
+  width: min(500px, calc(100vw - 32px));
+  max-width: 500px;
+  border-radius: 18px;
+}
+
+.meta-retry-confirm-card h2 {
+  margin: 0;
+  color: #172f2b;
+  font-size: 1.35rem;
+}
+
+.meta-retry-confirm-card p {
+  margin: 8px 0 0;
+  color: #60736f;
+  line-height: 1.5;
+}
+
+.meta-block-explanation p {
+  margin: 0;
+  color: #536d68;
+  line-height: 1.55;
 }
 
 .activity-table {
@@ -1852,6 +2641,35 @@ onMounted(loadData)
   }
 
   .safety-column {
+    grid-template-columns: 1fr;
+  }
+
+  .meta-blocks-toolbar,
+  .meta-blocks-title-row {
+    align-items: flex-start;
+  }
+
+  .meta-blocks-toolbar {
+    flex-direction: column;
+  }
+
+  .meta-blocks-toolbar > .q-btn {
+    width: 100%;
+  }
+
+  .meta-block-mobile-card > footer {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .meta-block-dialog {
+    width: 100%;
+    max-width: none;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .meta-block-detail-stats {
     grid-template-columns: 1fr;
   }
 

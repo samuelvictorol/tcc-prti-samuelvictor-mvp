@@ -29,6 +29,8 @@ const MAX_NOTIFICATION_DELIVERIES = 10_000;
 const MAX_LIST_DELIVERY_SUMMARIES = 1_000;
 const MAX_DELIVERY_ERROR_LENGTH = 500;
 const STALE_PROCESSING_MAX_AGE_MS = 2 * 60 * 1000;
+const META_ECOSYSTEM_RETRY_DELAY_MS = 24 * 60 * 60 * 1000;
+const META_ECOSYSTEM_RETRY_CODES = new Set([131049]);
 
 const CHANNEL_SKIP_CODES = new Set([
   'CHANNEL_NOT_CONFIGURED',
@@ -91,12 +93,15 @@ async function recipients(contactIds, groupIds, options = {}) {
 
 async function scheduleNotification(notificationId, options = {}) {
   try {
+    const delayMs = Math.max(0, Number(options.delayMs) || 0);
     const queued = await queueService.enqueueNotification({
       notificationId,
       jobId: options.jobId,
-      delayMs: options.delayMs
+      delayMs
     });
-    const scheduledAt = new Date();
+    // Persist the intended execution time, not merely the enqueue time. This
+    // prevents the Mongo recovery sweep from firing a delayed BullMQ job early.
+    const scheduledAt = new Date(Date.now() + delayMs);
     await Notification.updateOne(
       { _id: notificationId, status: NOTIFICATION_STATUS.QUEUED, enqueuePending: true },
       {
@@ -152,7 +157,14 @@ function deliverySummary(delivery) {
     status: value.status,
     attempts: value.attempts || 0,
     errorCode: value.errorCode || null,
-    errorMessage: value.errorMessage || null
+    errorMessage: value.errorMessage || null,
+    externalProvider: value.externalProvider || null,
+    externalErrorCode: value.externalErrorCode || null,
+    externalFailureAt: value.externalFailureAt || null,
+    retryNotBefore: value.retryNotBefore || null,
+    automaticRetryScheduledAt: value.automaticRetryScheduledAt || null,
+    automaticRetryAttemptedAt: value.automaticRetryAttemptedAt || null,
+    automaticRetryAttempts: Number(value.automaticRetryAttempts || 0)
   };
 }
 
@@ -556,6 +568,153 @@ function permanentDeliveryError(error) {
   return false;
 }
 
+function providerErrorCode(error = {}) {
+  const details = error.details || {};
+  const directCode = String(error.code || '').match(/^META_(\d+)$/i)?.[1];
+  const value = directCode
+    ?? details.code
+    ?? details.providerErrorCode
+    ?? details.error_code;
+  const code = Number(value);
+  return Number.isFinite(code) ? code : null;
+}
+
+function metaEcosystemFailure(error = {}) {
+  const code = providerErrorCode(error);
+  if (!META_ECOSYSTEM_RETRY_CODES.has(code)) return null;
+  return {
+    provider: 'meta',
+    code: 'META_' + code,
+    message: String(error.message || 'A Meta bloqueou temporariamente a entrega por limite de engajamento')
+      .slice(0, MAX_DELIVERY_ERROR_LENGTH)
+  };
+}
+
+function externalMetaFailure(error = {}) {
+  const code = providerErrorCode(error);
+  if (!code) return null;
+  return {
+    provider: 'meta',
+    code: 'META_' + code,
+    message: String(error.message || 'A Meta recusou a entrega')
+      .slice(0, MAX_DELIVERY_ERROR_LENGTH)
+  };
+}
+
+function scheduleMetaEcosystemDelivery(delivery, failure, now = new Date()) {
+  const retryAt = new Date(now.getTime() + META_ECOSYSTEM_RETRY_DELAY_MS);
+  // Keep the delivery final while it waits. It must not be picked up by the
+  // ordinary notification retry loop before the provider cooldown expires.
+  delivery.status = DELIVERY_STATUS.FAILED;
+  delivery.errorCode = failure.code;
+  delivery.errorMessage = failure.message;
+  delivery.externalProvider = failure.provider;
+  delivery.externalErrorCode = failure.code;
+  delivery.externalErrorMessage = failure.message;
+  delivery.externalFailureAt = now;
+  delivery.retryNotBefore = retryAt;
+  delivery.automaticRetryScheduledAt = retryAt;
+  return retryAt;
+}
+
+async function scheduleExternalDeliveryRetry(notificationId, deliveryId, retryAt, options = {}) {
+  const dueAt = new Date(retryAt);
+  const delayMs = Math.max(0, dueAt.getTime() - Date.now());
+  const safeDeliveryId = String(deliveryId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+  try {
+    const queued = await queueService.enqueueNotification({
+      notificationId: String(notificationId),
+      externalRetryDeliveryId: String(deliveryId),
+      jobId: `${notificationId}-meta-ecosystem-${safeDeliveryId}-${dueAt.getTime()}${options.jobSuffix ? '-' + options.jobSuffix : ''}`,
+      delayMs,
+      // This job represents the single provider retry. BullMQ must not repeat
+      // it independently when the worker reports an infrastructure failure.
+      attempts: 1
+    });
+    return { scheduled: true, scheduledAt: dueAt, queued };
+  } catch (error) {
+    await logsManager.create({
+      level: 'warn',
+      channel: CHANNELS.WHATSAPP_CLOUD,
+      action: 'notification.meta_retry_enqueue_failed',
+      message: 'Retry externo preservado no Mongo para recuperacao',
+      context: {
+        notificationId: String(notificationId),
+        deliveryId: String(deliveryId),
+        retryAt: dueAt,
+        error: String(error.message || 'Fila indisponivel').slice(0, 500)
+      }
+    }).catch(() => undefined);
+    return { scheduled: false, scheduledAt: dueAt, error };
+  }
+}
+
+async function activateExternalDeliveryRetry(notificationId, deliveryId) {
+  const now = new Date();
+  return Notification.findOneAndUpdate(
+    {
+      _id: notificationId,
+      status: { $nin: [NOTIFICATION_STATUS.PROCESSING, NOTIFICATION_STATUS.CANCELLED] },
+      deliveries: {
+        $elemMatch: {
+          _id: deliveryId,
+          channel: CHANNELS.WHATSAPP_CLOUD,
+          status: DELIVERY_STATUS.FAILED,
+          externalProvider: 'meta',
+          externalErrorCode: { $in: [...META_ECOSYSTEM_RETRY_CODES].map((code) => 'META_' + code) },
+          automaticRetryAttempts: { $not: { $gte: 1 } },
+          retryNotBefore: { $lte: now }
+        }
+      }
+    },
+    [
+      {
+        $set: {
+          deliveries: {
+            $map: {
+              input: '$deliveries',
+              as: 'delivery',
+              in: {
+                $cond: [
+                  { $eq: ['$$delivery._id', { $literal: Notification.db.base.Types.ObjectId.createFromHexString(String(deliveryId)) }] },
+                  {
+                    $mergeObjects: [
+                      '$$delivery',
+                      {
+                        status: DELIVERY_STATUS.QUEUED,
+                        automaticRetryAttempts: { $add: [{ $ifNull: ['$$delivery.automaticRetryAttempts', 0] }, 1] },
+                        automaticRetryAttemptedAt: '$$NOW',
+                        retryNotBefore: null,
+                        updatedAt: '$$NOW'
+                      }
+                    ]
+                  },
+                  '$$delivery'
+                ]
+              }
+            }
+          },
+          status: NOTIFICATION_STATUS.QUEUED,
+          enqueuePending: false,
+          completedAt: '$$REMOVE',
+          updatedAt: '$$NOW'
+        }
+      },
+      {
+        $set: {
+          summary: {
+            queued: deliveryCountExpression([DELIVERY_STATUS.QUEUED, DELIVERY_STATUS.PROCESSING]),
+            sent: deliveryCountExpression([...SUCCESS_DELIVERY_STATUSES]),
+            failed: deliveryCountExpression([DELIVERY_STATUS.FAILED]),
+            skipped: deliveryCountExpression([DELIVERY_STATUS.SKIPPED])
+          }
+        }
+      }
+    ],
+    { new: true }
+  );
+}
+
 async function dispatchAttempt(notification, delivery, template) {
   delivery.attempts += 1;
   return dispatchDelivery(notification, delivery, template);
@@ -582,6 +741,14 @@ async function persistClaimedDelivery(notification, processingToken, delivery) {
     ['providerMessageId', delivery.providerMessageId],
     ['errorCode', delivery.errorCode],
     ['errorMessage', delivery.errorMessage],
+    ['externalProvider', delivery.externalProvider],
+    ['externalErrorCode', delivery.externalErrorCode],
+    ['externalErrorMessage', delivery.externalErrorMessage],
+    ['externalFailureAt', delivery.externalFailureAt],
+    ['retryNotBefore', delivery.retryNotBefore],
+    ['automaticRetryScheduledAt', delivery.automaticRetryScheduledAt],
+    ['automaticRetryAttemptedAt', delivery.automaticRetryAttemptedAt],
+    ['automaticRetryAttempts', delivery.automaticRetryAttempts],
     ['sentAt', delivery.sentAt]
   ]) {
     const path = `deliveries.$.${field}`;
@@ -642,7 +809,11 @@ function isFinalQueueAttempt(queueContext = {}) {
   return attemptsMade + 1 >= maxAttempts;
 }
 
-async function processJob({ notificationId, queueContext = {} }) {
+async function processJob({ notificationId, externalRetryDeliveryId, queueContext = {} }) {
+  if (externalRetryDeliveryId) {
+    const activated = await activateExternalDeliveryRetry(notificationId, externalRetryDeliveryId);
+    if (!activated) return { ignored: true, reason: 'external_retry_not_due_or_already_attempted' };
+  }
   const claim = processingClaim(notificationId, queueContext);
   const claimedAt = new Date();
   const notification = await Notification.findOneAndUpdate(
@@ -718,8 +889,16 @@ async function processJob({ notificationId, queueContext = {} }) {
   }
   const currentlyEligibleRecipients = new Set(await recipients(notification.recipientContacts.map(String), notification.recipientGroups.map(String)));
   const availability = new Map();
+  const externalRetrySchedules = [];
   for (const delivery of notification.deliveries) {
     if (delivery.status !== DELIVERY_STATUS.QUEUED) continue;
+    // O job de cooldown da Meta pertence a uma única entrega. Mesmo que outra
+    // entrega do lote esteja queued por um motivo independente, ela conserva
+    // seu próprio ciclo de fila e nunca é puxada por este retry de 24 horas.
+    if (externalRetryDeliveryId && String(delivery._id) !== String(externalRetryDeliveryId)) continue;
+    const oneShotExternalRetry = Boolean(
+      externalRetryDeliveryId && String(delivery._id) === String(externalRetryDeliveryId)
+    );
     if (!currentlyEligibleRecipients.has(String(delivery.contact))) {
       delivery.status = DELIVERY_STATUS.SKIPPED;
       delivery.errorCode = 'RECIPIENT_SCOPE_CHANGED';
@@ -732,7 +911,7 @@ async function processJob({ notificationId, queueContext = {} }) {
     const currentAvailability = availability.get(delivery.channel);
     if (!currentAvailability.available) {
       delivery.attempts += 1;
-      const canRetry = currentAvailability.retryable && delivery.attempts < MAX_DELIVERY_ATTEMPTS;
+      const canRetry = !oneShotExternalRetry && currentAvailability.retryable && delivery.attempts < MAX_DELIVERY_ATTEMPTS;
       delivery.status = canRetry ? DELIVERY_STATUS.QUEUED : currentAvailability.retryable ? DELIVERY_STATUS.FAILED : DELIVERY_STATUS.SKIPPED;
       delivery.errorCode = currentAvailability.errorCode;
       delivery.errorMessage = String(currentAvailability.errorMessage || '').slice(0, MAX_DELIVERY_ERROR_LENGTH);
@@ -751,10 +930,24 @@ async function processJob({ notificationId, queueContext = {} }) {
       delivery.errorMessage = undefined;
     } catch (error) {
       const skipped = ['CONTACT_DISABLED', 'CHANNEL_NOT_AUTHORIZED'].includes(error.code) || CHANNEL_SKIP_CODES.has(error.code) || error.statusCode === 404;
-      const canRetry = !skipped && !permanentDeliveryError(error) && delivery.attempts < MAX_DELIVERY_ATTEMPTS;
-      delivery.status = skipped ? DELIVERY_STATUS.SKIPPED : canRetry ? DELIVERY_STATUS.QUEUED : DELIVERY_STATUS.FAILED;
-      delivery.errorCode = error.code || 'DELIVERY_ERROR';
-      delivery.errorMessage = String(error.message).slice(0, MAX_DELIVERY_ERROR_LENGTH);
+      const ecosystemFailure = delivery.channel === CHANNELS.WHATSAPP_CLOUD ? metaEcosystemFailure(error) : null;
+      const providerFailure = delivery.channel === CHANNELS.WHATSAPP_CLOUD ? externalMetaFailure(error) : null;
+      if (ecosystemFailure && Number(delivery.automaticRetryAttempts || 0) < 1) {
+        const retryAt = scheduleMetaEcosystemDelivery(delivery, ecosystemFailure);
+        if (delivery._id) externalRetrySchedules.push({ deliveryId: String(delivery._id), retryAt });
+      } else {
+        const canRetry = !oneShotExternalRetry && !ecosystemFailure && !skipped && !permanentDeliveryError(error) && delivery.attempts < MAX_DELIVERY_ATTEMPTS;
+        delivery.status = skipped ? DELIVERY_STATUS.SKIPPED : canRetry ? DELIVERY_STATUS.QUEUED : DELIVERY_STATUS.FAILED;
+        delivery.errorCode = ecosystemFailure?.code || error.code || 'DELIVERY_ERROR';
+        delivery.errorMessage = String(ecosystemFailure?.message || error.message).slice(0, MAX_DELIVERY_ERROR_LENGTH);
+        if (providerFailure) {
+          delivery.externalProvider = providerFailure.provider;
+          delivery.externalErrorCode = providerFailure.code;
+          delivery.externalErrorMessage = providerFailure.message;
+          delivery.externalFailureAt = new Date();
+          delivery.retryNotBefore = undefined;
+        }
+      }
     }
     await persistClaimedDelivery(notification, claim.token, delivery);
     if (delivery.status !== DELIVERY_STATUS.SENT) await recordDeliveryIssues(notification, [delivery]);
@@ -767,9 +960,10 @@ async function processJob({ notificationId, queueContext = {} }) {
   notification.summary = { queued: counts.queued || 0, sent: successfulCount, failed: counts.failed || 0, skipped: counts.skipped || 0 };
   let retrySchedule;
   if (counts.queued) {
-    const highestAttempt = Math.max(...notification.deliveries.filter((delivery) => delivery.status === DELIVERY_STATUS.QUEUED).map((delivery) => delivery.attempts || 1));
+    const queuedDeliveries = notification.deliveries.filter((delivery) => delivery.status === DELIVERY_STATUS.QUEUED);
+    const highestAttempt = Math.max(...queuedDeliveries.map((delivery) => delivery.attempts || 1));
     const delayMs = Math.min(60_000, 2_000 * (2 ** Math.max(0, highestAttempt - 1)));
-    retrySchedule = { highestAttempt, delayMs };
+    retrySchedule = { highestAttempt, delayMs, runAt: Date.now() + delayMs };
     notification.status = NOTIFICATION_STATUS.QUEUED;
     notification.enqueuePending = true;
     notification.queueScheduledAt = undefined;
@@ -789,9 +983,12 @@ async function processJob({ notificationId, queueContext = {} }) {
   notification.errorCode = undefined;
   notification.errorMessage = undefined;
   await saveClaimed(notification, claim.token, { heartbeat: false });
+  for (const pending of externalRetrySchedules) {
+    await scheduleExternalDeliveryRetry(notificationId, pending.deliveryId, pending.retryAt);
+  }
   if (retrySchedule) {
     const scheduling = await scheduleNotification(notificationId, {
-      jobId: notificationId + '-post-batch-' + retrySchedule.highestAttempt,
+      jobId: notificationId + '-post-batch-' + retrySchedule.highestAttempt + '-' + retrySchedule.runAt,
       delayMs: retrySchedule.delayMs
     });
     notification.enqueuePending = !scheduling.scheduled;
@@ -908,6 +1105,46 @@ function queuedRecoveryFilter(cutoff) {
   };
 }
 
+function dueExternalRetryFilter(now = new Date()) {
+  return {
+    deliveries: {
+      $elemMatch: {
+        channel: CHANNELS.WHATSAPP_CLOUD,
+        status: DELIVERY_STATUS.FAILED,
+        externalProvider: 'meta',
+        externalErrorCode: { $in: [...META_ECOSYSTEM_RETRY_CODES].map((code) => 'META_' + code) },
+        automaticRetryAttempts: { $not: { $gte: 1 } },
+        retryNotBefore: { $lte: now }
+      }
+    }
+  };
+}
+
+async function recoverDueExternalRetries(now = new Date()) {
+  const candidates = await Notification.find(dueExternalRetryFilter(now)).select('_id deliveries').lean();
+  let scheduled = 0;
+  for (const notification of candidates) {
+    for (const delivery of notification.deliveries || []) {
+      const due = delivery.channel === CHANNELS.WHATSAPP_CLOUD
+        && delivery.status === DELIVERY_STATUS.FAILED
+        && delivery.externalProvider === 'meta'
+        && META_ECOSYSTEM_RETRY_CODES.has(Number(String(delivery.externalErrorCode || '').replace(/^META_/, '')))
+        && Number(delivery.automaticRetryAttempts || 0) < 1
+        && delivery.retryNotBefore
+        && new Date(delivery.retryNotBefore) <= now;
+      if (!due) continue;
+      const result = await scheduleExternalDeliveryRetry(
+        String(notification._id),
+        String(delivery._id),
+        delivery.retryNotBefore,
+        { jobSuffix: 'recovery-' + Date.now() }
+      );
+      if (result.scheduled) scheduled += 1;
+    }
+  }
+  return { scheduled };
+}
+
 async function recoverStale(maxAgeMs = STALE_PROCESSING_MAX_AGE_MS) {
   const cutoff = new Date(Date.now() - maxAgeMs);
   const stale = await Notification.find(staleProcessingFilter(cutoff)).select('_id').lean();
@@ -953,6 +1190,7 @@ async function recoverStale(maxAgeMs = STALE_PROCESSING_MAX_AGE_MS) {
     if (scheduling.scheduled) queuedRecovered += 1;
   }
   await reconcilePendingCloudReceipts().catch(() => undefined);
+  await recoverDueExternalRetries().catch(() => undefined);
   if (recovered || queuedRecovered) {
     await logsManager.create({
       level: 'warn',
@@ -1044,6 +1282,128 @@ async function listDeliveryIssues(query = {}) {
   return pageResult(items, total, page, limit);
 }
 
+function externalProviderMatch(query = {}) {
+  const match = {
+    'deliveries.externalProvider': 'meta',
+    'deliveries.externalErrorCode': { $regex: '^META_[0-9]+$' }
+  };
+  if (query.errorCode) match['deliveries.externalErrorCode'] = query.errorCode;
+  if (query.status) match['deliveries.status'] = query.status;
+  return match;
+}
+
+async function listExternalProviderIssues(query = {}) {
+  const { page, limit, skip } = parsePagination(query);
+  const deliveryMatch = externalProviderMatch(query);
+  const [result = {}] = await Notification.aggregate([
+    { $unwind: '$deliveries' },
+    { $match: deliveryMatch },
+    { $sort: { 'deliveries.externalFailureAt': -1, 'deliveries.updatedAt': -1 } },
+    {
+      $group: {
+        _id: {
+          provider: '$deliveries.externalProvider',
+          errorCode: '$deliveries.externalErrorCode'
+        },
+        errorMessage: { $first: '$deliveries.externalErrorMessage' },
+        latestAt: { $max: '$deliveries.externalFailureAt' },
+        firstAt: { $min: '$deliveries.externalFailureAt' },
+        affectedDeliveries: { $sum: 1 },
+        contactIds: { $addToSet: '$deliveries.contact' },
+        notificationIds: { $addToSet: '$_id' },
+        pendingAutomaticRetry: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$deliveries.status', DELIVERY_STATUS.FAILED] },
+                  { $lt: [{ $ifNull: ['$deliveries.automaticRetryAttempts', 0] }, 1] },
+                  { $ne: [{ $ifNull: ['$deliveries.retryNotBefore', null] }, null] }
+                ]
+              },
+              1,
+              0
+            ]
+          }
+        },
+        automaticRetryAttempted: {
+          $sum: { $cond: [{ $gte: [{ $ifNull: ['$deliveries.automaticRetryAttempts', 0] }, 1] }, 1, 0] }
+        },
+        currentFailures: {
+          $sum: {
+            $cond: [
+              {
+                $and: [
+                  { $eq: ['$deliveries.status', DELIVERY_STATUS.FAILED] },
+                  { $gte: [{ $ifNull: ['$deliveries.automaticRetryAttempts', 0] }, 1] },
+                  { $eq: ['$deliveries.errorCode', '$deliveries.externalErrorCode'] }
+                ]
+              },
+              1,
+              0
+            ]
+          }
+        },
+        deliveries: {
+          $push: {
+            id: '$deliveries._id',
+            notificationId: '$_id',
+            contactId: '$deliveries.contact',
+            status: '$deliveries.status',
+            errorCode: '$deliveries.errorCode',
+            attempts: { $ifNull: ['$deliveries.attempts', 0] },
+            automaticRetryAttempts: { $ifNull: ['$deliveries.automaticRetryAttempts', 0] },
+            automaticRetryScheduledAt: '$deliveries.automaticRetryScheduledAt',
+            automaticRetryAttemptedAt: '$deliveries.automaticRetryAttemptedAt',
+            retryNotBefore: '$deliveries.retryNotBefore',
+            failureAt: '$deliveries.externalFailureAt'
+          }
+        }
+      }
+    },
+    { $sort: { latestAt: -1, '_id.errorCode': 1 } },
+    {
+      $facet: {
+        items: [
+          { $skip: skip },
+          { $limit: limit },
+          { $set: { deliveries: { $slice: ['$deliveries', MAX_LIST_DELIVERY_SUMMARIES] } } }
+        ],
+        metadata: [{ $count: 'total' }]
+      }
+    }
+  ]);
+  const items = (result.items || []).map((item) => ({
+    id: `${item._id.provider}:${item._id.errorCode}`,
+    provider: item._id.provider,
+    errorCode: item._id.errorCode,
+    errorMessage: item.errorMessage || null,
+    latestAt: item.latestAt || null,
+    firstAt: item.firstAt || null,
+    affectedDeliveries: Number(item.affectedDeliveries || 0),
+    affectedContacts: (item.contactIds || []).length,
+    affectedNotifications: (item.notificationIds || []).length,
+    pendingAutomaticRetry: Number(item.pendingAutomaticRetry || 0),
+    automaticRetryAttempted: Number(item.automaticRetryAttempted || 0),
+    currentFailures: Number(item.currentFailures || 0),
+    deliveries: (item.deliveries || []).map((delivery) => ({
+      ...delivery,
+      id: String(delivery.id),
+      notificationId: String(delivery.notificationId),
+      contactId: String(delivery.contactId),
+      contactPath: '/contacts/' + String(delivery.contactId)
+    })),
+    retryableDeliveryIds: (item.deliveries || [])
+      .filter((delivery) => (
+        delivery.status === DELIVERY_STATUS.FAILED
+        && Number(delivery.automaticRetryAttempts || 0) >= 1
+        && delivery.errorCode === item._id.errorCode
+      ))
+      .map((delivery) => String(delivery.id))
+  }));
+  return pageResult(items, Number(result.metadata?.[0]?.total || 0), page, limit);
+}
+
 async function listDeliveries(notificationId, query = {}) {
   const exists = await Notification.exists({ _id: notificationId });
   if (!exists) throw new ApiError(404, 'Notificacao nao encontrada');
@@ -1079,6 +1439,13 @@ async function listDeliveries(notificationId, query = {}) {
               attempts: { $ifNull: ['$deliveries.attempts', 0] },
               errorCode: { $ifNull: ['$deliveries.errorCode', null] },
               errorMessage: { $ifNull: ['$deliveries.errorMessage', null] },
+              externalProvider: { $ifNull: ['$deliveries.externalProvider', null] },
+              externalErrorCode: { $ifNull: ['$deliveries.externalErrorCode', null] },
+              externalFailureAt: { $ifNull: ['$deliveries.externalFailureAt', null] },
+              retryNotBefore: { $ifNull: ['$deliveries.retryNotBefore', null] },
+              automaticRetryScheduledAt: { $ifNull: ['$deliveries.automaticRetryScheduledAt', null] },
+              automaticRetryAttemptedAt: { $ifNull: ['$deliveries.automaticRetryAttemptedAt', null] },
+              automaticRetryAttempts: { $ifNull: ['$deliveries.automaticRetryAttempts', 0] },
               sentAt: { $ifNull: ['$deliveries.sentAt', null] },
               createdAt: '$deliveryCreatedAt',
               updatedAt: { $ifNull: ['$deliveries.updatedAt', '$deliveryCreatedAt'] }
@@ -1120,7 +1487,10 @@ async function retry(id) {
   const notification = await Notification.findById(id);
   if (!notification) throw new ApiError(404, 'Notificacao nao encontrada');
   for (const delivery of notification.deliveries) {
-    if (delivery.status === DELIVERY_STATUS.FAILED || delivery.status === DELIVERY_STATUS.SKIPPED && CHANNEL_SKIP_CODES.has(delivery.errorCode)) {
+    const waitingForExternalRetry = delivery.externalProvider === 'meta'
+      && delivery.retryNotBefore
+      && Number(delivery.automaticRetryAttempts || 0) < 1;
+    if (!waitingForExternalRetry && (delivery.status === DELIVERY_STATUS.FAILED || delivery.status === DELIVERY_STATUS.SKIPPED && CHANNEL_SKIP_CODES.has(delivery.errorCode))) {
       delivery.status = DELIVERY_STATUS.QUEUED;
       delivery.attempts = 0;
       delivery.errorCode = undefined;
@@ -1147,6 +1517,85 @@ async function retry(id) {
   notification.enqueuePending = false;
   notification.queueScheduledAt = scheduling.scheduledAt;
   return serializeNotification(notification, { includeDeliveries: false });
+}
+
+function prepareManualExternalRetry(notification, delivery) {
+  if (!delivery || delivery.status !== DELIVERY_STATUS.FAILED || delivery.externalProvider !== 'meta') return false;
+  if (delivery.errorCode !== delivery.externalErrorCode || !/^META_[0-9]+$/.test(String(delivery.errorCode || ''))) return false;
+  if (Number(delivery.automaticRetryAttempts || 0) < 1) return false;
+  delivery.status = DELIVERY_STATUS.QUEUED;
+  delivery.errorCode = undefined;
+  delivery.errorMessage = undefined;
+  delivery.retryNotBefore = undefined;
+  notification.status = NOTIFICATION_STATUS.QUEUED;
+  notification.enqueuePending = true;
+  notification.queueScheduledAt = undefined;
+  notification.completedAt = undefined;
+  notification.errorCode = undefined;
+  notification.errorMessage = undefined;
+  return true;
+}
+
+async function retryExternalDelivery(notificationId, deliveryId) {
+  const notification = await Notification.findById(notificationId);
+  if (!notification) throw new ApiError(404, 'Notificacao nao encontrada');
+  const delivery = notification.deliveries.id
+    ? notification.deliveries.id(deliveryId)
+    : notification.deliveries.find((item) => String(item._id) === String(deliveryId));
+  if (!delivery) throw new ApiError(404, 'Entrega nao encontrada');
+  if (!prepareManualExternalRetry(notification, delivery)) {
+    throw new ApiError(409, 'O retry manual fica disponivel apos a tentativa automatica unica', null, 'EXTERNAL_RETRY_NOT_AVAILABLE');
+  }
+  notification.summary = summarizeDeliveries(notification.deliveries);
+  await notification.save();
+  const scheduling = await scheduleNotification(String(notification._id), {
+    jobId: `${notification._id}-manual-external-${deliveryId}-${Date.now()}`
+  });
+  if (!scheduling.scheduled) {
+    throw new ApiError(503, 'Fila indisponivel; retry manual pode ser solicitado novamente', { recoverable: true }, 'QUEUE_UNAVAILABLE');
+  }
+  return { notificationId: String(notification._id), delivery: deliverySummary(delivery) };
+}
+
+async function retryExternalDeliveryById(deliveryId) {
+  const notification = await Notification.findOne({ 'deliveries._id': deliveryId }).select('_id');
+  if (!notification) throw new ApiError(404, 'Entrega externa nao encontrada');
+  return retryExternalDelivery(String(notification._id), deliveryId);
+}
+
+async function retryExternalProviderIssue(errorCode) {
+  const candidates = await Notification.find({
+    deliveries: {
+      $elemMatch: {
+        status: DELIVERY_STATUS.FAILED,
+        externalProvider: 'meta',
+        externalErrorCode: errorCode,
+        errorCode,
+        automaticRetryAttempts: { $gte: 1 }
+      }
+    }
+  });
+  let queued = 0;
+  const notificationIds = [];
+  for (const notification of candidates) {
+    let changed = false;
+    for (const delivery of notification.deliveries || []) {
+      if (delivery.externalErrorCode !== errorCode) continue;
+      if (prepareManualExternalRetry(notification, delivery)) {
+        changed = true;
+        queued += 1;
+      }
+    }
+    if (!changed) continue;
+    notification.summary = summarizeDeliveries(notification.deliveries);
+    await notification.save();
+    const scheduling = await scheduleNotification(String(notification._id), {
+      jobId: `${notification._id}-manual-external-row-${Date.now()}`
+    });
+    if (scheduling.scheduled) notificationIds.push(String(notification._id));
+  }
+  if (!queued) throw new ApiError(409, 'Nao ha falhas externas elegiveis para retry manual', null, 'EXTERNAL_RETRY_NOT_AVAILABLE');
+  return { errorCode, queued, notifications: notificationIds.length, notificationIds };
 }
 
 async function cancel(id) {
@@ -1405,7 +1854,15 @@ function successDeliveryExpression(providerStatus) {
   };
 }
 
-function failedDeliveryExpression(status, failure) {
+function failedDeliveryExpression(status, failure, options = {}) {
+  const externalFields = options.externalProvider ? {
+    externalProvider: { $literal: options.externalProvider },
+    externalErrorCode: { $literal: failure.code },
+    externalErrorMessage: { $literal: failure.message.slice(0, MAX_DELIVERY_ERROR_LENGTH) },
+    externalFailureAt: '$$NOW',
+    retryNotBefore: options.retryAt ? { $literal: options.retryAt } : null,
+    automaticRetryScheduledAt: options.retryAt ? { $literal: options.retryAt } : '$$delivery.automaticRetryScheduledAt'
+  } : {};
   return {
     $mergeObjects: [
       '$$delivery',
@@ -1413,7 +1870,8 @@ function failedDeliveryExpression(status, failure) {
         status,
         errorCode: { $literal: failure.code },
         errorMessage: { $literal: failure.message.slice(0, MAX_DELIVERY_ERROR_LENGTH) },
-        updatedAt: '$$NOW'
+        updatedAt: '$$NOW',
+        ...externalFields
       }
     ]
   };
@@ -1427,30 +1885,55 @@ async function reconcileCloudReceipt(receipt = {}) {
   }
   let notification;
   let retry = false;
+  let retryKind = null;
+  let retryAt = null;
   let failure = null;
   if (providerStatus === 'failed') {
     failure = cloudReceiptFailure(receipt);
     const changeableStatuses = {
       $nin: [DELIVERY_STATUS.QUEUED, DELIVERY_STATUS.PROCESSING, DELIVERY_STATUS.DELIVERED, DELIVERY_STATUS.READ]
     };
-    if (failure.transient) {
+    const ecosystemLimited = META_ECOSYSTEM_RETRY_CODES.has(Number(String(failure.code).replace(/^META_/, '')));
+    if (ecosystemLimited) {
+      retryAt = new Date(Date.now() + META_ECOSYSTEM_RETRY_DELAY_MS);
+      notification = await Notification.findOneAndUpdate(
+        cloudReceiptFilter(providerMessageId, {
+          status: changeableStatuses,
+          automaticRetryAttempts: { $not: { $gte: 1 } },
+          retryNotBefore: { $in: [null] }
+        }),
+        cloudReceiptUpdatePipeline(
+          providerMessageId,
+          failedDeliveryExpression(DELIVERY_STATUS.FAILED, failure, { externalProvider: 'meta', retryAt }),
+          { failure }
+        ),
+        { new: true }
+      );
+      retry = Boolean(notification);
+      retryKind = retry ? 'meta_ecosystem_24h' : null;
+    } else if (failure.transient) {
       notification = await Notification.findOneAndUpdate(
         cloudReceiptFilter(providerMessageId, { status: changeableStatuses, attempts: { $lt: MAX_DELIVERY_ATTEMPTS } }),
         cloudReceiptUpdatePipeline(
           providerMessageId,
-          failedDeliveryExpression(DELIVERY_STATUS.QUEUED, failure),
+          failedDeliveryExpression(DELIVERY_STATUS.QUEUED, failure, { externalProvider: 'meta' }),
           { retryRequested: true, failure }
         ),
         { new: true }
       );
       retry = Boolean(notification);
+      retryKind = retry ? 'transient' : null;
     }
     if (!notification) {
+      const finalFailureFilter = {
+        status: changeableStatuses,
+        ...(ecosystemLimited ? { automaticRetryAttempts: { $gte: 1 } } : {})
+      };
       notification = await Notification.findOneAndUpdate(
-        cloudReceiptFilter(providerMessageId, { status: changeableStatuses }),
+        cloudReceiptFilter(providerMessageId, finalFailureFilter),
         cloudReceiptUpdatePipeline(
           providerMessageId,
-          failedDeliveryExpression(DELIVERY_STATUS.FAILED, failure),
+          failedDeliveryExpression(DELIVERY_STATUS.FAILED, failure, { externalProvider: 'meta' }),
           { failure }
         ),
         { new: true }
@@ -1477,22 +1960,33 @@ async function reconcileCloudReceipt(receipt = {}) {
 
   let retryScheduled = false;
   if (retry) {
-    const delayMs = Math.min(60_000, 2_000 * (2 ** Math.max(0, Number(delivery?.attempts || 1) - 1)));
-    const receiptJobKey = createHash('sha256')
-      .update(String(receipt.revisionToken || providerMessageId))
-      .digest('hex')
-      .slice(0, 12);
-    const deliveryJobKey = String(delivery?._id || 'delivery').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32);
-    const scheduling = await scheduleNotification(String(notification._id), {
-      jobId: String(notification._id) + '-cloud-receipt-' + deliveryJobKey + '-' + Number(delivery?.attempts || 1) + '-' + receiptJobKey,
-      delayMs
-    });
+    let scheduling;
+    if (retryKind === 'meta_ecosystem_24h') {
+      scheduling = await scheduleExternalDeliveryRetry(
+        String(notification._id),
+        String(delivery?._id),
+        retryAt
+      );
+    } else {
+      const delayMs = Math.min(60_000, 2_000 * (2 ** Math.max(0, Number(delivery?.attempts || 1) - 1)));
+      const receiptJobKey = createHash('sha256')
+        .update(String(receipt.revisionToken || providerMessageId))
+        .digest('hex')
+        .slice(0, 12);
+      const deliveryJobKey = String(delivery?._id || 'delivery').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32);
+      scheduling = await scheduleNotification(String(notification._id), {
+        jobId: String(notification._id) + '-cloud-receipt-' + deliveryJobKey + '-' + Number(delivery?.attempts || 1) + '-' + receiptJobKey,
+        delayMs
+      });
+    }
     retryScheduled = scheduling.scheduled;
-    notification.enqueuePending = !scheduling.scheduled;
-    notification.queueScheduledAt = scheduling.scheduledAt;
-    if (!scheduling.scheduled) {
-      notification.errorCode = 'QUEUE_UNAVAILABLE';
-      notification.errorMessage = scheduling.errorMessage;
+    if (retryKind !== 'meta_ecosystem_24h') {
+      notification.enqueuePending = !scheduling.scheduled;
+      notification.queueScheduledAt = scheduling.scheduledAt;
+      if (!scheduling.scheduled) {
+        notification.errorCode = 'QUEUE_UNAVAILABLE';
+        notification.errorMessage = scheduling.errorMessage;
+      }
     }
   }
   return {
@@ -1501,6 +1995,8 @@ async function reconcileCloudReceipt(receipt = {}) {
     providerStatus,
     deliveryStatus: delivery?.status || (retry ? DELIVERY_STATUS.QUEUED : undefined),
     retryScheduled,
+    retryKind,
+    retryAt,
     summary: counts,
     errors: failure?.errors || []
   };
@@ -1513,9 +2009,13 @@ module.exports = {
   getById,
   list,
   listDeliveryIssues,
+  listExternalProviderIssues,
   listDeliveries,
   stats,
   retry,
+  retryExternalDelivery,
+  retryExternalDeliveryById,
+  retryExternalProviderIssue,
   cancel,
   buildDeliveries,
   channelAvailability,
@@ -1533,7 +2033,12 @@ module.exports = {
   markCloudReceiptProcessed,
   reconcileStoredCloudReceipts,
   reconcilePendingCloudReceipts,
+  recoverDueExternalRetries,
+  dueExternalRetryFilter,
+  scheduleExternalDeliveryRetry,
+  activateExternalDeliveryRetry,
   MAX_NOTIFICATION_RECIPIENTS,
   MAX_NOTIFICATION_DELIVERIES,
-  MAX_LIST_DELIVERY_SUMMARIES
+  MAX_LIST_DELIVERY_SUMMARIES,
+  META_ECOSYSTEM_RETRY_DELAY_MS
 };

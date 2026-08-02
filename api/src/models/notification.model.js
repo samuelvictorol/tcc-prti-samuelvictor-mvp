@@ -11,6 +11,14 @@ const deliverySchema = new mongoose.Schema({
   providerMessageId: { type: String },
   errorCode: { type: String },
   errorMessage: { type: String },
+  externalProvider: { type: String },
+  externalErrorCode: { type: String },
+  externalErrorMessage: { type: String },
+  externalFailureAt: { type: Date },
+  retryNotBefore: { type: Date },
+  automaticRetryScheduledAt: { type: Date },
+  automaticRetryAttemptedAt: { type: Date },
+  automaticRetryAttempts: { type: Number, default: 0 },
   sentAt: { type: Date }
 }, { _id: true, timestamps: true });
 
@@ -54,5 +62,11 @@ notificationSchema.index({ createdAt: -1 });
 notificationSchema.index({ status: 1, processingHeartbeatAt: 1 });
 notificationSchema.index({ status: 1, enqueuePending: 1, updatedAt: 1 });
 notificationSchema.index({ 'deliveries.channel': 1, 'deliveries.status': 1, createdAt: -1 });
+notificationSchema.index({
+  'deliveries.externalProvider': 1,
+  'deliveries.externalErrorCode': 1,
+  'deliveries.externalFailureAt': -1
+});
+notificationSchema.index({ 'deliveries.retryNotBefore': 1, status: 1 });
 
 module.exports = mongoose.models.Notification || mongoose.model('Notification', notificationSchema);

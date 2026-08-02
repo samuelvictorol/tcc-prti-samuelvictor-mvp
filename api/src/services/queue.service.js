@@ -84,11 +84,13 @@ async function initializeQueue() {
 
 async function enqueueNotification(data) {
   const delay = Math.max(0, Math.min(Number(data.delayMs) || 0, 24 * 60 * 60 * 1000));
+  const attempts = Math.max(1, Math.min(Number(data.attempts) || 4, 10));
   const payload = { ...data };
   delete payload.delayMs;
+  delete payload.attempts;
   if (queue) {
     const job = await queue.add('dispatch', payload, {
-      attempts: 4,
+      attempts,
       backoff: { type: 'exponential', delay: 2_000 },
       delay,
       removeOnComplete: 500,
@@ -105,7 +107,7 @@ async function enqueueNotification(data) {
       lockToken: randomUUID(),
       attemptsStarted: 1,
       attemptsMade: 0,
-      maxAttempts: 1,
+      maxAttempts: attempts,
       stalledCounter: 0
     }
   }).catch((error) => console.error('[inline notification]', error));

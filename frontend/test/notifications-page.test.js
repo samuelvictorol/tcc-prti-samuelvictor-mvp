@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 
 import {
+  isExternalMetaDeliveryBlock,
   mergeNotificationVariableDefinitions,
+  normalizeMetaDeliveryBlocks,
   notificationDeliveryDetail,
   notificationGlobalChannelOptions,
   notificationTemplatePreview,
@@ -252,6 +254,135 @@ describe('compositor amigável de notificações', () => {
     expect(source).toContain('overflow-x: clip')
     expect(source).toContain('.composer-tabs {')
     expect(source).toContain('overflow-x: auto')
+    expect(source).toContain(':grid="$q.screen.lt.md"')
+  })
+
+  it('reconhece somente bloqueios externos da Meta e exclui falhas internas', () => {
+    expect(isExternalMetaDeliveryBlock({
+      channel: 'whatsapp_cloud',
+      errorCode: 'META_131049',
+      provider: 'meta',
+    })).toBe(true)
+    expect(isExternalMetaDeliveryBlock({
+      channel: 'whatsapp_cloud',
+      errorCode: 'INTERNAL_ERROR_131049',
+      provider: 'notify-flow',
+    })).toBe(false)
+    expect(isExternalMetaDeliveryBlock({
+      channel: 'email',
+      errorCode: 'META_131049',
+      provider: 'meta',
+    })).toBe(false)
+  })
+
+  it('agrupa bloqueios equivalentes da Meta preservando usuários, entregas e retry de 24h', () => {
+    const blocks = normalizeMetaDeliveryBlocks({
+      items: [
+        {
+          id: 'delivery-1',
+          channel: 'whatsapp_cloud',
+          provider: 'meta',
+          errorCode: 'META_131049',
+          errorCategory: 'engagement',
+          errorMessage: 'In order to maintain a healthy ecosystem engagement, the message failed to be delivered.',
+          contactId: 'contact-1',
+          contactName: 'Ana',
+          automaticRetryAt: '2026-08-03T15:00:00.000Z',
+          automaticRetryStatus: 'scheduled',
+          updatedAt: '2026-08-02T15:00:00.000Z',
+        },
+        {
+          id: 'delivery-2',
+          channel: 'whatsapp_cloud',
+          provider: 'meta',
+          errorCode: '131049',
+          errorCategory: 'engagement',
+          contactId: 'contact-2',
+          contactName: 'Bruno',
+          automaticRetryAt: '2026-08-03T15:05:00.000Z',
+          automaticRetryStatus: 'scheduled',
+          updatedAt: '2026-08-02T15:05:00.000Z',
+        },
+        {
+          id: 'delivery-internal',
+          channel: 'whatsapp_cloud',
+          provider: 'notify-flow',
+          errorCode: 'INTERNAL_ERROR_50001',
+        },
+      ],
+    })
+
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0]).toEqual(expect.objectContaining({
+      code: 'META_131049',
+      deliveryCount: 2,
+      contactCount: 2,
+      deliveryIds: ['delivery-1', 'delivery-2'],
+      automaticRetryAt: '2026-08-03T15:00:00.000Z',
+      automaticRetryStatus: 'scheduled',
+    }))
+    expect(blocks[0].contacts.map((contact) => contact.name)).toEqual(['Ana', 'Bruno'])
+  })
+
+  it('normaliza o resumo agregado da API e libera retry manual somente após o automático', () => {
+    const [block] = normalizeMetaDeliveryBlocks({
+      items: [{
+        id: 'meta:META_131049',
+        provider: 'meta',
+        errorCode: 'META_131049',
+        errorMessage: 'Bloqueio de engajamento',
+        affectedDeliveries: 12,
+        affectedContacts: 10,
+        pendingAutomaticRetry: 1,
+        automaticRetryAttempted: 2,
+        currentFailures: 2,
+        latestAt: '2026-08-02T18:00:00.000Z',
+        deliveries: [
+          {
+            id: 'delivery-waiting',
+            notificationId: 'notification-a',
+            contactId: 'contact-a',
+            status: 'failed',
+            automaticRetryAttempts: 0,
+            retryNotBefore: '2026-08-03T18:00:00.000Z',
+          },
+          {
+            id: 'delivery-manual',
+            notificationId: 'notification-b',
+            contactId: 'contact-b',
+            status: 'failed',
+            automaticRetryAttempts: 1,
+            automaticRetryAttemptedAt: '2026-08-03T18:05:00.000Z',
+          },
+        ],
+      }],
+    })
+
+    expect(block).toEqual(expect.objectContaining({
+      deliveryCount: 12,
+      contactCount: 10,
+      automaticRetryStatus: 'scheduled',
+      automaticRetryAttempted: true,
+      retryable: true,
+      deliveryIds: ['delivery-manual'],
+      updatedAt: '2026-08-02T18:00:00.000Z',
+    }))
+    expect(block.deliveries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'delivery-waiting', retryable: false }),
+      expect.objectContaining({ id: 'delivery-manual', retryable: true }),
+    ]))
+  })
+
+  it('exibe painel responsivo, detalhes e retry manual sem esconder a regra automática única', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
+
+    expect(source).toContain("http.get('/notifications/meta-delivery-blocks'")
+    expect(source).toContain('`/notifications/external-provider-issues/${encodeURIComponent(block.code)}/retry`')
+    expect(source).toContain('Bloqueios temporários da Meta')
+    expect(source).toContain('uma única tentativa automática após 24 horas')
+    expect(source).toContain('Tentar novamente')
+    expect(source).toContain('Erros internos do Notify Flow não aparecem aqui')
+    expect(source).toContain('v-model="metaBlockDetailDialog"')
     expect(source).toContain(':grid="$q.screen.lt.md"')
   })
 })

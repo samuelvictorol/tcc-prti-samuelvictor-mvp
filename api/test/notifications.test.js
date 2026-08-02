@@ -1405,3 +1405,193 @@ test('ProviderReceipt so marca como processada a revisao que foi reconciliada', 
   assert.equal(await notificationsManager.markCloudReceiptProcessed('wamid.versioned', delivered.revisionToken), false);
   assert.equal(await notificationsManager.markCloudReceiptProcessed('wamid.versioned', read.revisionToken), true);
 });
+
+test('META_131049 agenda uma unica tentativa isolada para 24 horas sem reabrir o lote', async (context) => {
+  const originals = {
+    findOneAndUpdate: Notification.findOneAndUpdate,
+    exists: Notification.exists,
+    enqueue: queueService.enqueueNotification
+  };
+  context.after(() => {
+    Notification.findOneAndUpdate = originals.findOneAndUpdate;
+    Notification.exists = originals.exists;
+    queueService.enqueueNotification = originals.enqueue;
+  });
+  const delivery = {
+    _id: '507f1f77bcf86cd799439091', channel: 'whatsapp_cloud', status: 'failed', attempts: 1,
+    providerMessageId: 'wamid.ecosystem', automaticRetryAttempts: 0
+  };
+  const notification = {
+    _id: '507f1f77bcf86cd799439099', status: 'failed', deliveries: [delivery],
+    summary: { queued: 0, sent: 0, failed: 1, skipped: 0 }
+  };
+  let atomicPipeline;
+  Notification.findOneAndUpdate = async (_filter, pipeline) => {
+    atomicPipeline = pipeline;
+    return notification;
+  };
+  Notification.exists = async () => null;
+  let queued;
+  queueService.enqueueNotification = async (input) => { queued = input; return { mode: 'test' }; };
+  const startedAt = Date.now();
+
+  const result = await notificationsManager.reconcileCloudReceipt({
+    id: 'wamid.ecosystem', status: 'failed',
+    errors: [{ code: 131049, error_data: { details: 'Healthy ecosystem engagement' } }]
+  });
+
+  assert.equal(result.retryKind, 'meta_ecosystem_24h');
+  assert.equal(result.retryScheduled, true);
+  assert.equal(queued.attempts, 1);
+  assert.equal(queued.externalRetryDeliveryId, String(delivery._id));
+  assert.ok(queued.delayMs >= notificationsManager.META_ECOSYSTEM_RETRY_DELAY_MS - 1000);
+  assert.ok(new Date(result.retryAt).getTime() >= startedAt + notificationsManager.META_ECOSYSTEM_RETRY_DELAY_MS);
+  assert.equal(atomicPipeline[2].$set.status.$switch.default, 'failed');
+});
+
+test('receipt duplicado META_131049 nao remove o cooldown nem agenda outro job', async (context) => {
+  const originals = {
+    findOneAndUpdate: Notification.findOneAndUpdate,
+    exists: Notification.exists,
+    enqueue: queueService.enqueueNotification
+  };
+  context.after(() => {
+    Notification.findOneAndUpdate = originals.findOneAndUpdate;
+    Notification.exists = originals.exists;
+    queueService.enqueueNotification = originals.enqueue;
+  });
+  const notification = {
+    _id: '507f1f77bcf86cd799439099', status: 'failed',
+    deliveries: [{
+      _id: '507f1f77bcf86cd799439091', channel: 'whatsapp_cloud', status: 'failed', attempts: 1,
+      providerMessageId: 'wamid.ecosystem-duplicate', automaticRetryAttempts: 0
+    }],
+    summary: { queued: 0, sent: 0, failed: 1, skipped: 0 }
+  };
+  let transitions = 0;
+  Notification.findOneAndUpdate = async () => (++transitions === 1 ? notification : null);
+  Notification.exists = async (filter) => filter.status === 'processing' ? null : { _id: notification._id };
+  let jobs = 0;
+  queueService.enqueueNotification = async () => { jobs += 1; return { mode: 'test' }; };
+  const receipt = { id: 'wamid.ecosystem-duplicate', status: 'failed', errors: [{ code: 131049 }] };
+
+  const first = await notificationsManager.reconcileCloudReceipt(receipt);
+  const duplicate = await notificationsManager.reconcileCloudReceipt(receipt);
+
+  assert.equal(first.retryScheduled, true);
+  assert.equal(duplicate.ignored, true);
+  assert.equal(jobs, 1);
+});
+
+test('claim do retry Meta e atomico por delivery e incrementa a tentativa unica', async (context) => {
+  const original = Notification.findOneAndUpdate;
+  context.after(() => { Notification.findOneAndUpdate = original; });
+  let filter;
+  let pipeline;
+  Notification.findOneAndUpdate = async (receivedFilter, receivedPipeline) => {
+    filter = receivedFilter;
+    pipeline = receivedPipeline;
+    return { _id: receivedFilter._id };
+  };
+
+  await notificationsManager.activateExternalDeliveryRetry(
+    '507f1f77bcf86cd799439099',
+    '507f1f77bcf86cd799439091'
+  );
+
+  assert.equal(filter.deliveries.$elemMatch.status, 'failed');
+  assert.equal(filter.deliveries.$elemMatch.externalErrorCode.$in[0], 'META_131049');
+  assert.deepEqual(filter.deliveries.$elemMatch.automaticRetryAttempts, { $not: { $gte: 1 } });
+  const selected = pipeline[0].$set.deliveries.$map.in.$cond[1].$mergeObjects[1];
+  assert.equal(selected.status, 'queued');
+  assert.deepEqual(selected.automaticRetryAttempts.$add[1], 1);
+});
+
+test('retry comum nao antecipa bloqueio Meta que ainda aguarda 24 horas', async (context) => {
+  const original = Notification.findById;
+  context.after(() => { Notification.findById = original; });
+  const fake = {
+    _id: '507f1f77bcf86cd799439099',
+    deliveries: [{
+      status: 'failed', errorCode: 'META_131049', externalProvider: 'meta',
+      retryNotBefore: new Date(Date.now() + 60_000), automaticRetryAttempts: 0
+    }]
+  };
+  Notification.findById = async () => fake;
+  await assert.rejects(
+    notificationsManager.retry(fake._id),
+    (error) => error.statusCode === 409
+  );
+  assert.equal(fake.deliveries[0].status, 'failed');
+});
+
+test('retry manual por row reabre somente falhas Meta que ja consumiram a tentativa automatica', async (context) => {
+  const originals = {
+    find: Notification.find,
+    updateOne: Notification.updateOne,
+    enqueue: queueService.enqueueNotification
+  };
+  context.after(() => {
+    Notification.find = originals.find;
+    Notification.updateOne = originals.updateOne;
+    queueService.enqueueNotification = originals.enqueue;
+  });
+  const notification = {
+    _id: '507f1f77bcf86cd799439099', status: 'failed',
+    deliveries: [
+      { _id: '507f1f77bcf86cd799439091', status: 'failed', errorCode: 'META_131049', externalProvider: 'meta', externalErrorCode: 'META_131049', automaticRetryAttempts: 1 },
+      { _id: '507f1f77bcf86cd799439092', status: 'failed', externalProvider: 'meta', externalErrorCode: 'META_131049', automaticRetryAttempts: 0, retryNotBefore: new Date(Date.now() + 60_000) }
+    ],
+    async save() {},
+    toObject() { return this; }
+  };
+  Notification.find = async () => [notification];
+  Notification.updateOne = async () => ({ matchedCount: 1 });
+  let jobs = 0;
+  queueService.enqueueNotification = async () => { jobs += 1; return { mode: 'test' }; };
+
+  const result = await notificationsManager.retryExternalProviderIssue('META_131049');
+
+  assert.equal(result.queued, 1);
+  assert.equal(jobs, 1);
+  assert.equal(notification.deliveries[0].status, 'queued');
+  assert.equal(notification.deliveries[1].status, 'failed');
+});
+
+test('tabela externa agrupa somente erros Meta e expoe todos os retries manuais elegiveis', async (context) => {
+  const original = Notification.aggregate;
+  context.after(() => { Notification.aggregate = original; });
+  let pipeline;
+  Notification.aggregate = async (receivedPipeline) => {
+    pipeline = receivedPipeline;
+    return [{
+      items: [{
+        _id: { provider: 'meta', errorCode: 'META_131049' },
+        errorMessage: 'Healthy ecosystem engagement',
+        affectedDeliveries: 30,
+        contactIds: ['507f1f77bcf86cd799439011'],
+        notificationIds: ['507f1f77bcf86cd799439099'],
+        pendingAutomaticRetry: 1,
+        automaticRetryAttempted: 1,
+        currentFailures: 1,
+        deliveries: [{
+          id: '507f1f77bcf86cd799439091',
+          notificationId: '507f1f77bcf86cd799439099',
+          contactId: '507f1f77bcf86cd799439011',
+          status: 'failed',
+          errorCode: 'META_131049',
+          automaticRetryAttempts: 1
+        }]
+      }],
+      metadata: [{ total: 1 }]
+    }];
+  };
+
+  const result = await notificationsManager.listExternalProviderIssues({ page: 1, limit: 20 });
+
+  assert.equal(result.items[0].provider, 'meta');
+  assert.equal(result.items[0].affectedDeliveries, 30);
+  assert.deepEqual(result.items[0].retryableDeliveryIds, ['507f1f77bcf86cd799439091']);
+  const sliceStage = pipeline.find((stage) => stage.$facet).$facet.items.at(-1);
+  assert.equal(sliceStage.$set.deliveries.$slice[1], notificationsManager.MAX_LIST_DELIVERY_SUMMARIES);
+});

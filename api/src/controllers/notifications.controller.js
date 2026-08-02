@@ -11,6 +11,9 @@ async function list(req, res) {
 async function listDeliveryIssues(req, res) {
   res.json({ success: true, data: await notificationsManager.listDeliveryIssues(req.validated.query) });
 }
+async function listExternalProviderIssues(req, res) {
+  res.json({ success: true, data: await notificationsManager.listExternalProviderIssues(req.validated.query) });
+}
 async function listDeliveries(req, res) {
   res.json({
     success: true,
@@ -29,8 +32,42 @@ async function stats(_req, res) {
 async function retry(req, res) {
   res.status(202).json({ success: true, data: await notificationsManager.retry(req.validated.params.id) });
 }
+async function retryExternalDelivery(req, res) {
+  res.status(202).json({
+    success: true,
+    data: await notificationsManager.retryExternalDelivery(
+      req.validated.params.id,
+      req.validated.params.deliveryId
+    )
+  });
+}
+async function retryExternalDeliveryById(req, res) {
+  res.status(202).json({
+    success: true,
+    data: await notificationsManager.retryExternalDeliveryById(req.validated.params.deliveryId)
+  });
+}
+async function retryExternalProviderIssue(req, res) {
+  res.status(202).json({
+    success: true,
+    data: await notificationsManager.retryExternalProviderIssue(req.validated.params.errorCode)
+  });
+}
 async function cancel(req, res) {
   res.json({ success: true, data: await notificationsManager.cancel(req.validated.params.id) });
 }
 
-module.exports = { create, list, listDeliveryIssues, listDeliveries, get, stats, retry, cancel };
+module.exports = {
+  create,
+  list,
+  listDeliveryIssues,
+  listExternalProviderIssues,
+  listDeliveries,
+  get,
+  stats,
+  retry,
+  retryExternalDelivery,
+  retryExternalDeliveryById,
+  retryExternalProviderIssue,
+  cancel
+};
