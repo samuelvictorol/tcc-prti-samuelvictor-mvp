@@ -478,6 +478,209 @@ function resolvedParameterValue(variables, parameter) {
   return value;
 }
 
+function previewText(value, maxLength = 4096) {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
+}
+
+function previewParameterValue(parameter, variables = {}) {
+  const value = resolvedParameterValue(variables, parameter);
+  if (parameter.type === 'text') return previewText(typeof value === 'object' ? value.text : value);
+  if (parameter.type === 'currency') {
+    if (typeof value !== 'object') return previewText(value);
+    return previewText(value.fallbackValue ?? value.fallback_value);
+  }
+  if (parameter.type === 'date_time') {
+    if (typeof value !== 'object') return previewText(value);
+    return previewText(value.fallbackValue ?? value.fallback_value);
+  }
+  if (['image', 'document', 'video'].includes(parameter.type)) {
+    const source = typeof value === 'object' ? value : { link: value };
+    const link = previewText(source.link, 4096);
+    return {
+      type: parameter.type,
+      url: link && /^https:\/\//i.test(link) ? link : null,
+      filename: parameter.type === 'document'
+        ? previewText(source.filename || parameter.filename || parameter.uploadedFilename, 240)
+        : null
+    };
+  }
+  return null;
+}
+
+function interpolatePreviewText(text, parameters, variables) {
+  let output = previewText(text, 10_000);
+  if (!output) return null;
+  parameters.forEach((parameter, index) => {
+    const value = previewParameterValue(parameter, variables);
+    if (typeof value !== 'string' || !value) return;
+    const tokens = [String(index + 1), parameter.key, parameter.parameterName].filter(Boolean);
+    for (const token of tokens) output = output.replaceAll('{{' + token + '}}', value);
+  });
+  return output.slice(0, 10_000);
+}
+
+function normalizeTemplatePreview(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const name = previewText(input.name, 512);
+  if (!name) return null;
+  const languageCode = previewText(input.languageCode, 20);
+  const mediaInput = input.header?.media;
+  const mediaType = previewText(mediaInput?.type, 20);
+  const mediaUrl = previewText(mediaInput?.url, 4096);
+  const media = mediaInput && ['image', 'video', 'document'].includes(mediaType)
+    ? {
+        type: mediaType,
+        url: mediaUrl && /^https:\/\//i.test(mediaUrl) ? mediaUrl : null,
+        filename: mediaType === 'document' ? previewText(mediaInput.filename, 240) : null
+      }
+    : null;
+  const headerType = previewText(input.header?.type, 20);
+  const header = input.header && ['text', 'image', 'video', 'document'].includes(headerType)
+    ? {
+        type: headerType,
+        text: previewText(input.header.text, 1024),
+        media
+      }
+    : null;
+  const bodyText = previewText(input.body?.text, 10_000);
+  const footerText = previewText(input.footer?.text, 1000);
+  const buttons = Array.isArray(input.buttons) ? input.buttons.slice(0, 10).map((button, index) => {
+    const type = previewText(button?.type, 40) || 'url';
+    const url = previewText(button?.url, 4096);
+    return {
+      index: String(button?.index ?? index).slice(0, 2),
+      type,
+      text: previewText(button?.text, 80),
+      // Somente o destino HTTPS aprovado e necessario para a previa. Payloads
+      // de quick reply, OTP e copy code nunca sao expostos ao cliente web.
+      url: type === 'url' && url && /^https:\/\//i.test(url) ? url : null
+    };
+  }) : [];
+  return {
+    version: 1,
+    name,
+    languageCode,
+    header,
+    body: bodyText ? { text: bodyText } : null,
+    footer: footerText ? { text: footerText } : null,
+    buttons
+  };
+}
+
+function buildCustomTemplatePreview(customTemplate) {
+  const builder = normalizeBuilder(customTemplate.builder);
+  const variables = customTemplate.variables || {};
+  const headerComponent = builder.components.find((component) => component.type === 'header');
+  const bodyComponent = builder.components.find((component) => component.type === 'body');
+  const footerComponent = builder.components.find((component) => component.type === 'footer');
+  const headerParameter = headerComponent?.parameters?.[0];
+  const headerValue = headerParameter ? previewParameterValue(headerParameter, variables) : null;
+  const headerType = headerParameter?.type || null;
+  const header = headerComponent ? {
+    type: headerType || 'text',
+    text: headerType === 'text'
+      ? interpolatePreviewText(headerComponent.text || '{{1}}', headerComponent.parameters, variables)
+      : null,
+    media: headerValue && typeof headerValue === 'object' ? headerValue : null
+  } : null;
+  const buttons = builder.components.filter((component) => component.type === 'button').map((component) => ({
+    index: component.index,
+    type: component.subType,
+    text: component.text || null,
+    url: component.subType === 'url' ? component.url || null : null
+  }));
+  return normalizeTemplatePreview({
+    name: customTemplate.name,
+    languageCode: customTemplate.languageCode,
+    header,
+    body: bodyComponent ? { text: interpolatePreviewText(bodyComponent.text, bodyComponent.parameters, variables) } : null,
+    footer: footerComponent ? { text: footerComponent.text } : null,
+    buttons
+  });
+}
+
+function buildOfficialTemplatePreview(officialTemplate) {
+  const preset = getTemplatePreset(officialTemplate?.preset);
+  const values = officialTemplate?.parameters || {};
+  let body = preset.preview;
+  for (const parameter of preset.parameters) {
+    const value = parameterValue(values, parameter.key);
+    if (meaningfulValue(value)) body = body.replaceAll('{{' + parameter.key + '}}', String(value));
+  }
+  return normalizeTemplatePreview({
+    name: preset.templateName,
+    languageCode: preset.languageCode,
+    body: { text: body },
+    buttons: []
+  });
+}
+
+function metaParameterPreview(parameter = {}) {
+  if (parameter.type === 'text') return previewText(parameter.text, 1024);
+  if (parameter.type === 'currency') return previewText(parameter.currency?.fallback_value, 1024);
+  if (parameter.type === 'date_time') return previewText(parameter.date_time?.fallback_value, 1024);
+  if (['image', 'document', 'video'].includes(parameter.type)) {
+    const media = parameter[parameter.type] || {};
+    const url = previewText(media.link, 4096);
+    return {
+      type: parameter.type,
+      url: url && /^https:\/\//i.test(url) ? url : null,
+      filename: parameter.type === 'document' ? previewText(media.filename, 240) : null
+    };
+  }
+  return null;
+}
+
+function templatePreviewFromMetaTemplate(template = {}, fallbackBody = null) {
+  const name = previewText(template.name, 512);
+  if (!name) return null;
+  const languageCode = previewText(template.language?.code || template.languageCode, 20);
+  const presetId = presetFromTemplateName(name);
+  if (presetId) {
+    const bodyComponent = (template.components || []).find((component) => component.type === 'body');
+    const parameters = bodyComponent?.parameters || [];
+    const preset = getTemplatePreset(presetId);
+    const values = Object.fromEntries(preset.parameters.map((parameter, index) => [
+      parameter.key,
+      metaParameterPreview(parameters[index]) || parameter.example
+    ]));
+    return buildOfficialTemplatePreview({ preset: presetId, parameters: values });
+  }
+  const headerComponent = (template.components || []).find((component) => component.type === 'header');
+  const headerParameter = headerComponent?.parameters?.[0];
+  const headerValue = metaParameterPreview(headerParameter);
+  const fallbackText = String(fallbackBody || '').trim();
+  const safeFallbackBody = /^\[template(?::[^\]]*)?\]$/i.test(fallbackText) ? null : fallbackText;
+  return normalizeTemplatePreview({
+    name,
+    languageCode,
+    header: headerComponent ? {
+      type: headerParameter?.type || 'text',
+      text: headerParameter?.type === 'text' ? headerValue : null,
+      media: headerValue && typeof headerValue === 'object' ? headerValue : null
+    } : null,
+    body: safeFallbackBody ? { text: safeFallbackBody } : null,
+    buttons: []
+  });
+}
+
+function safeTemplateConversationMetadata(metadata, fallbackBody = null) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return metadata || null;
+  const preview = normalizeTemplatePreview(metadata.templatePreview)
+    || templatePreviewFromMetaTemplate(metadata.template, fallbackBody);
+  if (!preview) return metadata;
+  return {
+    ...metadata,
+    template: {
+      name: preview.name,
+      languageCode: preview.languageCode
+    },
+    templatePreview: preview
+  };
+}
+
 function runtimeParameter(parameter, variables) {
   const value = resolvedParameterValue(variables, parameter);
   if (parameter.type === 'text') {
@@ -651,6 +854,11 @@ module.exports = {
   builderComponents,
   buildOfficialTemplateMessage,
   buildCustomTemplateMessage,
+  buildOfficialTemplatePreview,
+  buildCustomTemplatePreview,
+  templatePreviewFromMetaTemplate,
+  normalizeTemplatePreview,
+  safeTemplateConversationMetadata,
   officialTemplateInputForPreset,
   normalizeOfficialTemplateDefinition
 };

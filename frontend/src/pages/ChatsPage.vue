@@ -211,6 +211,177 @@ export function cloudChatTemplatePreview(template = {}) {
   }
 }
 
+function cloudChatMessageText(message = {}) {
+  return String(message.text?.body || message.text || message.body || message.message || '').trim()
+}
+
+function cloudChatTemplateIdentifier(value = '', fallbackName = '') {
+  const match = String(value || '').trim().match(/^\[Template:\s*([^\]]+)\]$/i)
+  const name = String(match?.[1] || fallbackName || '').trim()
+  return name ? `[Template: ${name}]` : ''
+}
+
+function cloudChatParameterValue(parameter = {}) {
+  if (parameter.fixedValue !== undefined && parameter.fixedValue !== null) return parameter.fixedValue
+  if (parameter.value !== undefined && parameter.value !== null) return parameter.value
+  return parameter.text
+    ?? parameter.payload
+    ?? parameter.coupon_code
+    ?? parameter.currency?.fallback_value
+    ?? parameter.date_time?.fallback_value
+    ?? parameter.image?.link
+    ?? parameter.video?.link
+    ?? parameter.document?.link
+    ?? parameter.link
+    ?? parameter.url
+    ?? ''
+}
+
+function cloudChatRenderedComponentText(component = {}) {
+  let output = String(component.text || component.body || component.value || '').trim()
+  for (const [index, parameter] of (component.parameters || []).entries()) {
+    const value = cloudChatParameterValue(parameter)
+    if (!meaningfulCloudTemplateValue(value)) continue
+    const printable = typeof value === 'object'
+      ? value.text || value.link || value.url || value.id || ''
+      : value
+    output = output
+      .replaceAll(`{{${index + 1}}}`, String(printable))
+      .replace(new RegExp(`{{\\s*${String(parameter.key || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*}}`, 'g'), String(printable))
+  }
+  return output.trim()
+}
+
+function cloudChatPreviewMedia(preview = {}, components = []) {
+  const direct = preview.header?.media || preview.media || null
+  if (direct?.url) {
+    return {
+      type: String(direct.type || preview.header?.type || 'image').toLowerCase(),
+      url: String(direct.url),
+      filename: String(direct.filename || ''),
+    }
+  }
+  const header = components.find((component) => String(component.type || '').toLowerCase() === 'header')
+  const parameter = header?.parameters?.find((item) => ['image', 'video', 'document'].includes(String(item.type || '').toLowerCase()))
+  if (!parameter) return null
+  const type = String(parameter.type || '').toLowerCase()
+  const source = parameter[type] || parameter.fixedValue || parameter.value || {}
+  const url = typeof source === 'object'
+    ? source.link || source.url || ''
+    : source
+  if (!url) return null
+  return {
+    type,
+    url: String(url),
+    filename: String(source.filename || parameter.filename || ''),
+  }
+}
+
+function cloudChatPreviewButtons(preview = {}, components = []) {
+  const source = Array.isArray(preview.buttons)
+    ? preview.buttons
+    : components.filter((component) => String(component.type || '').toLowerCase() === 'button')
+  return source.map((button, index) => {
+    const parameter = button.parameters?.[0] || {}
+    const parameterValue = cloudChatParameterValue(parameter)
+    const rawUrl = button.url
+      || (typeof parameterValue === 'object' ? parameterValue.url || parameterValue.link : parameterValue)
+      || ''
+    const rawType = String(button.type || '').toLowerCase()
+    return {
+      type: rawType && rawType !== 'button'
+        ? rawType
+        : String(button.subType || button.sub_type || 'url').toLowerCase(),
+      text: String(button.text || button.label || `Ação ${index + 1}`).trim(),
+      url: String(rawUrl || '').trim(),
+    }
+  }).filter((button) => button.text)
+}
+
+export function cloudChatMessagePresentation(message = {}) {
+  const rawText = cloudChatMessageText(message)
+  const metadata = message.metadata || {}
+  const template = metadata.template || message.template || message.payload?.template || {}
+  const preview = metadata.templatePreview
+    || message.templatePreview
+    || template.preview
+    || template.presentation
+    || {}
+  const name = String(preview.name || template.name || metadata.templateName || '').trim()
+  const identifier = cloudChatTemplateIdentifier(rawText, name)
+  const isTemplate = Boolean(identifier || String(message.type || '').toLowerCase() === 'template')
+  if (!isTemplate) {
+    return {
+      isTemplate: false,
+      text: rawText || 'Mensagem não textual',
+    }
+  }
+
+  const components = preview.components
+    || template.builder?.components
+    || template.payload?.builder?.components
+    || template.components
+    || []
+  const componentOf = (type) => components.find((component) => String(component.type || '').toLowerCase() === type)
+  const headerComponent = componentOf('header')
+  const bodyComponent = componentOf('body')
+  const footerComponent = componentOf('footer')
+  const header = String(preview.header?.text ?? preview.headerText ?? cloudChatRenderedComponentText(headerComponent)).trim()
+  const body = String(preview.body?.text ?? preview.bodyText ?? cloudChatRenderedComponentText(bodyComponent)).trim()
+  const footer = String(preview.footer?.text ?? preview.footerText ?? cloudChatRenderedComponentText(footerComponent)).trim()
+  const media = cloudChatPreviewMedia(preview, components)
+  const buttons = cloudChatPreviewButtons(preview, components)
+
+  return {
+    isTemplate: true,
+    name: name || identifier.replace(/^\[Template:\s*|\]$/g, ''),
+    identifier: identifier || cloudChatTemplateIdentifier('', name || 'template_oficial'),
+    languageCode: String(preview.languageCode || template.languageCode || template.language?.code || '').trim(),
+    header,
+    body,
+    footer,
+    media,
+    buttons,
+    hasRichContent: Boolean(header || body || footer || media || buttons.length),
+  }
+}
+
+export function cloudChatFormatText(value = '') {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+    .replace(/```([^`]+)```/gs, '<code>$1</code>')
+    .replace(/\*([^*\n]+)\*/g, '<strong>$1</strong>')
+    .replace(/_([^_\n]+)_/g, '<em>$1</em>')
+    .replace(/~([^~\n]+)~/g, '<s>$1</s>')
+    .replace(/\n/g, '<br>')
+}
+
+export function cloudChatSafeActionUrl(value = '') {
+  const normalized = String(value || '').trim()
+  if (/^(tel:|mailto:)/i.test(normalized)) return normalized
+  try {
+    const url = new URL(normalized)
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : ''
+  } catch {
+    return ''
+  }
+}
+
+export function cloudChatSafeMediaUrl(value = '') {
+  const normalized = String(value || '').trim()
+  if (normalized.startsWith('/') && !normalized.startsWith('//')) return normalized
+  try {
+    const url = new URL(normalized)
+    return url.protocol === 'https:' && !url.username && !url.password ? url.href : ''
+  } catch {
+    return ''
+  }
+}
+
 const CLOUD_TEMPLATE_MEDIA_TYPES = new Set(['image', 'video', 'document'])
 
 export function isCloudTemplateMediaParameter(parameter = {}) {
@@ -350,6 +521,17 @@ function initials(value) {
 
 function messageBody(message) {
   return message.text?.body || message.text || message.body || message.message || 'Mensagem não textual'
+}
+
+const messagePresentationCache = new WeakMap()
+
+function messagePresentation(message) {
+  if (!message || typeof message !== 'object') return cloudChatMessagePresentation(message)
+  const cached = messagePresentationCache.get(message)
+  if (cached) return cached
+  const presentation = cloudChatMessagePresentation(message)
+  messagePresentationCache.set(message, presentation)
+  return presentation
 }
 
 function previewOf(conversation) {
@@ -984,8 +1166,89 @@ onBeforeUnmount(() => {
                 :class="['message-row', { 'message-row--mine': item.direction === 'outbound' || item.fromMe }]"
               >
                 <div class="message-bubble">
-                  <div>{{ messageBody(item) }}</div>
-                  <span>
+                  <template v-if="messagePresentation(item).isTemplate">
+                    <div class="template-message-identifier">
+                      <q-icon name="verified" />
+                      <code>{{ messagePresentation(item).identifier }}</code>
+                      <small v-if="messagePresentation(item).languageCode">
+                        {{ messagePresentation(item).languageCode }}
+                      </small>
+                    </div>
+                    <div
+                      v-if="messagePresentation(item).hasRichContent"
+                      class="template-message-content"
+                    >
+                      <div
+                        v-if="messagePresentation(item).media && cloudChatSafeMediaUrl(messagePresentation(item).media.url)"
+                        class="template-message-media"
+                      >
+                        <q-img
+                          v-if="messagePresentation(item).media.type === 'image'"
+                          :src="cloudChatSafeMediaUrl(messagePresentation(item).media.url)"
+                          :alt="messagePresentation(item).media.filename || 'Imagem do template'"
+                          fit="cover"
+                          loading="lazy"
+                        />
+                        <video
+                          v-else-if="messagePresentation(item).media.type === 'video'"
+                          :src="cloudChatSafeMediaUrl(messagePresentation(item).media.url)"
+                          controls
+                          preload="metadata"
+                        />
+                        <a
+                          v-else
+                          :href="cloudChatSafeMediaUrl(messagePresentation(item).media.url)"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="template-message-document"
+                        >
+                          <q-icon name="description" size="24px" />
+                          <span>{{ messagePresentation(item).media.filename || 'Abrir documento' }}</span>
+                          <q-icon name="open_in_new" />
+                        </a>
+                      </div>
+                      <div
+                        v-if="messagePresentation(item).header"
+                        class="template-message-header"
+                        v-html="cloudChatFormatText(messagePresentation(item).header)"
+                      />
+                      <div
+                        v-if="messagePresentation(item).body"
+                        class="template-message-body"
+                        v-html="cloudChatFormatText(messagePresentation(item).body)"
+                      />
+                      <div
+                        v-if="messagePresentation(item).footer"
+                        class="template-message-footer"
+                        v-html="cloudChatFormatText(messagePresentation(item).footer)"
+                      />
+                      <div
+                        v-if="messagePresentation(item).buttons.length"
+                        class="template-message-buttons"
+                      >
+                        <template
+                          v-for="(button, buttonIndex) in messagePresentation(item).buttons"
+                          :key="`${button.type}-${button.text}-${buttonIndex}`"
+                        >
+                          <a
+                            v-if="cloudChatSafeActionUrl(button.url)"
+                            :href="cloudChatSafeActionUrl(button.url)"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <q-icon :name="button.type.includes('phone') ? 'call' : 'open_in_new'" />
+                            {{ button.text }}
+                          </a>
+                          <span v-else>
+                            <q-icon name="reply" />
+                            {{ button.text }}
+                          </span>
+                        </template>
+                      </div>
+                    </div>
+                  </template>
+                  <div v-else>{{ messageBody(item) }}</div>
+                  <span class="message-meta">
                     {{ formatTime(item.sentAt || item.createdAt || item.timestamp) }}
                     <q-icon
                       v-if="item.direction === 'outbound' || item.fromMe"
@@ -1316,7 +1579,7 @@ onBeforeUnmount(() => {
   background: #d8fff7;
 }
 
-.message-bubble span {
+.message-meta {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -1324,6 +1587,129 @@ onBeforeUnmount(() => {
   margin-top: 3px;
   color: #72837f;
   font-size: 0.62rem;
+}
+
+.template-message-identifier {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #187461;
+}
+
+.template-message-identifier code {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-family: inherit;
+  font-size: 0.68rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-message-identifier small {
+  margin-left: auto;
+  color: #71837f;
+  font-size: 0.58rem;
+}
+
+.template-message-content {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(11, 108, 91, 0.11);
+}
+
+.template-message-media {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  background: rgba(229, 242, 239, 0.82);
+}
+
+.template-message-media :deep(.q-img),
+.template-message-media video {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: cover;
+}
+
+.template-message-document {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 54px;
+  padding: 10px 12px;
+  color: #176e60;
+  text-decoration: none;
+}
+
+.template-message-document span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-message-header {
+  color: #153c35;
+  font-size: 0.94rem;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.template-message-body {
+  color: #173b35;
+  line-height: 1.48;
+  overflow-wrap: anywhere;
+}
+
+.template-message-body :deep(code),
+.template-message-header :deep(code),
+.template-message-footer :deep(code) {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(6, 50, 43, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.template-message-footer {
+  color: #70807d;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.template-message-buttons {
+  display: grid;
+  gap: 1px;
+  margin: 2px -12px -7px;
+  border-top: 1px solid rgba(11, 108, 91, 0.1);
+}
+
+.template-message-buttons a,
+.template-message-buttons > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: 8px 12px;
+  border-top: 1px solid rgba(11, 108, 91, 0.08);
+  color: #16816c;
+  font-size: 0.78rem;
+  font-weight: 750;
+  text-align: center;
+  text-decoration: none;
+}
+
+.template-message-buttons > :first-child {
+  border-top: 0;
 }
 
 .message-composer {

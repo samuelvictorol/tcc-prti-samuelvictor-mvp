@@ -14,6 +14,52 @@ function selected(value) {
   return { select: async () => value };
 }
 
+test('serializer deriva preview seguro de template legado sem expor payload opaco', () => {
+  const message = conversationsManager.serializeMessage({
+    _id: '507f1f77bcf86cd799439022',
+    conversation: '507f1f77bcf86cd799439021',
+    channel: 'whatsapp_cloud',
+    direction: 'outbound',
+    providerMessageIdEncrypted: encrypt('wamid.legado'),
+    bodyEncrypted: encrypt('Conteudo aprovado na Meta.'),
+    type: 'template',
+    sentAt: new Date('2026-07-31T12:00:00.000Z'),
+    metadataEncrypted: encrypt({
+      provider: 'meta_whatsapp_cloud',
+      template: {
+        name: 'campanha_legada',
+        languageCode: 'pt_BR',
+        components: [
+          {
+            type: 'header',
+            parameters: [{ type: 'image', image: { link: 'https://cdn.example.com/campanha.png' } }]
+          },
+          {
+            type: 'button', sub_type: 'quick_reply', index: '0',
+            parameters: [{ type: 'payload', payload: 'segredo-interno-123' }]
+          }
+        ]
+      }
+    })
+  });
+
+  assert.deepEqual(message.metadata.template, { name: 'campanha_legada', languageCode: 'pt_BR' });
+  assert.deepEqual(message.metadata.templatePreview, {
+    version: 1,
+    name: 'campanha_legada',
+    languageCode: 'pt_BR',
+    header: {
+      type: 'image',
+      text: null,
+      media: { type: 'image', url: 'https://cdn.example.com/campanha.png', filename: null }
+    },
+    body: { text: 'Conteudo aprovado na Meta.' },
+    footer: null,
+    buttons: []
+  });
+  assert.doesNotMatch(JSON.stringify(message), /segredo-interno-123|components/);
+});
+
 test('historico criptografa identificadores e conteudo antes de persistir', async (context) => {
   const originals = {
     upsert: Conversation.findOneAndUpdate,

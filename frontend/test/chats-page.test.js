@@ -7,6 +7,10 @@ vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 import {
   canSendCloudServiceMessage,
   canSendCloudChatMode,
+  cloudChatFormatText,
+  cloudChatMessagePresentation,
+  cloudChatSafeActionUrl,
+  cloudChatSafeMediaUrl,
   cloudChatTemplateFixedVariables,
   cloudChatTemplatePreview,
   cloudChatTemplateVariablesForSend,
@@ -82,6 +86,126 @@ describe('Chats oficiais do WhatsApp Cloud', () => {
     expect(result).toHaveLength(2)
     expect(result.map((item) => item.providerMessageId)).toEqual(['wamid-1', 'wamid-2'])
     expect(result[0].status).toBe('read')
+  })
+
+  it('preserva mensagens antigas de template que só possuem o identificador', () => {
+    expect(cloudChatMessagePresentation({
+      type: 'template',
+      body: '[Template: modelo_legado]',
+    })).toEqual({
+      isTemplate: true,
+      name: 'modelo_legado',
+      identifier: '[Template: modelo_legado]',
+      languageCode: '',
+      header: '',
+      body: '',
+      footer: '',
+      media: null,
+      buttons: [],
+      hasRichContent: false,
+    })
+  })
+
+  it('apresenta o contrato estável do template como uma mensagem semelhante ao WhatsApp', () => {
+    const presentation = cloudChatMessagePresentation({
+      type: 'template',
+      body: '[Template: notify_flow_image_notification]',
+      metadata: {
+        templatePreview: {
+          name: 'notify_flow_image_notification',
+          languageCode: 'pt_BR',
+          header: {
+            type: 'image',
+            text: '*Grupo Alpha*',
+            media: {
+              type: 'image',
+              url: 'https://cdn.example.com/grupo-alpha.png',
+              filename: 'grupo-alpha.png',
+            },
+          },
+          body: { text: 'Olá, *Samuel*!\nSeu convite está pronto.' },
+          footer: { text: 'Notify Flow' },
+          buttons: [
+            { type: 'url', text: 'Autorizar notificações', url: 'https://notify.example.com/invite/grupo-alpha' },
+            { type: 'quick_reply', text: 'Agora não', url: '' },
+          ],
+        },
+      },
+    })
+
+    expect(presentation).toEqual({
+      isTemplate: true,
+      name: 'notify_flow_image_notification',
+      identifier: '[Template: notify_flow_image_notification]',
+      languageCode: 'pt_BR',
+      header: '*Grupo Alpha*',
+      body: 'Olá, *Samuel*!\nSeu convite está pronto.',
+      footer: 'Notify Flow',
+      media: {
+        type: 'image',
+        url: 'https://cdn.example.com/grupo-alpha.png',
+        filename: 'grupo-alpha.png',
+      },
+      buttons: [
+        { type: 'url', text: 'Autorizar notificações', url: 'https://notify.example.com/invite/grupo-alpha' },
+        { type: 'quick_reply', text: 'Agora não', url: '' },
+      ],
+      hasRichContent: true,
+    })
+  })
+
+  it('deriva detalhes de componentes legados quando eles estiverem disponíveis', () => {
+    expect(cloudChatMessagePresentation({
+      type: 'template',
+      body: '[Template: pedido_confirmado]',
+      metadata: {
+        template: {
+          name: 'pedido_confirmado',
+          languageCode: 'pt_BR',
+          components: [
+            { type: 'header', parameters: [{ type: 'document', document: { link: 'https://cdn.example.com/pedido.pdf', filename: 'pedido.pdf' } }] },
+            { type: 'body', text: 'Pedido {{1}} confirmado.', parameters: [{ type: 'text', text: '123' }] },
+            { type: 'footer', text: 'Obrigado pela preferência' },
+            { type: 'button', subType: 'url', text: 'Acompanhar', url: 'https://example.com/pedido/123' },
+          ],
+        },
+      },
+    })).toEqual(expect.objectContaining({
+      identifier: '[Template: pedido_confirmado]',
+      body: 'Pedido 123 confirmado.',
+      footer: 'Obrigado pela preferência',
+      media: {
+        type: 'document',
+        url: 'https://cdn.example.com/pedido.pdf',
+        filename: 'pedido.pdf',
+      },
+      buttons: [{ type: 'url', text: 'Acompanhar', url: 'https://example.com/pedido/123' }],
+      hasRichContent: true,
+    }))
+  })
+
+  it('formata texto sem permitir HTML arbitrário e restringe URLs exibidas', () => {
+    expect(cloudChatFormatText('*Olá* _Samuel_ ~antigo~\n<script>alert(1)</script>'))
+      .toBe('<strong>Olá</strong> <em>Samuel</em> <s>antigo</s><br>&lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(cloudChatSafeActionUrl('https://example.com/acao')).toBe('https://example.com/acao')
+    expect(cloudChatSafeActionUrl('http://example.com/acao')).toBe('')
+    expect(cloudChatSafeActionUrl('javascript:alert(1)')).toBe('')
+    expect(cloudChatSafeMediaUrl('/api/media/asset-1')).toBe('/api/media/asset-1')
+    expect(cloudChatSafeMediaUrl('http://example.com/a.png')).toBe('')
+    expect(cloudChatSafeMediaUrl('//evil.example.com/a.png')).toBe('')
+  })
+
+  it('renderiza mídia, conteúdo e ações dentro da bolha sem esconder o identificador', () => {
+    const chats = source('pages/ChatsPage.vue')
+
+    expect(chats).toContain('metadata.templatePreview')
+    expect(chats).toContain('class="template-message-identifier"')
+    expect(chats).toContain('{{ messagePresentation(item).identifier }}')
+    expect(chats).toContain('class="template-message-media"')
+    expect(chats).toContain('class="template-message-body"')
+    expect(chats).toContain('class="template-message-footer"')
+    expect(chats).toContain('class="template-message-buttons"')
+    expect(chats).toContain('v-html="cloudChatFormatText(messagePresentation(item).body)"')
   })
 
   it('atualiza uma conversa em tempo real sem duplicar', () => {

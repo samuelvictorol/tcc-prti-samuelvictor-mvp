@@ -13,7 +13,14 @@ const { decrypt, timingSafeEqual } = require('../services/crypto.service');
 const { env } = require('../config/env');
 const { emit } = require('../services/socket.service');
 const ApiError = require('../utils/api-error');
-const { buildOfficialTemplateMessage, buildCustomTemplateMessage, listTemplatePresets } = require('../utils/whatsapp-cloud-templates');
+const {
+  buildOfficialTemplateMessage,
+  buildCustomTemplateMessage,
+  buildOfficialTemplatePreview,
+  buildCustomTemplatePreview,
+  templatePreviewFromMetaTemplate,
+  listTemplatePresets
+} = require('../utils/whatsapp-cloud-templates');
 const { normalizeWhatsappE164 } = require('../utils/normalizers');
 const { parsePagination, pageResult } = require('../utils/pagination');
 
@@ -250,6 +257,7 @@ function cloudMessageSentAt(message = {}) {
 }
 
 function cloudConversationMetadata(message, value, businessAccountId, providerContact = {}) {
+  const templatePreview = templatePreviewFromMetaTemplate(message.template, cloudMessageBody(message));
   return {
     provider: 'meta_whatsapp_cloud',
     businessAccountId: businessAccountId || null,
@@ -264,7 +272,11 @@ function cloudConversationMetadata(message, value, businessAccountId, providerCo
     media: CLOUD_MESSAGE_TYPES_WITH_MEDIA.has(message.type)
       ? message[message.type] || null
       : null,
-    interactive: message.interactive || null
+    interactive: message.interactive || null,
+    ...(templatePreview ? {
+      template: { name: templatePreview.name, languageCode: templatePreview.languageCode },
+      templatePreview
+    } : {})
   };
 }
 
@@ -1227,10 +1239,13 @@ async function send(input) {
   if (!destination) throw new ApiError(422, 'Destino WhatsApp obrigatorio');
   destination = normalizeMetaDestination(destination);
   let message;
+  let templatePreview;
   if (input.customTemplate) {
     message = buildCustomTemplateMessage(input.customTemplate);
+    templatePreview = buildCustomTemplatePreview(input.customTemplate);
   } else if (input.officialTemplate) {
     message = buildOfficialTemplateMessage(input.officialTemplate);
+    templatePreview = buildOfficialTemplatePreview(input.officialTemplate);
   } else if (input.templateName) {
     const template = { name: input.templateName, language: { code: input.languageCode || 'pt_BR' } };
     if (input.components?.length) template.components = input.components;
@@ -1238,6 +1253,7 @@ async function send(input) {
       type: 'template',
       template
     };
+    templatePreview = templatePreviewFromMetaTemplate(template);
   } else {
     throw new ApiError(
       422,
@@ -1267,6 +1283,7 @@ async function send(input) {
         providerMessageId: messageId,
         body: `[Template: ${templateName}]`,
         type: 'template',
+        hasMedia: Boolean(templatePreview?.header?.media),
         sentAt: new Date(),
         metadata: {
           provider: 'meta_whatsapp_cloud',
@@ -1274,9 +1291,9 @@ async function send(input) {
           useCase: input.useCase || 'notification',
           template: {
             name: templateName,
-            languageCode: template.language?.code || input.languageCode || null,
-            components: template.components || []
-          }
+            languageCode: template.language?.code || input.languageCode || null
+          },
+          ...(templatePreview ? { templatePreview } : {})
         }
       });
     } catch (error) {
@@ -1320,6 +1337,7 @@ module.exports = {
   normalizeMetaDestination,
   cloudMessageBody,
   cloudMessageSentAt,
+  cloudConversationMetadata,
   cloudContactConsent,
   cloudIdentity,
   cloudLogicalId,

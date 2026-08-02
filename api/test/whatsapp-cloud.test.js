@@ -16,7 +16,11 @@ const profileManager = require('../src/managers/profile.manager');
 const chatProfileFlow = require('../src/services/chat-profile-flow.service');
 const { channelSendSchema } = require('../src/dtos/channels.dto');
 const { createTemplateSchema } = require('../src/dtos/templates.dto');
-const { buildCustomTemplateMessage, normalizeBuilder } = require('../src/utils/whatsapp-cloud-templates');
+const {
+  buildCustomTemplateMessage,
+  buildCustomTemplatePreview,
+  normalizeBuilder
+} = require('../src/utils/whatsapp-cloud-templates');
 const { env } = require('../src/config/env');
 
 function restoreAfter(context, overrides) {
@@ -213,6 +217,44 @@ test('POST do webhook valida somente com App Secret', async (context) => {
   assert.deepEqual(requested, ['WHATSAPP_CLOUD_APP_SECRET']);
 });
 
+test('metadata de template recebido preserva somente preview seguro para o chat', () => {
+  const metadata = whatsappCloudManager.cloudConversationMetadata({
+    type: 'template',
+    template: {
+      name: 'campanha_recebida',
+      language: { code: 'pt_BR' },
+      components: [
+        {
+          type: 'header',
+          parameters: [{ type: 'video', video: { link: 'https://cdn.example.com/video.mp4' } }]
+        },
+        {
+          type: 'button', sub_type: 'quick_reply', index: '0',
+          parameters: [{ type: 'payload', payload: 'nao-expor-este-payload' }]
+        }
+      ]
+    }
+  }, {
+    metadata: { phone_number_id: '1000000000000001', display_phone_number: '15550001111' }
+  }, '1000000000000002');
+
+  assert.deepEqual(metadata.template, { name: 'campanha_recebida', languageCode: 'pt_BR' });
+  assert.deepEqual(metadata.templatePreview, {
+    version: 1,
+    name: 'campanha_recebida',
+    languageCode: 'pt_BR',
+    header: {
+      type: 'video',
+      text: null,
+      media: { type: 'video', url: 'https://cdn.example.com/video.mp4', filename: null }
+    },
+    body: null,
+    footer: null,
+    buttons: []
+  });
+  assert.doesNotMatch(JSON.stringify(metadata), /nao-expor-este-payload|components/);
+});
+
 test('envio oficial usa apenas credenciais de envio e normaliza telefone para digitos', async (context) => {
   restoreAfter(context, [
     [settingsManager, 'getValue'],
@@ -259,7 +301,16 @@ test('envio oficial usa apenas credenciais de envio e normaliza telefone para di
   assert.equal(recorded.type, 'template');
   assert.equal(recorded.contactId, '507f1f77bcf86cd799439012');
   assert.equal(recorded.metadata.template.languageCode, 'en_US');
-  assert.equal(recorded.metadata.template.components.length, 1);
+  assert.equal(recorded.metadata.template.components, undefined);
+  assert.deepEqual(recorded.metadata.templatePreview, {
+    version: 1,
+    name: 'jaspers_market_order_confirmation_v1',
+    languageCode: 'en_US',
+    header: null,
+    body: { text: 'Pedido 123456 de John Doe confirmado em Jul 20, 2026.' },
+    footer: null,
+    buttons: []
+  });
   assert.equal(request.url, 'https://graph.facebook.com/v25.0/1000000000000001/messages');
   assert.equal(request.headers.authorization, 'Bearer access');
   assert.deepEqual(request.body, {
@@ -640,6 +691,31 @@ test('template Marketing Padrao usa valores fixos sem transformar descricao inte
       builder: normalized.payload.builder
     }
   } }).success, true);
+
+  const preview = buildCustomTemplatePreview({
+    name: normalized.externalTemplateName,
+    languageCode: normalized.languageCode,
+    builder: normalized.payload.builder
+  });
+  assert.deepEqual(preview, {
+    version: 1,
+    name: 'campanha_grupo_alpha',
+    languageCode: 'pt_BR',
+    header: {
+      type: 'image',
+      text: null,
+      media: { type: 'image', url: 'https://cdn.example.com/campanha.png', filename: null }
+    },
+    body: { text: 'Conteudo oficial aprovado na Meta.' },
+    footer: { text: 'Gerencie suas preferencias.' },
+    buttons: [{
+      index: '0',
+      type: 'url',
+      text: 'Abrir convite',
+      url: 'https://notify.example/invite/grupo-alpha'
+    }]
+  });
+  assert.doesNotMatch(JSON.stringify(preview), /Cliente Notify Flow|fixedValue|components|payload/);
 });
 
 test('valores dinamicos opcionais sobrescrevem fixedValue sem promover example legado', () => {

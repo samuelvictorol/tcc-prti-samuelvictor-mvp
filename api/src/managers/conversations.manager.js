@@ -4,6 +4,7 @@ const ApiError = require('../utils/api-error');
 const { env } = require('../config/env');
 const { encrypt, decrypt, searchHash } = require('../services/crypto.service');
 const { parsePagination, pageResult } = require('../utils/pagination');
+const { safeTemplateConversationMetadata } = require('../utils/whatsapp-cloud-templates');
 const socketService = require('../services/socket.service');
 
 // `whatsapp_web` e aceito apenas para manutencao/expiracao de documentos
@@ -70,6 +71,11 @@ function serializeConversation(conversation) {
 function serializeMessage(message) {
   const value = message?.toObject ? message.toObject() : message;
   if (!value) return null;
+  const body = safeDecrypt(value.bodyEncrypted);
+  const metadata = safeTemplateConversationMetadata(
+    safeDecrypt(value.metadataEncrypted, true),
+    body
+  );
   return {
     id: String(value._id),
     conversationId: String(value.conversation._id || value.conversation),
@@ -78,11 +84,11 @@ function serializeMessage(message) {
     channel: value.channel,
     direction: value.direction,
     providerMessageId: safeDecrypt(value.providerMessageIdEncrypted),
-    body: safeDecrypt(value.bodyEncrypted),
+    body,
     type: value.type,
     hasMedia: Boolean(value.hasMedia),
     sentAt: value.sentAt,
-    metadata: safeDecrypt(value.metadataEncrypted, true),
+    metadata,
     createdAt: value.createdAt
   };
 }
