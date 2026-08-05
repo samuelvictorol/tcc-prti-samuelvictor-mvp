@@ -119,6 +119,14 @@ export function notificationActivityName(notification = {}, templates = [], temp
   return 'Template não identificado'
 }
 
+export function notificationActivityType(notification = {}) {
+  if (notificationReferenceId(notification.templateSet)) return 'Conjunto'
+
+  const kind = String(notification.kind || notification.mode || notification.type || '').toLowerCase()
+  if (kind === 'quick') return 'Rápida'
+  return 'Template'
+}
+
 export function mergeNotificationVariableDefinitions(entries = []) {
   const merged = new Map()
   for (const { template, channel } of entries) {
@@ -748,6 +756,10 @@ const deliveryColumns = [
 
 function activityName(notification) {
   return notificationActivityName(notification, templates.value, templateSets.value)
+}
+
+function activityType(notification) {
+  return notificationActivityType(notification)
 }
 
 const dispatchDetailColumns = [
@@ -1491,7 +1503,7 @@ onMounted(loadData)
         @row-click="(_event, row) => openDispatchDetails(row)"
       >
         <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt) }}</q-td></template>
-        <template #body-cell-mode="props"><q-td :props="props">Notificação</q-td></template>
+        <template #body-cell-mode="props"><q-td :props="props">{{ activityType(props.row) }}</q-td></template>
         <template #body-cell-channel="props"><q-td :props="props"><q-badge outline color="primary" :label="props.row.channel || 'global'" /></q-td></template>
         <template #body-cell-contentName="props"><q-td :props="props">{{ activityName(props.row) }}</q-td></template>
         <template #body-cell-status="props"><q-td :props="props"><q-badge :color="statusColor(props.row.status)" :label="props.row.status || 'queued'" /></q-td></template>
@@ -1515,7 +1527,7 @@ onMounted(loadData)
             <article class="activity-mobile-card" role="button" tabindex="0" @click="openDispatchDetails(props.row)" @keydown.enter="openDispatchDetails(props.row)">
               <header>
                 <div>
-                  <strong>Notificação</strong>
+                  <strong>{{ activityType(props.row) }}</strong>
                   <span>{{ formatDate(props.row.createdAt) }}</span>
                 </div>
                 <q-badge :color="statusColor(props.row.status)" :label="statusLabel(props.row.status)" />

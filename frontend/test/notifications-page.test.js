@@ -9,6 +9,7 @@ import {
   mergeNotificationVariableDefinitions,
   normalizeMetaDeliveryBlocks,
   notificationActivityName,
+  notificationActivityType,
   notificationDeliveryDetail,
   notificationGlobalChannelOptions,
   notificationRuntimeVariableValues,
@@ -36,9 +37,14 @@ describe('compositor amigável de notificações', () => {
     expect(notificationActivityName({ kind: 'quick' }, templates, templateSets))
       .toBe('Mensagem rápida')
 
+    expect(notificationActivityType({ templateSet: 'set-1', kind: 'global' })).toBe('Conjunto')
+    expect(notificationActivityType({ template: 'template-wa', kind: 'template' })).toBe('Template')
+    expect(notificationActivityType({ kind: 'global', templates: { email: 'template-email' } })).toBe('Template')
+    expect(notificationActivityType({ kind: 'quick' })).toBe('Rápida')
+
     const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
     expect(source).toContain("label: 'Conjunto / template'")
-    expect(source).toContain('<q-td :props="props">Notificação</q-td>')
+    expect(source).toContain('<q-td :props="props">{{ activityType(props.row) }}</q-td>')
   })
 
   it('descobre variáveis declaradas, placeholders e parâmetros do builder sem JSON manual', () => {
