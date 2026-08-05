@@ -9,8 +9,16 @@ import {
   buildCustomWhatsAppCloudPreviewPayload,
   buildWhatsAppCloudTemplateDefinition,
   cloudMediaAccept,
+  cloudMediaContentMode,
+  cloudMediaDisplayValue,
   cloudMediaExampleLabel,
   cloudMediaMaxBytes,
+  cloudBodyContentMode,
+  cloudBodyHasAdvancedParameters,
+  cloudBodyVariableParameter,
+  cloudButtonBaseUrl,
+  cloudButtonSuffixParameter,
+  cloudButtonUrlMode,
   cloudBuilderFromTemplate,
   createCloudParameter,
   createCloudComponent,
@@ -19,9 +27,17 @@ import {
   isForbiddenWhatsAppButtonUrl,
   isValidHttpsTemplateUrl,
   meaningfulCloudComponents,
+  previewCloudButtonUrl,
+  previewCloudComponentText,
+  renameCloudBodyVariable,
   renderWhatsAppPreviewMarkup,
   renderWhatsAppCloudPreview,
+  setCloudBodyContentMode,
+  setCloudButtonUrlMode,
+  setCloudMediaContentMode,
   standardMarketingComponentsFromTemplate,
+  updateCloudButtonBaseUrl,
+  updateCloudMediaValue,
   validateCustomWhatsAppCloudTemplate,
 } from '../src/pages/TemplatesPage.vue'
 
@@ -307,7 +323,7 @@ describe('templates oficiais do WhatsApp Cloud', () => {
     })
   })
 
-  it('migra a amostra de mídia legada para valor fixo do perfil padrão', () => {
+  it('preserva a mídia dinâmica legada sem promover o exemplo para valor fixo', () => {
     const components = standardMarketingComponentsFromTemplate({
       body: 'Texto oficial',
       payload: {
@@ -319,8 +335,236 @@ describe('templates oficiais do WhatsApp Cloud', () => {
         },
       },
     })
-    expect(components[0].parameters[0].fixedValue).toBe('https://example.com/capa.png')
+    expect(components[0].parameters[0]).toMatchObject({
+      example: 'https://example.com/capa.png',
+      fixedValue: '',
+    })
     expect(components.find((component) => component.type === 'body').text).toBe('Texto oficial')
+
+    const definition = buildCustomWhatsAppCloudDefinition({
+      templateName: 'modelo_legado_dinamico',
+      components,
+    })
+    expect(definition.payload.builder.components[0].parameters[0]).toMatchObject({
+      example: 'https://example.com/capa.png',
+      fixedValue: undefined,
+    })
+  })
+
+  it('alterna a mídia entre dinâmica por disparo e fixa sem perder a amostra legada', () => {
+    const media = createCloudParameter({
+      type: 'image',
+      key: 'imagem_cabecalho',
+      example: 'https://example.com/amostra.png',
+    })
+
+    expect(cloudMediaContentMode(media)).toBe('dynamic')
+    expect(cloudMediaDisplayValue(media)).toBe('https://example.com/amostra.png')
+    updateCloudMediaValue(media, 'https://example.com/nova-amostra.png')
+    expect(media).toMatchObject({
+      fixedValue: '',
+      example: 'https://example.com/nova-amostra.png',
+    })
+
+    setCloudMediaContentMode(media, 'fixed')
+    expect(cloudMediaContentMode(media)).toBe('fixed')
+    expect(media.fixedValue).toBe('https://example.com/nova-amostra.png')
+    updateCloudMediaValue(media, 'https://example.com/fixa.png')
+    expect(cloudMediaDisplayValue(media)).toBe('https://example.com/fixa.png')
+
+    setCloudMediaContentMode(media, 'dynamic')
+    expect(media.fixedValue).toBe('')
+    expect(media.example).toBe('https://example.com/fixa.png')
+  })
+
+  it('configura um corpo nomeado amigável e mantém key, parameterName e marcador sincronizados', () => {
+    const body = createCloudComponent({ type: 'body', text: 'Olá!' })
+
+    setCloudBodyContentMode(body, 'dynamic')
+    expect(cloudBodyContentMode(body)).toBe('dynamic')
+    expect(cloudBodyVariableParameter(body)).toMatchObject({
+      key: 'body_description',
+      parameterName: 'body_description',
+      label: 'Descrição da mensagem',
+    })
+    expect(body.text).toBe('Olá!\n{{body_description}}')
+
+    renameCloudBodyVariable(body, 'campaign_message')
+    expect(body.text).toBe('Olá!\n{{campaign_message}}')
+    expect(body.parameters[0]).toMatchObject({
+      key: 'campaign_message',
+      parameterName: 'campaign_message',
+    })
+    expect(previewCloudComponentText(body)).toContain('Confira os detalhes desta notificação.')
+
+    const definition = buildCustomWhatsAppCloudDefinition({
+      templateName: 'corpo_nomeado',
+      components: [body],
+    })
+    expect(definition.variables).toEqual(['campaign_message'])
+    expect(definition.payload.builder.components[0]).toMatchObject({
+      type: 'body',
+      text: 'Olá!\n{{campaign_message}}',
+      parameters: [{
+        key: 'campaign_message',
+        parameterName: 'campaign_message',
+        fixedValue: undefined,
+      }],
+    })
+    expect(validateCustomWhatsAppCloudTemplate({ templateName: 'corpo_nomeado', components: [body] })).toBeNull()
+  })
+
+  it('preserva corpos legados com vários parâmetros ao usar o editor amigável', () => {
+    const body = createCloudComponent({
+      type: 'body',
+      text: 'Olá, {{nome}}. Seu pedido {{pedido}} está pronto.',
+      parameters: [
+        { type: 'text', key: 'nome', parameterName: 'nome', label: 'Nome' },
+        { type: 'text', key: 'pedido', parameterName: 'pedido', label: 'Pedido' },
+      ],
+    })
+    const original = structuredClone(body)
+
+    expect(cloudBodyHasAdvancedParameters(body)).toBe(true)
+    expect(setCloudBodyContentMode(body, 'fixed')).toEqual(original)
+    expect(setCloudBodyContentMode(body, 'dynamic')).toEqual(original)
+    expect(renameCloudBodyVariable(body, 'outro_nome')).toBeNull()
+    expect(body).toEqual(original)
+  })
+
+  it('configura botão URL com sufixo posicional {{1}} sem expor JSON', () => {
+    const button = createCloudComponent({
+      type: 'button',
+      subType: 'url',
+      index: '0',
+      text: 'Abrir convite',
+      url: 'https://notify.example/invite/',
+    })
+
+    setCloudButtonUrlMode(button, 'dynamic')
+    updateCloudButtonBaseUrl(button, 'https://notify.example/invite/')
+
+    expect(cloudButtonUrlMode(button)).toBe('dynamic')
+    expect(cloudButtonBaseUrl(button)).toBe('https://notify.example/invite/')
+    expect(button.url).toBe('https://notify.example/invite/{{1}}')
+    expect(cloudButtonSuffixParameter(button)).toMatchObject({
+      key: 'invite_slug',
+      parameterName: '',
+      label: 'Identificador do convite',
+      example: 'grupo-alpha',
+    })
+    expect(previewCloudButtonUrl(button)).toBe('https://notify.example/invite/grupo-alpha')
+    expect(validateCustomWhatsAppCloudTemplate({ templateName: 'botao_dinamico', components: [button] })).toBeNull()
+
+    const definition = buildCustomWhatsAppCloudDefinition({
+      templateName: 'botao_dinamico',
+      components: [button],
+    })
+    expect(definition.payload.builder.components[0]).toMatchObject({
+      type: 'button',
+      url: 'https://notify.example/invite/{{1}}',
+      parameters: [{ key: 'invite_slug', parameterName: undefined }],
+    })
+    expect(buildCustomWhatsAppCloudPreviewPayload({
+      templateName: 'botao_dinamico',
+      components: [button],
+    }).template.components[0]).toEqual({
+      type: 'button',
+      sub_type: 'url',
+      index: '0',
+      parameters: [{ type: 'text', text: 'grupo-alpha' }],
+    })
+
+    const dynamicWithoutParameter = createCloudComponent({
+      type: 'button', subType: 'url', index: '0', text: 'Abrir',
+      url: 'https://notify.example/invite/{{1}}', parameters: [],
+    })
+    const fixedWithParameter = createCloudComponent({
+      type: 'button', subType: 'url', index: '0', text: 'Abrir',
+      url: 'https://notify.example/invite/',
+      parameters: [{ type: 'text', key: 'invite_slug', label: 'Convite', example: 'alpha' }],
+    })
+    expect(validateCustomWhatsAppCloudTemplate({ templateName: 'invalido', components: [dynamicWithoutParameter] }))
+      .toContain('exige exatamente um sufixo {{1}}')
+    expect(validateCustomWhatsAppCloudTemplate({ templateName: 'invalido', components: [fixedWithParameter] }))
+      .toContain('exige exatamente um sufixo {{1}}')
+  })
+
+  it('preserva o delimitador da URL ao alternar entre link fixo e sufixo dinâmico', () => {
+    const button = createCloudComponent({
+      type: 'button',
+      subType: 'url',
+      index: '0',
+      text: 'Abrir convite',
+      url: 'https://notify.example/invite/',
+    })
+
+    setCloudButtonUrlMode(button, 'dynamic')
+    expect(button.url).toBe('https://notify.example/invite/{{1}}')
+    setCloudButtonUrlMode(button, 'fixed')
+    expect(button.url).toBe('https://notify.example/invite/')
+    setCloudButtonUrlMode(button, 'dynamic')
+    expect(button.url).toBe('https://notify.example/invite/{{1}}')
+  })
+
+  it('reabre corpo nomeado e botão dinâmico sem alterar a estrutura salva', () => {
+    const stored = {
+      externalTemplateName: 'campanha_dinamica',
+      payload: {
+        builder: {
+          components: [
+            {
+              type: 'body',
+              text: '{{body_description}}',
+              parameters: [{
+                type: 'text',
+                key: 'body_description',
+                parameterName: 'body_description',
+                label: 'Descrição',
+                example: 'Exemplo',
+              }],
+            },
+            {
+              type: 'button',
+              subType: 'url',
+              index: '0',
+              text: 'Abrir',
+              url: 'https://notify.example/invite/{{1}}',
+              parameters: [{ type: 'text', key: 'invite_slug', label: 'Convite', example: 'alpha' }],
+            },
+          ],
+        },
+      },
+    }
+
+    const restored = standardMarketingComponentsFromTemplate(stored)
+    const definition = buildCustomWhatsAppCloudDefinition({
+      templateName: stored.externalTemplateName,
+      components: restored,
+    })
+    expect(definition.payload.builder.components.map((component) => ({
+      type: component.type,
+      text: component.text,
+      url: component.url,
+      parameters: component.parameters.map((parameter) => ({
+        key: parameter.key,
+        parameterName: parameter.parameterName,
+        example: parameter.example,
+      })),
+    }))).toEqual([
+      {
+        type: 'body',
+        text: '{{body_description}}',
+        url: undefined,
+        parameters: [{ key: 'body_description', parameterName: 'body_description', example: 'Exemplo' }],
+      },
+      {
+        type: 'button',
+        text: 'Abrir',
+        url: 'https://notify.example/invite/{{1}}',
+        parameters: [{ key: 'invite_slug', parameterName: undefined, example: 'alpha' }],
+      },
+    ])
   })
 
   it('reabre um template mínimo sem inventar corpo, mídia, rodapé ou botão', () => {
@@ -357,10 +601,17 @@ describe('templates oficiais do WhatsApp Cloud', () => {
     expect(source).toContain("{ label: 'Payload', value: 'payload', icon: 'data_object' }")
     expect(source).toContain('<pre>{{ cloudPreviewPayloadJson }}</pre>')
     expect(source).toContain(':options="META_LANGUAGE_OPTIONS"')
-    expect(source).toContain('v-model.trim="cloudStandardMedia.fixedValue"')
+    expect(source).toContain(':model-value="cloudMediaDisplayValue(cloudStandardMedia)"')
+    expect(source).toContain('@update:model-value="onCloudMediaValueChange"')
     expect(source).toContain('v-model="cloudStandardBody.text"')
     expect(source).toContain('v-model="cloudStandardFooter.text"')
     expect(source).toContain('v-model.trim="cloudStandardButton.url"')
+    expect(source).toContain("{ label: 'Variável nomeada', value: 'dynamic', icon: 'data_object' }")
+    expect(source).toContain('label="Variável interna e nome na Meta"')
+    expect(source).toContain("{ label: 'Sufixo dinâmico', value: 'dynamic', icon: 'route' }")
+    expect(source).toContain('label="Variável interna do sufixo"')
+    expect(source).toContain('cloudButtonBaseUrl(cloudStandardButton)')
+    expect(source).toContain('Nenhum JSON precisa ser editado.')
     expect(source).toContain('Adicionar ${option.label}')
     expect(source).toContain("removeCloudStandardComponent('header')")
     expect(source).toContain("removeCloudStandardComponent('body')")

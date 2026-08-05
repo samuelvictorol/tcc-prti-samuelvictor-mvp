@@ -343,6 +343,89 @@ describe('Chats oficiais do WhatsApp Cloud', () => {
     expect(chats).toContain('Conteúdo e valores definidos no template cadastrado.')
   })
 
+  it('mantem o legado com apenas imagem dinamica no chat oficial', () => {
+    const template = {
+      payload: {
+        builder: {
+          components: [
+            { type: 'header', parameters: [{ key: 'imagem', label: 'Imagem', type: 'image', example: 'https://cdn.example.com/amostra.png' }] },
+            { type: 'body', text: 'Corpo fixo aprovado.' },
+            { type: 'button', text: 'Abrir', url: 'https://notify.example.com/fixo' },
+          ],
+        },
+      },
+    }
+    const parameters = cloudChatTemplateParameters(template)
+    expect(parameters).toEqual([expect.objectContaining({ key: 'imagem', fixedValue: '', type: 'image' })])
+    expect(cloudChatTemplateFixedVariables(template)).toEqual({})
+    const variables = cloudChatTemplateVariablesForSend(parameters, {
+      imagem: 'https://cdn.example.com/envio.png',
+    })
+    expect(variables).toEqual({ imagem: 'https://cdn.example.com/envio.png' })
+    expect(cloudChatTemplatePreview(template, variables)).toEqual({
+      header: '',
+      body: 'Corpo fixo aprovado.',
+      footer: '',
+      mediaType: 'image',
+      mediaUrl: 'https://cdn.example.com/envio.png',
+      buttons: [{ text: 'Abrir', url: 'https://notify.example.com/fixo' }],
+    })
+  })
+
+  it('preenche imagem, corpo nomeado e URL posicional no chat sem liberar sobrescrita de fixos', () => {
+    const template = {
+      payload: {
+        builder: {
+          components: [
+            { type: 'header', parameters: [{ key: 'header_image', label: 'Imagem', type: 'image' }] },
+            {
+              type: 'body',
+              text: '{{body_description}} — {{operator_name}}',
+              parameters: [
+                { key: 'body_text', parameterName: 'body_description', label: 'Descricao', type: 'text' },
+                { key: 'operator_name', parameterName: 'operator_name', label: 'Operador', type: 'text', fixedValue: 'Notify Flow' },
+              ],
+            },
+            {
+              type: 'button',
+              text: 'Ver convite',
+              url: 'https://notify.example.com/invite/{{1}}',
+              parameters: [{ key: 'invite_slug', label: 'Slug', type: 'text' }],
+            },
+          ],
+        },
+      },
+    }
+    const parameters = cloudChatTemplateParameters(template)
+    expect(parameters.filter((item) => !item.fixedValue).map((item) => item.key))
+      .toEqual(['header_image', 'body_text', 'invite_slug'])
+    const variables = cloudChatTemplateVariablesForSend(parameters, {
+      header_image: 'https://cdn.example.com/nova.png',
+      body_text: 'Descricao dinamica',
+      invite_slug: 'grupo-alpha',
+      operator_name: 'Nao deve sobrescrever',
+    })
+    expect(variables).toEqual({
+      header_image: 'https://cdn.example.com/nova.png',
+      body_text: 'Descricao dinamica',
+      operator_name: 'Notify Flow',
+      invite_slug: 'grupo-alpha',
+    })
+    expect(cloudChatTemplatePreview(template, variables)).toEqual({
+      header: '',
+      body: 'Descricao dinamica — Notify Flow',
+      footer: '',
+      mediaType: 'image',
+      mediaUrl: 'https://cdn.example.com/nova.png',
+      buttons: [{ text: 'Ver convite', url: 'https://notify.example.com/invite/grupo-alpha' }],
+    })
+
+    const chats = source('pages/ChatsPage.vue')
+    expect(chats).toContain('selectedTemplateDynamicParameters')
+    expect(chats).toContain('v-model="templateValues[parameter.key]"')
+    expect(chats).toContain('variables: selectedTemplateVariables.value')
+  })
+
   it('mantém os valores oficiais do preset de confirmação sem pedir campos no chat', () => {
     expect(cloudChatTemplateFixedVariables({
       whatsappCloudPreset: 'order_confirmation',

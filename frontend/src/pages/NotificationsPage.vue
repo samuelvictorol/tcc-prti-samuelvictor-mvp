@@ -9,8 +9,15 @@ const BUILTIN_WHATSAPP_FIXED_VALUES = Object.freeze({
   }),
 })
 
+function meaningfulNotificationValue(value) {
+  if (value === undefined || value === null) return false
+  if (typeof value === 'string') return value.trim() !== ''
+  if (typeof value === 'number') return Number.isFinite(value)
+  return typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0
+}
+
 export function notificationTemplateVariableDefinitions(template = {}, channel = '') {
-  if (String(channel || '').replaceAll('-', '_') === 'whatsapp_cloud') return []
+  const normalizedChannel = String(channel || '').replaceAll('-', '_')
   const definitions = new Map()
   const add = (raw, fallback = {}) => {
     const key = String(typeof raw === 'string' ? raw : raw?.key || raw?.name || '').trim()
@@ -24,8 +31,28 @@ export function notificationTemplateVariableDefinitions(template = {}, channel =
       example: source.example ?? existing.example ?? fallback.example ?? '',
       mediaSource: source.mediaSource || existing.mediaSource || fallback.mediaSource || '',
       mediaAssetId: source.mediaAssetId || existing.mediaAssetId || fallback.mediaAssetId || '',
+      componentType: source.componentType || existing.componentType || fallback.componentType || '',
+      parameterName: source.parameterName || existing.parameterName || fallback.parameterName || '',
       channels: [...new Set([...(existing.channels || []), channel].filter(Boolean))],
     })
+  }
+
+  if (normalizedChannel === 'whatsapp_cloud') {
+    for (const component of template.payload?.builder?.components || []) {
+      for (const parameter of component.parameters || []) {
+        if (meaningfulNotificationValue(parameter.fixedValue)) continue
+        add(parameter, {
+          label: parameter.label,
+          type: parameter.type,
+          example: parameter.example,
+          mediaSource: parameter.mediaSource,
+          mediaAssetId: parameter.mediaAssetId,
+          componentType: component.type,
+          parameterName: parameter.parameterName,
+        })
+      }
+    }
+    return [...definitions.values()]
   }
 
   const declared = Array.isArray(template.variables)
@@ -66,6 +93,26 @@ export function mergeNotificationVariableDefinitions(entries = []) {
   return [...merged.values()]
 }
 
+export function notificationRuntimeVariableValues(definitions = [], values = {}) {
+  return Object.fromEntries(definitions
+    .map((definition) => [definition.key, values[definition.key]])
+    .filter(([, value]) => meaningfulNotificationValue(value)))
+}
+
+export function notificationVariableScopeKey(selection = {}) {
+  const templateIds = Object.fromEntries(Object.entries(selection.templateIds || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([channel, id]) => [channel, String(id || '')]))
+  return JSON.stringify({
+    tab: String(selection.tab || ''),
+    channel: String(selection.channel || ''),
+    templateId: String(selection.templateId || ''),
+    globalSelectionMode: String(selection.globalSelectionMode || ''),
+    templateSetId: String(selection.templateSetId || ''),
+    templateIds,
+  })
+}
+
 function previewPlainText(value = '') {
   return String(value || '')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
@@ -104,6 +151,15 @@ function parameterFixedValue(parameter = {}) {
   return parameter.fixedValue
 }
 
+function whatsappParameterValue(parameter = {}, variables = {}) {
+  const fixedValue = parameterFixedValue(parameter)
+  if (meaningfulNotificationValue(fixedValue)) return fixedValue
+  for (const key of [parameter.key, parameter.parameterName]) {
+    if (key && meaningfulNotificationValue(variables[key])) return variables[key]
+  }
+  return fixedValue
+}
+
 export function notificationWhatsAppFixedValues(template = {}) {
   const values = { ...(BUILTIN_WHATSAPP_FIXED_VALUES[whatsappPreset(template)] || {}) }
   for (const component of template.payload?.builder?.components || []) {
@@ -121,31 +177,50 @@ export function notificationWhatsAppFixedValues(template = {}) {
 function whatsappComponentText(component = {}, variables = {}) {
   let value = previewInterpolate(component.text || '', variables)
   for (const [index, parameter] of (component.parameters || []).entries()) {
-    const fixedValue = parameterFixedValue(parameter)
-    if (fixedValue === undefined || fixedValue === null || fixedValue === '') continue
-    const printable = typeof fixedValue === 'object'
-      ? fixedValue.text || fixedValue.link || fixedValue.id || ''
-      : fixedValue
+    const parameterValue = whatsappParameterValue(parameter, variables)
+    if (!meaningfulNotificationValue(parameterValue)) continue
+    const printable = typeof parameterValue === 'object'
+      ? parameterValue.text || parameterValue.link || parameterValue.id || ''
+      : parameterValue
     value = value.replaceAll(`{{${index + 1}}}`, String(printable))
+    for (const name of [parameter.key, parameter.parameterName].filter(Boolean)) {
+      value = value.replaceAll(`{{${name}}}`, String(printable))
+    }
   }
   return previewPlainText(value)
 }
 
-function whatsappMediaPreview(builderComponents = []) {
+function whatsappComponentUrl(component = {}, variables = {}) {
+  let value = previewInterpolate(component.url || '', variables)
+  for (const [index, parameter] of (component.parameters || []).entries()) {
+    const parameterValue = whatsappParameterValue(parameter, variables)
+    if (!meaningfulNotificationValue(parameterValue)) continue
+    const printable = typeof parameterValue === 'object'
+      ? parameterValue.text || parameterValue.link || parameterValue.id || ''
+      : parameterValue
+    value = value.replaceAll(`{{${index + 1}}}`, String(printable))
+    for (const name of [parameter.key, parameter.parameterName].filter(Boolean)) {
+      value = value.replaceAll(`{{${name}}}`, String(printable))
+    }
+  }
+  return value
+}
+
+function whatsappMediaPreview(builderComponents = [], variables = {}) {
   const header = builderComponents.find((component) => component.type === 'header')
   const parameter = header?.parameters?.find((item) => ['image', 'video', 'document'].includes(item.type))
   if (!parameter) return { mediaType: '', mediaUrl: '' }
-  const fixedValue = parameterFixedValue(parameter)
-  const mediaUrl = typeof fixedValue === 'object'
-    ? fixedValue.link || fixedValue.url || ''
-    : fixedValue
+  const parameterValue = whatsappParameterValue(parameter, variables)
+  const mediaUrl = typeof parameterValue === 'object'
+    ? parameterValue.link || parameterValue.url || ''
+    : parameterValue
   return { mediaType: parameter.type, mediaUrl: String(mediaUrl || '') }
 }
 
 export function notificationTemplatePreview(template = {}, channel = '', variables = {}) {
   const normalizedChannel = String(channel || '').replaceAll('-', '_')
   const whatsappValues = normalizedChannel === 'whatsapp_cloud'
-    ? notificationWhatsAppFixedValues(template)
+    ? { ...variables, ...notificationWhatsAppFixedValues(template) }
     : variables
   const builderComponents = template.payload?.builder?.components || []
   const bodyComponent = builderComponents.find((component) => component.type === 'body')
@@ -169,7 +244,7 @@ export function notificationTemplatePreview(template = {}, channel = '', variabl
     ? String(template.externalTemplateName || template.name || '').trim()
     : ''
   const whatsappMedia = normalizedChannel === 'whatsapp_cloud'
-    ? whatsappMediaPreview(builderComponents)
+    ? whatsappMediaPreview(builderComponents, whatsappValues)
     : { mediaType: '', mediaUrl: '' }
   return {
     body: body || (channel === 'whatsapp_cloud'
@@ -198,7 +273,7 @@ export function notificationTemplatePreview(template = {}, channel = '', variabl
     buttons: normalizedChannel === 'whatsapp_cloud'
       ? buttonComponents.map((component) => ({
           text: whatsappComponentText(component, whatsappValues) || 'Ação',
-          url: previewInterpolate(component.url || '', whatsappValues),
+          url: whatsappComponentUrl(component, whatsappValues),
         }))
       : [],
   }
@@ -447,6 +522,7 @@ const form = reactive({
   templateId: null,
   templateSetId: null,
   templateIds: { telegram: null, whatsapp_cloud: null, email: null },
+  variables: {},
 })
 
 const channels = computed(() => [
@@ -520,6 +596,46 @@ const selectedGlobalChannelOptions = computed(() => notificationGlobalChannelOpt
 const unavailableGlobalChannelOptions = computed(() => selectedGlobalChannelOptions.value
   .filter((channel) => !channel.enabled))
 
+const activeTemplateEntries = computed(() => {
+  if (tab.value === 'template') {
+    return selectedTemplate.value && form.channel
+      ? [{ template: selectedTemplate.value, channel: form.channel }]
+      : []
+  }
+  if (tab.value !== 'global') return []
+  return selectedGlobalChannelOptions.value
+    .map((channel) => ({
+      channel: channel.value,
+      template: templateById(activeGlobalTemplateIds.value[channel.value]),
+    }))
+    .filter((entry) => entry.template)
+})
+
+const activeVariableDefinitions = computed(() => mergeNotificationVariableDefinitions(activeTemplateEntries.value))
+const activeVariableScopeKey = computed(() => notificationVariableScopeKey({
+  tab: tab.value,
+  channel: form.channel,
+  templateId: form.templateId,
+  globalSelectionMode: globalSelectionMode.value,
+  templateSetId: form.templateSetId,
+  templateIds: form.templateIds,
+}))
+const missingVariableDefinitions = computed(() => activeVariableDefinitions.value.filter(
+  (definition) => !meaningfulNotificationValue(form.variables[definition.key]),
+))
+
+function variableHint(definition = {}) {
+  const channels = (definition.channels || []).map((channel) => channelLabel(channel)).join(', ')
+  const example = definition.example ? `Exemplo: ${definition.example}` : ''
+  return [channels ? `Usado em ${channels}` : '', example].filter(Boolean).join(' · ')
+}
+
+function variableIcon(definition = {}) {
+  if (['image', 'video', 'document'].includes(definition.type)) return 'link'
+  if (definition.componentType === 'button') return 'ads_click'
+  return 'data_object'
+}
+
 const selectedRecipients = computed(() => form.contactIds.length + form.groupIds.length)
 const reviewItems = computed(() => {
   if (tab.value === 'quick') {
@@ -540,7 +656,7 @@ const reviewItems = computed(() => {
     return [{
       ...channel,
       templateName: selectedTemplate.value.name || selectedTemplate.value.title || 'Template',
-      preview: notificationTemplatePreview(selectedTemplate.value, form.channel),
+      preview: notificationTemplatePreview(selectedTemplate.value, form.channel, form.variables),
     }]
   }
   return selectedGlobalChannelOptions.value.map((channel) => {
@@ -548,7 +664,7 @@ const reviewItems = computed(() => {
     return {
       ...channel,
       templateName: template?.name || template?.title || 'Template',
-      preview: notificationTemplatePreview(template, channel.value),
+      preview: notificationTemplatePreview(template, channel.value, form.variables),
     }
   })
 })
@@ -572,6 +688,14 @@ watch(() => form.channel, () => {
     form.templateId = null
   }
 })
+
+watch(activeVariableScopeKey, () => {
+  form.variables = {}
+})
+
+watch(activeVariableDefinitions, (definitions) => {
+  form.variables = notificationRuntimeVariableValues(definitions, form.variables)
+}, { deep: true })
 
 const deliveryColumns = [
   { name: 'createdAt', label: 'Quando', field: 'createdAt', align: 'left' },
@@ -879,7 +1003,7 @@ function buildPayload() {
     content: {
       text: tab.value === 'quick' ? form.message : undefined,
       subject: tab.value === 'quick' ? form.subject || undefined : undefined,
-      variables: {},
+      variables: notificationRuntimeVariableValues(activeVariableDefinitions.value, form.variables),
     },
   }
 }
@@ -911,6 +1035,14 @@ async function send() {
   }
   if (tab.value === 'global' && globalSelectionMode.value === 'manual' && !enabledChannelOptions.value.length) {
     $q.notify({ type: 'warning', message: 'Configure ao menos um canal antes do disparo global.' })
+    return
+  }
+  if (tab.value !== 'quick' && missingVariableDefinitions.value.length) {
+    $q.notify({
+      type: 'warning',
+      message: 'Preencha os dados variáveis dos templates selecionados.',
+      caption: missingVariableDefinitions.value.map((definition) => definition.label).join(', '),
+    })
     return
   }
   if (tab.value !== 'global' && !dispatchChannelOptions.value.some((channel) => channel.value === form.channel)) {
@@ -961,6 +1093,7 @@ async function confirmSend() {
         form.templateSetId = null
         form.templateIds = { telegram: null, whatsapp_cloud: null, email: null }
       }
+      form.variables = {}
     }
     await loadData()
   } catch (error) {
@@ -1133,6 +1266,30 @@ onMounted(loadData)
                   </article>
                 </section>
               </template>
+
+              <section v-if="panel !== 'quick' && activeVariableDefinitions.length" class="full-span template-runtime-fields">
+                <header>
+                  <div>
+                    <strong>Dados deste disparo</strong>
+                    <span>Preencha somente os campos dinâmicos definidos nos templates escolhidos.</span>
+                  </div>
+                  <q-badge outline color="primary" :label="`${activeVariableDefinitions.length} campo(s)`" />
+                </header>
+                <div class="template-runtime-fields__grid">
+                  <q-input
+                    v-for="definition in activeVariableDefinitions"
+                    :key="definition.key"
+                    v-model="form.variables[definition.key]"
+                    outlined
+                    stack-label
+                    :type="['image', 'video', 'document'].includes(definition.type) ? 'url' : 'text'"
+                    :label="`${definition.label} *`"
+                    :hint="variableHint(definition)"
+                  >
+                    <template #prepend><q-icon :name="variableIcon(definition)" color="primary" /></template>
+                  </q-input>
+                </div>
+              </section>
 
             </div>
           </q-tab-panel>
@@ -2577,6 +2734,37 @@ onMounted(loadData)
   padding: 14px 20px;
 }
 
+.template-runtime-fields {
+  padding: 16px;
+  border: 1px solid rgba(29, 180, 158, 0.24);
+  border-radius: 18px;
+  background: rgba(232, 252, 248, 0.72);
+}
+
+.template-runtime-fields > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.template-runtime-fields > header div,
+.template-runtime-fields__grid {
+  display: grid;
+  gap: 4px;
+}
+
+.template-runtime-fields > header span {
+  color: #637a76;
+  font-size: 0.8rem;
+}
+
+.template-runtime-fields__grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 @media (max-width: 1000px) {
   .notification-layout {
     grid-template-columns: 1fr;
@@ -2618,6 +2806,10 @@ onMounted(loadData)
   }
 
   .review-preview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .template-runtime-fields__grid {
     grid-template-columns: 1fr;
   }
 

@@ -821,6 +821,66 @@ test('builder rejeita botoes que redirecionam para WhatsApp ou wa.me', () => {
   );
 });
 
+test('botao URL preserva um unico placeholder {{1}} somente no caminho ou query', () => {
+  for (const url of [
+    'https://notify.example/invite/{{1}}',
+    'https://notify.example/invite?codigo={{1}}'
+  ]) {
+    const normalized = normalizeBuilder({
+      version: 1,
+      components: [{
+        type: 'button', subType: 'url', index: 0, text: 'Abrir', url,
+        parameters: [{ type: 'text', key: 'suffix', label: 'Sufixo' }]
+      }]
+    });
+    assert.equal(normalized.components[0].url, url);
+  }
+
+  for (const url of [
+    'https://{{1}}.notify.example/invite',
+    'https://notify.example/invite/{{slug}}',
+    'https://notify.example/invite/{{',
+    'https://notify.example/{{1}}/{{1}}',
+    'https://notify.example/invite#{{1}}'
+  ]) {
+    assert.throws(
+      () => normalizeBuilder({
+        version: 1,
+        components: [{
+          type: 'button', subType: 'url', index: 0, text: 'Abrir', url,
+          parameters: [{ type: 'text', key: 'suffix', label: 'Sufixo' }]
+        }]
+      }),
+      (error) => error.code === 'WHATSAPP_TEMPLATE_BUTTON_URL_PLACEHOLDER_INVALID'
+    );
+  }
+});
+
+test('botao URL exige parametro somente quando possui o sufixo dinamico {{1}}', () => {
+  const cases = [
+    {
+      url: 'https://notify.example/invite',
+      parameters: [{ type: 'text', key: 'suffix', label: 'Sufixo' }]
+    },
+    {
+      url: 'https://notify.example/invite/{{1}}',
+      parameters: []
+    }
+  ];
+  for (const input of cases) {
+    assert.throws(
+      () => normalizeBuilder({
+        version: 1,
+        components: [{
+          type: 'button', subType: 'url', index: 0, text: 'Abrir',
+          url: input.url, parameters: input.parameters
+        }]
+      }),
+      (error) => error.code === 'WHATSAPP_TEMPLATE_BUTTON_URL_PARAMETER_MISMATCH'
+    );
+  }
+});
+
 test('custom oficial torna componentes opcionais e valida rigorosamente os que forem preenchidos', () => {
   const base = {
     name: 'Novo marketing',
@@ -859,6 +919,13 @@ test('custom oficial torna componentes opcionais e valida rigorosamente os que f
         type: 'button', subType: 'url', index: 0, text: 'Abrir',
         url: 'https://notify.example/destino', parameters: []
       }]
+    },
+    {
+      version: 1, category: 'marketing', mode: 'standard',
+      components: [
+        { type: 'header', parameters: [{ type: 'image', key: 'hero', label: 'Hero', example: 'https://cdn.example/hero.png' }] },
+        { type: 'body', text: 'Texto', parameters: [] }
+      ]
     }
   ];
   for (const builder of acceptedBuilders) {
@@ -872,13 +939,6 @@ test('custom oficial torna componentes opcionais e valida rigorosamente os que f
   }
 
   const invalidBuilders = [
-    {
-      version: 1, category: 'marketing', mode: 'standard',
-      components: [
-        { type: 'header', parameters: [{ type: 'image', key: 'hero', label: 'Hero', example: 'https://cdn.example/hero.png' }] },
-        { type: 'body', text: 'Texto', parameters: [] }
-      ]
-    },
     {
       version: 1, category: 'marketing', mode: 'standard',
       components: [
@@ -901,6 +961,89 @@ test('custom oficial torna componentes opcionais e valida rigorosamente os que f
       (error) => error.code === 'WHATSAPP_MARKETING_STANDARD_INVALID'
     );
   }
+});
+
+test('Marketing Standard aceita midia dinamica, body nomeado e sufixo posicional no botao URL', () => {
+  const input = {
+    name: 'Convite dinamico',
+    channel: 'whatsapp_cloud',
+    externalTemplateName: 'convite_dinamico_v1',
+    payload: {
+      builder: {
+        version: 1,
+        category: 'marketing',
+        mode: 'standard',
+        components: [
+          {
+            type: 'header',
+            parameters: [{
+              type: 'image', key: 'headerMedia', label: 'Imagem',
+              example: 'https://cdn.example.com/convite.png'
+            }]
+          },
+          {
+            type: 'body',
+            text: 'Ola, {{customer_name}}.',
+            parameters: [{
+              type: 'text', key: 'customerName', parameterName: 'customer_name', label: 'Nome'
+            }]
+          },
+          {
+            type: 'button', subType: 'url', index: 0, text: 'Abrir convite',
+            url: 'https://notify.example/invite/{{1}}',
+            parameters: [{ type: 'text', key: 'inviteSuffix', label: 'Sufixo do convite' }]
+          }
+        ]
+      }
+    }
+  };
+  assert.equal(createTemplateSchema.safeParse({ body: input }).success, true);
+  const normalized = templatesManager.normalizeTemplateInput(input);
+
+  assert.equal(normalized.languageCode, 'pt_BR');
+  assert.equal(
+    normalized.payload.builder.components[2].url,
+    'https://notify.example/invite/{{1}}'
+  );
+  assert.deepEqual(normalized.payload.components, [
+    { type: 'header', parameters: [{ type: 'image', image: { link: '{{headerMedia}}' } }] },
+    {
+      type: 'body',
+      parameters: [{ type: 'text', text: '{{customerName}}', parameter_name: 'customer_name' }]
+    },
+    {
+      type: 'button', sub_type: 'url', index: '0',
+      parameters: [{ type: 'text', text: '{{inviteSuffix}}' }]
+    }
+  ]);
+
+  assert.deepEqual(buildCustomTemplateMessage({
+    name: normalized.externalTemplateName,
+    languageCode: normalized.languageCode,
+    builder: normalized.payload.builder,
+    variables: {
+      headerMedia: 'https://cdn.example.com/convite-real.png',
+      customerName: 'Samuel',
+      inviteSuffix: 'grupo-alpha'
+    }
+  }), {
+    type: 'template',
+    template: {
+      name: 'convite_dinamico_v1',
+      language: { code: 'pt_BR' },
+      components: [
+        { type: 'header', parameters: [{ type: 'image', image: { link: 'https://cdn.example.com/convite-real.png' } }] },
+        {
+          type: 'body',
+          parameters: [{ type: 'text', text: 'Samuel', parameter_name: 'customer_name' }]
+        },
+        {
+          type: 'button', sub_type: 'url', index: '0',
+          parameters: [{ type: 'text', text: 'grupo-alpha' }]
+        }
+      ]
+    }
+  });
 });
 
 test('builder custom gera somente schema de envio Meta e suporta tipos comuns', () => {

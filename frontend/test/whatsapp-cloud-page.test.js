@@ -6,6 +6,7 @@ vi.mock('quasar', () => ({ useQuasar: () => ({}) }))
 
 import {
   dispatchDeliveryCount,
+  dynamicTemplateParameters,
   fixedTemplateVariableValues,
   formatWhatsappPublicNumber,
   humanizeWebhookKey,
@@ -20,6 +21,7 @@ import {
   sanitizeWebhookPayload,
   selectedGroupEligibility,
   templateParameterDefinitions,
+  templateVariableValuesForSend,
   whatsappConnectionIdentity,
   whatsappDispatchTemplatePreview,
   webhookEventFieldOptionsFrom,
@@ -166,6 +168,87 @@ describe('disparo oficial WhatsApp Cloud', () => {
     expect(source).not.toContain('Valores do template')
     expect(source).not.toContain('form.variableValues')
     expect(source).toContain('Conteúdo e valores definidos no template cadastrado.')
+  })
+
+  it('suporta o template legado com somente a imagem dinamica', () => {
+    const template = {
+      payload: {
+        builder: {
+          components: [
+            { type: 'header', parameters: [{ key: 'imagem', label: 'Imagem', type: 'image', example: 'https://cdn.example.com/amostra.png' }] },
+            { type: 'body', text: 'Mensagem fixa.' },
+            { type: 'button', text: 'Abrir', url: 'https://notify.example.com/fixo' },
+          ],
+        },
+      },
+    }
+
+    expect(dynamicTemplateParameters(template)).toEqual([
+      expect.objectContaining({ key: 'imagem', type: 'image', fixedValue: '' }),
+    ])
+    const variables = templateVariableValuesForSend(template, {
+      imagem: 'https://cdn.example.com/envio.png',
+      campo_antigo: 'ignorar',
+    })
+    expect(variables).toEqual({ imagem: 'https://cdn.example.com/envio.png' })
+    expect(whatsappDispatchTemplatePreview(template, variables)).toEqual({
+      header: '',
+      body: 'Mensagem fixa.',
+      footer: '',
+      mediaType: 'image',
+      mediaUrl: 'https://cdn.example.com/envio.png',
+      buttons: [{ text: 'Abrir', url: 'https://notify.example.com/fixo' }],
+    })
+  })
+
+  it('monta runtime de imagem, corpo nomeado e URL posicional preservando campos fixos', () => {
+    const template = {
+      payload: {
+        builder: {
+          components: [
+            { type: 'header', parameters: [{ key: 'header_image', label: 'Imagem', type: 'image' }] },
+            {
+              type: 'body',
+              text: '{{body_description}} — {{operator_name}}',
+              parameters: [
+                { key: 'body_text', parameterName: 'body_description', label: 'Descricao', type: 'text' },
+                { key: 'operator_name', parameterName: 'operator_name', label: 'Operador', type: 'text', fixedValue: 'Notify Flow' },
+              ],
+            },
+            {
+              type: 'button',
+              text: 'Ver convite',
+              url: 'https://notify.example.com/invite/{{1}}',
+              parameters: [{ key: 'invite_slug', label: 'Slug', type: 'text' }],
+            },
+          ],
+        },
+      },
+    }
+
+    expect(dynamicTemplateParameters(template).map((item) => item.key))
+      .toEqual(['header_image', 'body_text', 'invite_slug'])
+    const variables = templateVariableValuesForSend(template, {
+      header_image: 'https://cdn.example.com/nova.png',
+      body_text: 'Descricao dinamica',
+      invite_slug: 'grupo-alpha',
+      operator_name: 'Nao deve sobrescrever',
+      obsoleto: 'Nao deve seguir',
+    })
+    expect(variables).toEqual({
+      header_image: 'https://cdn.example.com/nova.png',
+      body_text: 'Descricao dinamica',
+      invite_slug: 'grupo-alpha',
+      operator_name: 'Notify Flow',
+    })
+    expect(whatsappDispatchTemplatePreview(template, variables)).toEqual({
+      header: '',
+      body: 'Descricao dinamica — Notify Flow',
+      footer: '',
+      mediaType: 'image',
+      mediaUrl: 'https://cdn.example.com/nova.png',
+      buttons: [{ text: 'Ver convite', url: 'https://notify.example.com/invite/grupo-alpha' }],
+    })
   })
 
   it('não promove placeholder legado a valor fixo de envio', () => {

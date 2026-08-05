@@ -50,9 +50,40 @@ const BUTTON_SUB_TYPES = Object.freeze(['url', 'quick_reply', 'copy_code', 'otp_
 const FORBIDDEN_WHATSAPP_BUTTON_HOSTS = Object.freeze(['wa.me', 'whatsapp.com']);
 
 function buttonUrl(value, details = {}) {
+  const rawValue = String(value).trim();
+  const placeholderTokens = rawValue.match(/\{\{[^{}]+\}\}/g) || [];
+  const positionalPlaceholders = rawValue.match(/\{\{1\}\}/g) || [];
+  if (placeholderTokens.some((token) => token !== '{{1}}') || positionalPlaceholders.length > 1
+    || (/[{}]/.test(rawValue) && positionalPlaceholders.length !== 1)) {
+    templateError(
+      'Botao URL aceita no maximo um placeholder posicional {{1}}',
+      details,
+      'WHATSAPP_TEMPLATE_BUTTON_URL_PLACEHOLDER_INVALID'
+    );
+  }
+  if (positionalPlaceholders.length) {
+    const placeholderIndex = rawValue.indexOf('{{1}}');
+    const authorityStart = rawValue.indexOf('://') + 3;
+    const suffixIndexes = ['/', '?', '#']
+      .map((separator) => rawValue.indexOf(separator, authorityStart))
+      .filter((index) => index >= 0);
+    const suffixStart = suffixIndexes.length ? Math.min(...suffixIndexes) : -1;
+    const fragmentStart = rawValue.indexOf('#', authorityStart);
+    if (authorityStart < 3 || suffixStart < 0 || placeholderIndex < suffixStart
+      || (fragmentStart >= 0 && placeholderIndex > fragmentStart)) {
+      templateError(
+        'Placeholder {{1}} permitido somente no caminho ou query do botao URL',
+        details,
+        'WHATSAPP_TEMPLATE_BUTTON_URL_PLACEHOLDER_INVALID'
+      );
+    }
+  }
+  let placeholderMarker = 'notify-flow-dynamic-suffix';
+  while (rawValue.includes(placeholderMarker)) placeholderMarker += '-value';
+  const valueForValidation = rawValue.replace('{{1}}', placeholderMarker);
   let parsed;
   try {
-    parsed = new URL(String(value));
+    parsed = new URL(valueForValidation);
   } catch (_error) {
     templateError('Botao exige URL HTTPS valida', details);
   }
@@ -74,7 +105,8 @@ function buttonUrl(value, details = {}) {
       'WHATSAPP_TEMPLATE_BUTTON_URL_FORBIDDEN'
     );
   }
-  return parsed.toString();
+  const normalized = parsed.toString();
+  return positionalPlaceholders.length ? normalized.replace(placeholderMarker, '{{1}}') : normalized;
 }
 
 function meaningfulValue(value) {
@@ -335,6 +367,19 @@ function normalizeBuilder(builder) {
     if (namedCount > 0 && namedCount !== parameters.length) {
       templateError('Nao misture parametros nomeados e posicionais no mesmo componente', { componentIndex });
     }
+    if (type === 'button' && subType === 'url') {
+      const hasDynamicSuffix = normalizedComponentUrl?.includes('{{1}}') === true;
+      const expectedParameters = hasDynamicSuffix ? 1 : 0;
+      if (parameters.length !== expectedParameters) {
+        templateError(
+          hasDynamicSuffix
+            ? 'Botao URL com {{1}} exige exatamente um parametro posicional de sufixo'
+            : 'Botao URL fixa nao aceita parametro de sufixo',
+          { componentIndex, expectedParameters, receivedParameters: parameters.length },
+          'WHATSAPP_TEMPLATE_BUTTON_URL_PARAMETER_MISMATCH'
+        );
+      }
+    }
     return {
       id,
       type,
@@ -379,12 +424,6 @@ function assertMarketingStandardBuilder(builder) {
         { component: 'header' }
       );
     }
-    if (!meaningfulValue(headerParameters[0].fixedValue)) {
-      marketingStandardError(
-        'Midia do cabecalho exige fixedValue; example e apenas documentacao',
-        { component: 'header', parameter: headerParameters[0].key }
-      );
-    }
   }
   if (body.length && !String(body[0].text || '').trim()) {
     marketingStandardError('Corpo Marketing Padrao informado exige texto fixo', { component: 'body' });
@@ -393,21 +432,16 @@ function assertMarketingStandardBuilder(builder) {
     marketingStandardError('Rodape informado exige texto fixo', { component: 'footer' });
   }
   for (const button of buttons) {
-    if (button.subType !== 'url' || !String(button.text || '').trim() || !button.url || button.parameters.length) {
+    const parameters = button.parameters || [];
+    const hasDynamicSuffix = String(button.url || '').includes('{{1}}');
+    const hasValidSuffix = hasDynamicSuffix
+      ? parameters.length === 1 && parameters[0].type === 'text' && !parameters[0].parameterName
+      : parameters.length === 0;
+    if (button.subType !== 'url' || !String(button.text || '').trim() || !button.url || !hasValidSuffix) {
       marketingStandardError(
-        'Botao Marketing Padrao exige texto e URL HTTPS fixa, sem parametros',
+        'Botao Marketing Padrao exige URL fixa sem parametros ou URL com {{1}} e exatamente um parametro posicional de sufixo',
         { component: 'button', index: button.index }
       );
-    }
-  }
-  for (const component of builder.components) {
-    for (const parameter of component.parameters) {
-      if (!meaningfulValue(parameter.fixedValue)) {
-        marketingStandardError(
-          'Parametros do template novo exigem fixedValue; example nao e usado no envio',
-          { component: component.type, parameter: parameter.key }
-        );
-      }
     }
   }
   return builder;

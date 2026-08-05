@@ -203,31 +203,56 @@ export function fixedTemplateVariableValues(template = {}) {
     .map((parameter) => [parameter.key, parameter.fixedValue]))
 }
 
+export function dynamicTemplateParameters(template = {}) {
+  return templateParameterDefinitions(template)
+    .filter((parameter) => !meaningfulTemplateValue(parameter.fixedValue))
+}
+
+export function templateVariableValuesForSend(template = {}, runtimeVariables = {}) {
+  const dynamicKeys = new Set(dynamicTemplateParameters(template).map((parameter) => parameter.key))
+  return {
+    ...Object.fromEntries(Object.entries(runtimeVariables)
+      .filter(([key, value]) => dynamicKeys.has(key) && meaningfulTemplateValue(value))),
+    ...fixedTemplateVariableValues(template),
+  }
+}
+
+function templateParameterValue(parameter = {}, variables = {}) {
+  if (meaningfulTemplateValue(parameter.fixedValue)) return parameter.fixedValue
+  for (const key of [parameter.key, parameter.parameterName]) {
+    if (key && meaningfulTemplateValue(variables[key])) return variables[key]
+  }
+  return parameter.fixedValue
+}
+
 function interpolateTemplateText(value = '', variables = {}, parameters = []) {
   let output = String(value || '').replace(/{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}/g, (placeholder, key) => {
     const replacement = variables[key]
     return meaningfulTemplateValue(replacement) ? String(replacement) : placeholder
   })
   for (const [index, parameter] of parameters.entries()) {
-    const replacement = parameter.fixedValue
+    const replacement = templateParameterValue(parameter, variables)
     if (!meaningfulTemplateValue(replacement)) continue
     const printable = typeof replacement === 'object'
       ? replacement.text || replacement.link || replacement.id || ''
       : replacement
     output = output.replaceAll(`{{${index + 1}}}`, String(printable))
+    for (const name of [parameter.key, parameter.parameterName].filter(Boolean)) {
+      output = output.replaceAll(`{{${name}}}`, String(printable))
+    }
   }
   return output.trim()
 }
 
-export function whatsappDispatchTemplatePreview(template = {}) {
+export function whatsappDispatchTemplatePreview(template = {}, runtimeVariables = {}) {
   const components = template.payload?.builder?.components || []
-  const variables = fixedTemplateVariableValues(template)
+  const variables = { ...runtimeVariables, ...fixedTemplateVariableValues(template) }
   const componentOf = (type) => components.find((component) => component.type === type)
   const bodyComponent = componentOf('body')
   const headerComponent = componentOf('header')
   const footerComponent = componentOf('footer')
   const mediaParameter = headerComponent?.parameters?.find((parameter) => ['image', 'video', 'document'].includes(parameter.type))
-  const mediaValue = mediaParameter?.fixedValue
+  const mediaValue = mediaParameter ? templateParameterValue(mediaParameter, variables) : ''
   const mediaUrl = typeof mediaValue === 'object'
     ? mediaValue.link || mediaValue.url || ''
     : mediaValue
@@ -559,6 +584,7 @@ const form = reactive({
   contactId: null,
   groupIds: [],
   templateId: null,
+  variables: {},
 })
 
 const webhookEventFilters = reactive({
@@ -619,9 +645,30 @@ const templateOptions = computed(() => officialTemplates.value.map((template) =>
 })))
 
 const selectedTemplate = computed(() => officialTemplates.value.find((template) => String(recordId(template)) === String(form.templateId)) || null)
-const selectedTemplateParameters = computed(() => templateParameterDefinitions(selectedTemplate.value || {}))
-const selectedTemplateFixedValues = computed(() => fixedTemplateVariableValues(selectedTemplate.value || {}))
-const selectedTemplatePreview = computed(() => whatsappDispatchTemplatePreview(selectedTemplate.value || {}))
+const selectedTemplateDynamicParameters = computed(() => dynamicTemplateParameters(selectedTemplate.value || {}))
+const selectedTemplateVariables = computed(() => templateVariableValuesForSend(
+  selectedTemplate.value || {},
+  form.variables,
+))
+const selectedTemplatePreview = computed(() => whatsappDispatchTemplatePreview(
+  selectedTemplate.value || {},
+  selectedTemplateVariables.value,
+))
+
+function dynamicParameterHint(parameter = {}) {
+  const location = parameter.componentType === 'header'
+    ? 'cabeçalho'
+    : parameter.componentType === 'button'
+      ? 'botão'
+      : 'corpo'
+  return [`Valor dinâmico do ${location}`, parameter.example ? `Exemplo: ${parameter.example}` : '']
+    .filter(Boolean)
+    .join(' · ')
+}
+
+watch(() => form.templateId, () => {
+  form.variables = {}
+})
 
 const groupEligibility = computed(() => selectedGroupEligibility(form.groupIds, groups.value, contacts.value))
 const lastDispatchId = computed(() => recordId(lastDispatch.value) || lastDispatch.value?.notificationId || null)
@@ -907,8 +954,10 @@ function validateSend() {
   if (form.recipientMode === 'contact' && !form.contactId) return 'Selecione um contato autorizado.'
   if (form.recipientMode === 'groups' && !form.groupIds.length) return 'Selecione ao menos um grupo.'
   if (!form.templateId) return 'Selecione um template oficial.'
-  const missing = selectedTemplateParameters.value.filter((parameter) => !meaningfulTemplateValue(parameter.fixedValue))
-  if (missing.length) return `Revise o template cadastrado: faltam valores fixos em ${missing.map((parameter) => parameter.label).join(', ')}.`
+  const missing = selectedTemplateDynamicParameters.value.filter(
+    (parameter) => !meaningfulTemplateValue(form.variables[parameter.key]),
+  )
+  if (missing.length) return `Preencha os dados variáveis: ${missing.map((parameter) => parameter.label).join(', ')}.`
   return null
 }
 
@@ -927,7 +976,7 @@ async function send() {
       contactIds: form.recipientMode === 'contact' ? [form.contactId] : [],
       groupIds: form.recipientMode === 'groups' ? form.groupIds : [],
       templateId: form.templateId,
-      content: { variables: selectedTemplateFixedValues.value },
+      content: { variables: selectedTemplateVariables.value },
       idempotencyKey: newIdempotencyKey('whatsapp-cloud'),
     })
     lastDispatch.value = unwrap(response) || {}
@@ -1189,6 +1238,32 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
+          <section v-if="selectedTemplateDynamicParameters.length" class="cloud-runtime-fields">
+            <header>
+              <div>
+                <strong>Dados deste disparo</strong>
+                <span>A Meta substituirá estes campos no corpo, na mídia ou no botão.</span>
+              </div>
+              <q-badge outline color="primary" :label="`${selectedTemplateDynamicParameters.length} campo(s)`" />
+            </header>
+            <div class="cloud-runtime-fields__grid">
+              <q-input
+                v-for="parameter in selectedTemplateDynamicParameters"
+                :key="parameter.key"
+                v-model="form.variables[parameter.key]"
+                outlined
+                stack-label
+                :type="['image', 'video', 'document'].includes(parameter.type) ? 'url' : 'text'"
+                :label="`${parameter.label} *`"
+                :hint="dynamicParameterHint(parameter)"
+              >
+                <template #prepend>
+                  <q-icon :name="['image', 'video', 'document'].includes(parameter.type) ? 'link' : parameter.componentType === 'button' ? 'ads_click' : 'data_object'" color="primary" />
+                </template>
+              </q-input>
+            </div>
+          </section>
+
           <section v-if="selectedTemplate" class="dispatch-template-preview">
             <div v-if="selectedTemplatePreview.mediaUrl" class="dispatch-template-preview__media">
               <q-img
@@ -1216,8 +1291,8 @@ onBeforeUnmount(() => {
               </span>
             </div>
             <q-banner dense rounded class="ready-template-banner">
-              <template #avatar><q-icon name="lock" color="primary" /></template>
-              Mídia, textos, rodapé e botões serão enviados exatamente como foram cadastrados neste template.
+              <template #avatar><q-icon name="verified" color="primary" /></template>
+              Partes fixas seguem o modelo aprovado; os campos acima serão aplicados somente a esta entrega.
             </q-banner>
           </section>
 
@@ -1864,6 +1939,37 @@ onBeforeUnmount(() => {
   line-height: 1.45;
 }
 
+.cloud-runtime-fields {
+  padding: 16px;
+  border: 1px solid rgba(22, 134, 111, 0.22);
+  border-radius: 16px;
+  background: rgba(235, 252, 248, 0.72);
+}
+
+.cloud-runtime-fields > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.cloud-runtime-fields > header div {
+  display: grid;
+  gap: 3px;
+}
+
+.cloud-runtime-fields > header span {
+  color: #607772;
+  font-size: 0.82rem;
+}
+
+.cloud-runtime-fields__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .dispatch-template-preview {
   display: grid;
   gap: 10px;
@@ -2408,6 +2514,10 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 650px) {
+  .cloud-runtime-fields__grid {
+    grid-template-columns: 1fr;
+  }
+
   .cloud-identity {
     align-items: flex-start;
     padding: 13px;

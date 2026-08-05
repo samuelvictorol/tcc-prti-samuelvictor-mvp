@@ -10,8 +10,10 @@ import {
   normalizeMetaDeliveryBlocks,
   notificationDeliveryDetail,
   notificationGlobalChannelOptions,
+  notificationRuntimeVariableValues,
   notificationTemplatePreview,
   notificationTemplateVariableDefinitions,
+  notificationVariableScopeKey,
   notificationWhatsAppFixedValues,
 } from '../src/pages/NotificationsPage.vue'
 
@@ -68,6 +70,37 @@ describe('compositor amigável de notificações', () => {
     expect(definitions).toEqual([
       expect.objectContaining({ key: 'codigo', channels: ['telegram', 'email'] }),
     ])
+  })
+
+  it('isola dados runtime ao trocar aba, template, conjunto ou selecao manual', () => {
+    const base = {
+      tab: 'global',
+      channel: 'whatsapp_cloud',
+      templateId: 'template-1',
+      globalSelectionMode: 'set',
+      templateSetId: 'set-1',
+      templateIds: { whatsapp_cloud: 'wa-1', telegram: 'tg-1' },
+    }
+    const key = notificationVariableScopeKey(base)
+
+    expect(notificationVariableScopeKey({ ...base, tab: 'template' })).not.toBe(key)
+    expect(notificationVariableScopeKey({ ...base, channel: 'telegram' })).not.toBe(key)
+    expect(notificationVariableScopeKey({ ...base, templateId: 'template-2' })).not.toBe(key)
+    expect(notificationVariableScopeKey({ ...base, globalSelectionMode: 'manual' })).not.toBe(key)
+    expect(notificationVariableScopeKey({ ...base, templateSetId: 'set-2' })).not.toBe(key)
+    expect(notificationVariableScopeKey({
+      ...base,
+      templateIds: { whatsapp_cloud: 'wa-2', telegram: 'tg-1' },
+    })).not.toBe(key)
+    expect(notificationVariableScopeKey({
+      ...base,
+      templateIds: { telegram: 'tg-1', whatsapp_cloud: 'wa-1' },
+    })).toBe(key)
+
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
+    expect(source).toContain('watch(activeVariableScopeKey, () => {')
+    expect(source).toContain('form.variables = {}')
+    expect(source).toContain('watch(activeVariableDefinitions, (definitions) => {')
   })
 
   it('envia mapa templateIds e não oferece rápido global nem editor JSON', () => {
@@ -216,6 +249,102 @@ describe('compositor amigável de notificações', () => {
       body: 'Olá Ana',
       mediaType: 'photo',
       mediaUrl: 'https://cdn.example.com/imagem.jpg',
+    }))
+  })
+
+  it('mantem o legado com apenas a imagem dinamica sem transformar o exemplo em valor fixo', () => {
+    const template = {
+      externalTemplateName: 'convite_imagem_legado',
+      languageCode: 'pt_BR',
+      payload: {
+        builder: {
+          components: [
+            {
+              type: 'header',
+              parameters: [{
+                key: 'imagem_cabecalho',
+                label: 'Link da imagem',
+                type: 'image',
+                example: 'https://cdn.example.com/amostra.png',
+              }],
+            },
+            { type: 'body', text: 'Texto fixo aprovado pela Meta.' },
+            { type: 'button', text: 'Abrir convite', url: 'https://notify.example.com/invite/fixo' },
+          ],
+        },
+      },
+    }
+
+    const definitions = notificationTemplateVariableDefinitions(template, 'whatsapp_cloud')
+    expect(definitions).toEqual([expect.objectContaining({
+      key: 'imagem_cabecalho',
+      label: 'Link da imagem',
+      type: 'image',
+      example: 'https://cdn.example.com/amostra.png',
+      componentType: 'header',
+    })])
+    expect(notificationRuntimeVariableValues(definitions, {
+      imagem_cabecalho: 'https://cdn.example.com/envio.png',
+      campo_obsoleto: 'nao enviar',
+    })).toEqual({ imagem_cabecalho: 'https://cdn.example.com/envio.png' })
+    expect(notificationTemplatePreview(template, 'whatsapp_cloud', {
+      imagem_cabecalho: 'https://cdn.example.com/envio.png',
+    })).toEqual(expect.objectContaining({
+      body: 'Texto fixo aprovado pela Meta.',
+      mediaType: 'image',
+      mediaUrl: 'https://cdn.example.com/envio.png',
+      buttons: [{ text: 'Abrir convite', url: 'https://notify.example.com/invite/fixo' }],
+    }))
+  })
+
+  it('preenche imagem, corpo nomeado e sufixo posicional do botao sem expor valores fixos', () => {
+    const template = {
+      externalTemplateName: 'notify_flow_dinamic_image_description',
+      languageCode: 'pt_BR',
+      payload: {
+        builder: {
+          components: [
+            { type: 'header', parameters: [{ key: 'header_image', label: 'Imagem', type: 'image' }] },
+            {
+              type: 'body',
+              text: '{{body_description}}\nAssinado por {{operator_name}}',
+              parameters: [
+                { key: 'body_text', parameterName: 'body_description', label: 'Descricao', type: 'text' },
+                { key: 'operator_name', parameterName: 'operator_name', label: 'Operador', type: 'text', fixedValue: 'Notify Flow' },
+              ],
+            },
+            {
+              type: 'button',
+              text: 'Ver convite',
+              url: 'https://notify.example.com/invite/{{1}}',
+              parameters: [{ key: 'invite_slug', label: 'Slug do convite', type: 'text' }],
+            },
+          ],
+        },
+      },
+    }
+
+    const definitions = notificationTemplateVariableDefinitions(template, 'whatsapp_cloud')
+    expect(definitions.map((item) => item.key)).toEqual(['header_image', 'body_text', 'invite_slug'])
+    expect(definitions.find((item) => item.key === 'body_text')).toMatchObject({
+      parameterName: 'body_description',
+      componentType: 'body',
+    })
+    const runtime = notificationRuntimeVariableValues(definitions, {
+      header_image: 'https://cdn.example.com/campanha.png',
+      body_text: 'Conteudo desta campanha.',
+      invite_slug: 'grupo-alpha',
+      operator_name: 'Tentativa de sobrescrita',
+    })
+    expect(runtime).toEqual({
+      header_image: 'https://cdn.example.com/campanha.png',
+      body_text: 'Conteudo desta campanha.',
+      invite_slug: 'grupo-alpha',
+    })
+    expect(notificationTemplatePreview(template, 'whatsapp_cloud', runtime)).toEqual(expect.objectContaining({
+      body: 'Conteudo desta campanha.\nAssinado por Notify Flow',
+      mediaUrl: 'https://cdn.example.com/campanha.png',
+      buttons: [{ text: 'Ver convite', url: 'https://notify.example.com/invite/grupo-alpha' }],
     }))
   })
 

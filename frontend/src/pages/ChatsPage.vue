@@ -133,6 +133,7 @@ export function cloudChatTemplateParameters(template = {}) {
           componentType: component.type || 'body',
           fixedValue: parameter.fixedValue ?? '',
         }
+        if (parameter.parameterName) normalized.parameterName = parameter.parameterName
         if (parameter.example) normalized.example = parameter.example
         if (parameter.filename) normalized.filename = parameter.filename
         if (parameter.mediaSource) normalized.mediaSource = parameter.mediaSource
@@ -172,25 +173,31 @@ function interpolateCloudTemplateText(value = '', variables = {}, parameters = [
     return meaningfulCloudTemplateValue(replacement) ? String(replacement) : placeholder
   })
   for (const [index, parameter] of parameters.entries()) {
-    const replacement = parameter.fixedValue
+    const replacement = variables[parameter.key] ?? parameter.fixedValue
     if (!meaningfulCloudTemplateValue(replacement)) continue
     const printable = typeof replacement === 'object'
       ? replacement.text || replacement.link || replacement.url || replacement.id || ''
       : replacement
     output = output.replaceAll(`{{${index + 1}}}`, String(printable))
+    for (const name of [parameter.key, parameter.parameterName].filter(Boolean)) {
+      output = output.replaceAll(`{{${name}}}`, String(printable))
+    }
   }
   return output.trim()
 }
 
-export function cloudChatTemplatePreview(template = {}) {
+export function cloudChatTemplatePreview(template = {}, runtimeVariables = {}) {
   const components = template.payload?.builder?.components || []
-  const variables = cloudChatTemplateFixedVariables(template)
+  const variables = {
+    ...runtimeVariables,
+    ...cloudChatTemplateFixedVariables(template),
+  }
   const componentOf = (type) => components.find((component) => component.type === type)
   const bodyComponent = componentOf('body')
   const headerComponent = componentOf('header')
   const footerComponent = componentOf('footer')
   const mediaParameter = headerComponent?.parameters?.find((parameter) => ['image', 'video', 'document'].includes(parameter.type))
-  const mediaValue = mediaParameter?.fixedValue
+  const mediaValue = variables[mediaParameter?.key] ?? mediaParameter?.fixedValue
   const mediaUrl = typeof mediaValue === 'object'
     ? mediaValue.link || mediaValue.url || ''
     : mediaValue
@@ -399,7 +406,9 @@ export function isValidCloudTemplateMediaUrl(value) {
 
 export function cloudChatTemplateVariablesForSend(parameters = [], values = {}, assets = {}) {
   return Object.fromEntries(parameters.map((parameter) => {
-    const value = values[parameter.key] ?? parameter.fixedValue
+    const value = meaningfulCloudTemplateValue(parameter.fixedValue)
+      ? parameter.fixedValue
+      : values[parameter.key]
     if (!isCloudTemplateMediaParameter(parameter)) return [parameter.key, value]
     const asset = assets[parameter.key]
     const assetReference = asset?.url || asset?.id || ''
@@ -418,7 +427,7 @@ export function canSendCloudChatMode(conversation, mode = 'quick', now = Date.no
 </script>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -444,6 +453,7 @@ const search = ref('')
 const draft = ref('')
 const sendMode = ref('quick')
 const templateId = ref(null)
+const templateValues = ref({})
 const templates = ref([])
 const historyNote = ref('')
 const now = ref(Date.now())
@@ -488,8 +498,41 @@ const selectedTemplate = computed(() => templates.value.find(
   (item) => String(item.id || item._id) === String(templateId.value),
 ) || null)
 const selectedTemplateParameters = computed(() => cloudChatTemplateParameters(selectedTemplate.value || {}))
-const selectedTemplateFixedVariables = computed(() => cloudChatTemplateFixedVariables(selectedTemplate.value || {}))
-const selectedTemplatePreview = computed(() => cloudChatTemplatePreview(selectedTemplate.value || {}))
+const selectedTemplateDynamicParameters = computed(() => selectedTemplateParameters.value.filter(
+  (parameter) => !meaningfulCloudTemplateValue(parameter.fixedValue),
+))
+const selectedTemplateVariables = computed(() => cloudChatTemplateVariablesForSend(
+  selectedTemplateParameters.value,
+  templateValues.value,
+))
+const selectedTemplatePreview = computed(() => cloudChatTemplatePreview(
+  selectedTemplate.value || {},
+  selectedTemplateVariables.value,
+))
+
+watch(templateId, () => {
+  templateValues.value = {}
+})
+
+function dynamicParameterHint(parameter = {}) {
+  if (isCloudTemplateMediaParameter(parameter)) {
+    return `${parameter.type === 'image' ? 'Imagem' : parameter.type === 'video' ? 'Vídeo' : 'Documento'}: informe uma URL HTTPS pública.`
+  }
+  if (parameter.componentType === 'button') {
+    return 'Informe somente a parte dinâmica do link aprovada pela Meta, como o slug do convite.'
+  }
+  return parameter.parameterName
+    ? `Preenche {{${parameter.parameterName}}} no corpo aprovado pela Meta.`
+    : 'Valor solicitado por este template para esta entrega.'
+}
+
+function dynamicParameterIcon(parameter = {}) {
+  if (parameter.type === 'image') return 'image'
+  if (parameter.type === 'video') return 'movie'
+  if (parameter.type === 'document') return 'description'
+  if (parameter.componentType === 'button') return 'link'
+  return 'short_text'
+}
 
 function conversationName(conversation) {
   return conversation?.contact?.displayName
@@ -723,21 +766,21 @@ async function sendMessage() {
     $q.notify({ type: 'warning', message: 'Associe esta conversa a um contato antes de enviar um template.' })
     return
   }
-  const missingParameters = selectedTemplateParameters.value.filter(
-    (parameter) => !meaningfulCloudTemplateValue(parameter.fixedValue),
+  const missingParameters = selectedTemplateDynamicParameters.value.filter(
+    (parameter) => !meaningfulCloudTemplateValue(templateValues.value[parameter.key]),
   )
   if (sendMode.value === 'template' && missingParameters.length) {
     $q.notify({
       type: 'warning',
-      message: `Revise o template cadastrado. Faltam valores fixos em: ${missingParameters.map((parameter) => parameter.label).join(', ')}.`,
+      message: `Preencha os dados deste envio: ${missingParameters.map((parameter) => parameter.label).join(', ')}.`,
     })
     return
   }
   const invalidMedia = selectedTemplateParameters.value.filter(
     (parameter) => isCloudTemplateMediaParameter(parameter)
-      && !isValidCloudTemplateMediaUrl(typeof parameter.fixedValue === 'object'
-        ? parameter.fixedValue.link || parameter.fixedValue.url
-        : parameter.fixedValue),
+      && !isValidCloudTemplateMediaUrl(typeof selectedTemplateVariables.value[parameter.key] === 'object'
+        ? selectedTemplateVariables.value[parameter.key].link || selectedTemplateVariables.value[parameter.key].url
+        : selectedTemplateVariables.value[parameter.key]),
   )
   if (sendMode.value === 'template' && invalidMedia.length) {
     $q.notify({
@@ -759,11 +802,12 @@ async function sendMessage() {
         groupIds: [],
         templateId: templateId.value,
         content: {
-          variables: selectedTemplateFixedVariables.value,
+          variables: selectedTemplateVariables.value,
         },
         idempotencyKey: newIdempotencyKey('whatsapp-cloud-chat'),
       })
       $q.notify({ type: 'positive', message: 'Template colocado na fila de envio.' })
+      templateValues.value = {}
     }
     await refreshSelected()
   } catch (error) {
@@ -1325,6 +1369,33 @@ onBeforeUnmount(() => {
                   label="Template oficial"
                   :disable="!selectedCanCompose"
                 />
+                <section
+                  v-if="selectedTemplateDynamicParameters.length"
+                  class="chat-template-fields"
+                  aria-label="Dados deste envio"
+                >
+                  <div class="chat-template-fields__title">
+                    <q-icon name="tune" />
+                    <span>Dados deste envio</span>
+                  </div>
+                  <q-input
+                    v-for="parameter in selectedTemplateDynamicParameters"
+                    :key="parameter.key"
+                    v-model="templateValues[parameter.key]"
+                    dense
+                    outlined
+                    clearable
+                    :type="isCloudTemplateMediaParameter(parameter) ? 'url' : 'text'"
+                    :label="parameter.label"
+                    :hint="dynamicParameterHint(parameter)"
+                    :disable="!selectedCanCompose"
+                    class="chat-template-fields__input"
+                  >
+                    <template #prepend>
+                      <q-icon :name="dynamicParameterIcon(parameter)" />
+                    </template>
+                  </q-input>
+                </section>
                 <section v-if="selectedTemplate" class="chat-template-preview">
                   <div v-if="selectedTemplatePreview.mediaUrl" class="chat-template-preview__media">
                     <q-img
@@ -1352,7 +1423,7 @@ onBeforeUnmount(() => {
                     </span>
                   </div>
                   <div class="chat-template-preview__locked">
-                    <q-icon name="lock" /> Conteúdo e valores definidos no template cadastrado.
+                    <q-icon name="verified" /> Conteúdo e valores definidos no template cadastrado. Somente os campos acima variam neste envio.
                   </div>
                 </section>
               </div>
@@ -1769,6 +1840,31 @@ onBeforeUnmount(() => {
   grid-column: 1 / -1;
 }
 
+.chat-template-fields {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid rgba(22, 130, 109, 0.14);
+  border-radius: 13px;
+  background: rgba(239, 251, 247, 0.8);
+}
+
+.chat-template-fields__title {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 6px;
+  color: #176e60;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.chat-template-fields__input {
+  min-width: 0;
+}
+
 .chat-template-preview {
   display: grid;
   grid-column: 1 / -1;
@@ -1930,6 +2026,14 @@ onBeforeUnmount(() => {
   }
 
   .template-composer > :first-child {
+    grid-column: auto;
+  }
+
+  .chat-template-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-template-fields__title {
     grid-column: auto;
   }
 }
