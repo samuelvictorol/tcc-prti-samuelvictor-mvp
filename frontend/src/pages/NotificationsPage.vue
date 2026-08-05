@@ -79,6 +79,46 @@ export function notificationTemplateVariableDefinitions(template = {}, channel =
   return [...definitions.values()]
 }
 
+function notificationReferenceId(value) {
+  return value?._id || value?.id || value || null
+}
+
+function notificationReferenceName(value) {
+  if (!value || typeof value !== 'object') return ''
+  return String(value.name || value.title || '').trim()
+}
+
+export function notificationActivityName(notification = {}, templates = [], templateSets = []) {
+  const setId = notificationReferenceId(notification.templateSet)
+  const set = templateSets.find((item) => String(notificationReferenceId(item)) === String(setId))
+  const setName = notificationReferenceName(notification.templateSet) || notificationReferenceName(set)
+  if (setName) return setName
+
+  const templateId = notificationReferenceId(notification.template)
+  const template = templates.find((item) => String(notificationReferenceId(item)) === String(templateId))
+  const templateName = notificationReferenceName(notification.template) || notificationReferenceName(template)
+  if (templateName) return templateName
+
+  const selectedTemplateNames = Object.values(notification.templates || {})
+    .map((reference) => {
+      const id = notificationReferenceId(reference)
+      const selected = templates.find((item) => String(notificationReferenceId(item)) === String(id))
+      return notificationReferenceName(reference) || notificationReferenceName(selected)
+    })
+    .filter(Boolean)
+  if (selectedTemplateNames.length) return [...new Set(selectedTemplateNames)].join(' · ')
+
+  const providerTemplateName = String(
+    notification.content?.templateName
+    || notification.content?.externalTemplateName
+    || notification.content?.customTemplate?.name
+    || '',
+  ).trim()
+  if (providerTemplateName) return providerTemplateName
+  if (notification.kind === 'quick') return 'Mensagem rápida'
+  return 'Template não identificado'
+}
+
 export function mergeNotificationVariableDefinitions(entries = []) {
   const merged = new Map()
   for (const { template, channel } of entries) {
@@ -701,10 +741,14 @@ const deliveryColumns = [
   { name: 'createdAt', label: 'Quando', field: 'createdAt', align: 'left' },
   { name: 'mode', label: 'Tipo', field: 'mode', align: 'left' },
   { name: 'channel', label: 'Canal', field: 'channel', align: 'left' },
-  { name: 'recipient', label: 'Destino', field: 'recipient', align: 'left' },
+  { name: 'contentName', label: 'Conjunto / template', field: 'contentName', align: 'left' },
   { name: 'status', label: 'Status', field: 'status', align: 'left' },
   { name: 'actions', label: '', field: 'actions', align: 'right' },
 ]
+
+function activityName(notification) {
+  return notificationActivityName(notification, templates.value, templateSets.value)
+}
 
 const dispatchDetailColumns = [
   { name: 'contact', label: 'Contato', field: 'contactId', align: 'left' },
@@ -1447,9 +1491,9 @@ onMounted(loadData)
         @row-click="(_event, row) => openDispatchDetails(row)"
       >
         <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt) }}</q-td></template>
-        <template #body-cell-mode="props"><q-td :props="props">{{ props.row.mode || props.row.type || '—' }}</q-td></template>
+        <template #body-cell-mode="props"><q-td :props="props">Notificação</q-td></template>
         <template #body-cell-channel="props"><q-td :props="props"><q-badge outline color="primary" :label="props.row.channel || 'global'" /></q-td></template>
-        <template #body-cell-recipient="props"><q-td :props="props">{{ props.row.recipient?.name || props.row.contact?.name || props.row.recipient || 'Lote' }}</q-td></template>
+        <template #body-cell-contentName="props"><q-td :props="props">{{ activityName(props.row) }}</q-td></template>
         <template #body-cell-status="props"><q-td :props="props"><q-badge :color="statusColor(props.row.status)" :label="props.row.status || 'queued'" /></q-td></template>
         <template #body-cell-actions="props">
           <q-td :props="props">
@@ -1471,14 +1515,14 @@ onMounted(loadData)
             <article class="activity-mobile-card" role="button" tabindex="0" @click="openDispatchDetails(props.row)" @keydown.enter="openDispatchDetails(props.row)">
               <header>
                 <div>
-                  <strong>{{ props.row.mode || props.row.kind || 'Disparo' }}</strong>
+                  <strong>Notificação</strong>
                   <span>{{ formatDate(props.row.createdAt) }}</span>
                 </div>
                 <q-badge :color="statusColor(props.row.status)" :label="statusLabel(props.row.status)" />
               </header>
               <div class="activity-mobile-card__meta">
                 <span><q-icon name="lan" />{{ channelLabel(props.row.channel) }}</span>
-                <span><q-icon name="people" />{{ props.row.recipient?.name || props.row.contact?.name || props.row.recipient || 'Lote' }}</span>
+                <span><q-icon name="description" />{{ activityName(props.row) }}</span>
               </div>
               <footer>
                 <span>Ver contatos, canais e motivos</span>

@@ -8,6 +8,7 @@ import {
   isExternalMetaDeliveryBlock,
   mergeNotificationVariableDefinitions,
   normalizeMetaDeliveryBlocks,
+  notificationActivityName,
   notificationDeliveryDetail,
   notificationGlobalChannelOptions,
   notificationRuntimeVariableValues,
@@ -18,6 +19,28 @@ import {
 } from '../src/pages/NotificationsPage.vue'
 
 describe('compositor amigável de notificações', () => {
+  it('identifica o conjunto ou template exibido na atividade recente', () => {
+    const templates = [
+      { id: 'template-wa', name: 'Aviso WhatsApp' },
+      { id: 'template-email', name: 'Aviso Email' },
+    ]
+    const templateSets = [{ id: 'set-1', name: 'Boas-vindas multicanal' }]
+
+    expect(notificationActivityName({ templateSet: 'set-1' }, templates, templateSets))
+      .toBe('Boas-vindas multicanal')
+    expect(notificationActivityName({ template: 'template-wa' }, templates, templateSets))
+      .toBe('Aviso WhatsApp')
+    expect(notificationActivityName({
+      templates: { whatsapp_cloud: 'template-wa', email: 'template-email' },
+    }, templates, templateSets)).toBe('Aviso WhatsApp · Aviso Email')
+    expect(notificationActivityName({ kind: 'quick' }, templates, templateSets))
+      .toBe('Mensagem rápida')
+
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/NotificationsPage.vue', import.meta.url)), 'utf8')
+    expect(source).toContain("label: 'Conjunto / template'")
+    expect(source).toContain('<q-td :props="props">Notificação</q-td>')
+  })
+
   it('descobre variáveis declaradas, placeholders e parâmetros do builder sem JSON manual', () => {
     const definitions = notificationTemplateVariableDefinitions({
       variables: [{ key: 'protocolo', label: 'Número do protocolo' }],
