@@ -371,24 +371,23 @@ function assertMarketingStandardBuilder(builder) {
   const body = builder.components.filter((component) => component.type === 'body');
   const footer = builder.components.filter((component) => component.type === 'footer');
   const buttons = builder.components.filter((component) => component.type === 'button');
-  if (header.length !== 1) {
-    marketingStandardError('Template Marketing Padrao exige exatamente um cabecalho de midia', { component: 'header' });
+  if (header.length) {
+    const headerParameters = header[0].parameters || [];
+    if (headerParameters.length !== 1 || !['image', 'video', 'document'].includes(headerParameters[0]?.type)) {
+      marketingStandardError(
+        'Cabecalho Marketing Padrao, quando informado, exige exatamente uma imagem, video ou documento',
+        { component: 'header' }
+      );
+    }
+    if (!meaningfulValue(headerParameters[0].fixedValue)) {
+      marketingStandardError(
+        'Midia do cabecalho exige fixedValue; example e apenas documentacao',
+        { component: 'header', parameter: headerParameters[0].key }
+      );
+    }
   }
-  const headerParameters = header[0]?.parameters || [];
-  if (headerParameters.length !== 1 || !['image', 'video', 'document'].includes(headerParameters[0]?.type)) {
-    marketingStandardError(
-      'Cabecalho Marketing Padrao exige exatamente uma imagem, video ou documento',
-      { component: 'header' }
-    );
-  }
-  if (!meaningfulValue(headerParameters[0].fixedValue)) {
-    marketingStandardError(
-      'Midia do cabecalho exige fixedValue; example e apenas documentacao',
-      { component: 'header', parameter: headerParameters[0].key }
-    );
-  }
-  if (body.length !== 1 || !String(body[0]?.text || '').trim()) {
-    marketingStandardError('Template Marketing Padrao exige body com texto fixo', { component: 'body' });
+  if (body.length && !String(body[0].text || '').trim()) {
+    marketingStandardError('Corpo Marketing Padrao informado exige texto fixo', { component: 'body' });
   }
   if (footer.length && !String(footer[0].text || '').trim()) {
     marketingStandardError('Rodape informado exige texto fixo', { component: 'footer' });
@@ -808,13 +807,25 @@ function officialTemplateInputForPreset(presetId) {
 }
 
 function normalizeOfficialTemplateDefinition(input, options = {}) {
-  const inferredPreset = input.whatsappCloudPreset || presetFromTemplateName(input.externalTemplateName);
+  const externalTemplateName = String(input.externalTemplateName || '').trim();
+  const inferredPreset = input.whatsappCloudPreset
+    || presetFromTemplateName(externalTemplateName)
+    || (externalTemplateName ? 'custom' : null);
   if (inferredPreset === 'custom') {
-    const name = String(input.externalTemplateName || '').trim();
-    const languageCode = String(input.languageCode || '').trim();
+    const name = externalTemplateName;
+    const languageCode = String(input.languageCode || 'pt_BR').trim();
     if (!/^[a-z0-9_]{1,512}$/.test(name)) templateError('Nome oficial Meta invalido', { field: 'externalTemplateName' });
     if (!/^[a-z]{2,3}(?:_[A-Z]{2})?$/.test(languageCode)) templateError('Codigo de idioma Meta invalido', { field: 'languageCode' });
-    const builder = normalizeBuilder(input.payload?.builder);
+    const configuredBuilder = input.payload?.builder;
+    const marketingDefaults = options.enforceMarketingStandard === false && configuredBuilder
+      ? {}
+      : { category: 'marketing', mode: 'standard' };
+    const builder = normalizeBuilder({
+      version: 1,
+      ...marketingDefaults,
+      components: [],
+      ...(configuredBuilder || {})
+    });
     if (options.enforceMarketingStandard !== false) assertMarketingStandardBuilder(builder);
     const fixedBody = builder.components.find((component) => component.type === 'body')?.text;
     return {

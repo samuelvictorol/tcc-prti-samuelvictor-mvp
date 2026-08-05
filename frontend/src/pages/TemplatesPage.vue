@@ -232,6 +232,52 @@ export function createStandardMarketingComponents(overrides = {}) {
   ]
 }
 
+export const OPTIONAL_STANDARD_COMPONENTS = Object.freeze([
+  Object.freeze({ type: 'header', label: 'Cabeçalho / mídia', icon: 'perm_media' }),
+  Object.freeze({ type: 'body', label: 'Corpo', icon: 'subject' }),
+  Object.freeze({ type: 'footer', label: 'Rodapé', icon: 'short_text' }),
+  Object.freeze({ type: 'button', label: 'Botão de link', icon: 'ads_click' }),
+])
+
+function createOptionalStandardComponent(type) {
+  if (type === 'header') {
+    return createCloudComponent({
+      type: 'header',
+      parameters: [createCloudParameter({
+        type: 'image',
+        key: 'midia_cabecalho',
+        label: 'Mídia do cabeçalho',
+        mediaType: 'image',
+      })],
+    })
+  }
+  if (type === 'button') return createCloudComponent({ type: 'button', subType: 'url', index: '0' })
+  return createCloudComponent({ type })
+}
+
+function cloudParameterHasContent(parameter = {}) {
+  if (isCloudMediaParameter(parameter.type)) {
+    return Boolean(String(parameter.fixedValue || parameter.example || parameter.mediaAssetId || '').trim())
+  }
+  return Boolean(
+    String(parameter.key || parameter.parameterName || parameter.example || parameter.fixedValue || '').trim(),
+  )
+}
+
+export function meaningfulCloudComponents(components = []) {
+  return (components || []).filter((component) => {
+    const hasParameters = (component.parameters || []).some(cloudParameterHasContent)
+    if (component.type === 'header') return hasParameters || Boolean(String(component.text || '').trim())
+    if (component.type === 'body' || component.type === 'footer') {
+      return Boolean(String(component.text || '').trim()) || hasParameters
+    }
+    if (component.type === 'button') {
+      return Boolean(String(component.text || component.url || '').trim()) || hasParameters
+    }
+    return hasParameters || Boolean(String(component.text || component.url || '').trim())
+  })
+}
+
 export function isForbiddenWhatsAppButtonUrl(value) {
   const raw = String(value || '').trim()
   if (/^whatsapp:/i.test(raw)) return true
@@ -272,7 +318,7 @@ export function renderWhatsAppPreviewMarkup(value = '') {
 }
 
 export function buildCustomWhatsAppCloudDefinition(input) {
-  const builderComponents = (input.components || []).map((component, componentIndex) => ({
+  const builderComponents = meaningfulCloudComponents(input.components).map((component, componentIndex) => ({
     id: component.id,
     type: component.type,
     ...(component.type === 'button' ? {
@@ -281,7 +327,7 @@ export function buildCustomWhatsAppCloudDefinition(input) {
     } : {}),
     ...(String(component.text || '').trim() ? { text: String(component.text).trim() } : {}),
     ...(String(component.url || '').trim() ? { url: String(component.url).trim() } : {}),
-    parameters: (component.parameters || []).map((parameter, parameterIndex) => ({
+    parameters: (component.parameters || []).filter(cloudParameterHasContent).map((parameter, parameterIndex) => ({
       id: parameter.id,
       type: parameter.type,
       key: normalizeCloudVariableKey(parameter.key || parameter.label, `campo_${componentIndex + 1}_${parameterIndex + 1}`),
@@ -309,7 +355,7 @@ export function buildCustomWhatsAppCloudDefinition(input) {
     externalTemplateName: String(input.templateName || '').trim(),
     languageCode: String(input.languageCode || 'pt_BR').trim(),
     description: String(input.description || '').trim(),
-    body: String(body || input.templateName || '').trim(),
+    body: String(body || '').trim() || null,
     variables,
     payload: {
       builder: { version: 1, category: 'marketing', mode: 'standard', components: builderComponents },
@@ -353,7 +399,7 @@ function customPreviewParameter(parameter = {}) {
 }
 
 export function buildCustomWhatsAppCloudPreviewPayload(input = {}) {
-  const components = (input.components || [])
+  const components = meaningfulCloudComponents(input.components)
     .filter((component) => Array.isArray(component.parameters) && component.parameters.length)
     .map((component) => ({
       type: component.type,
@@ -408,16 +454,30 @@ export function standardMarketingComponentsFromTemplate(template = {}) {
   const body = components.find((component) => component.type === 'body')
   const footer = components.find((component) => component.type === 'footer')
   const button = components.find((component) => component.type === 'button')
-  return createStandardMarketingComponents({
-    media: legacyMedia ? {
-      ...legacyMedia,
-      fixedValue: legacyMedia.fixedValue || legacyMedia.example || '',
-    } : undefined,
-    body: body?.text || template.body || STANDARD_MARKETING_DEFAULTS.body,
-    footer: footer?.text ?? STANDARD_MARKETING_DEFAULTS.footer,
-    buttonText: button?.text || button?.parameters?.[0]?.label || STANDARD_MARKETING_DEFAULTS.buttonText,
-    buttonUrl: button?.url || button?.parameters?.[0]?.fixedValue || button?.parameters?.[0]?.example || STANDARD_MARKETING_DEFAULTS.buttonUrl,
-  })
+  const restored = []
+  if (legacyMedia) {
+    restored.push(createCloudComponent({
+      ...header,
+      parameters: [{
+        ...legacyMedia,
+        fixedValue: legacyMedia.fixedValue || legacyMedia.example || '',
+      }],
+    }))
+  }
+  const legacyBody = String(body?.text || template.body || '').trim()
+  const officialName = String(template.externalTemplateName || template.metadata?.approvedName || '').trim()
+  if (body || (legacyBody && legacyBody !== officialName)) {
+    restored.push(createCloudComponent({ ...body, type: 'body', text: legacyBody }))
+  }
+  if (footer && String(footer.text || '').trim()) restored.push(createCloudComponent(footer))
+  if (button && (String(button.text || '').trim() || String(button.url || '').trim() || button.parameters?.length)) {
+    restored.push(createCloudComponent({
+      ...button,
+      text: button.text || button.parameters?.[0]?.label || '',
+      url: button.url || button.parameters?.[0]?.fixedValue || button.parameters?.[0]?.example || '',
+    }))
+  }
+  return restored
 }
 
 export function findWhatsAppCloudPreset(value) {
@@ -448,6 +508,66 @@ export function buildWhatsAppCloudTemplateDefinition(value) {
     variables: preset.parameters.map((parameter) => parameter.key),
     payload: components.length ? { components } : {},
   }
+}
+
+function optionalCloudButtonUrlError(value) {
+  if (!String(value || '').trim()) return null
+  if (!isValidHttpsTemplateUrl(value)) return 'Use um link HTTPS público, sem usuário ou senha na URL'
+  if (isForbiddenWhatsAppButtonUrl(value)) return 'Links para WhatsApp e wa.me não são permitidos neste botão'
+  return null
+}
+
+export function validateCustomWhatsAppCloudTemplate(input = {}) {
+  const templateName = String(input.templateName || '').trim()
+  const languageCode = String(input.languageCode || '').trim()
+  const components = meaningfulCloudComponents(input.components)
+  if (!templateName) return 'Informe o nome exato aprovado na Meta.'
+  if (!/^[a-z0-9_]{1,512}$/.test(templateName)) return 'O nome Meta aceita somente letras minúsculas, números e sublinhado.'
+  if (languageCode && !META_LANGUAGE_OPTIONS.some((option) => option.value === languageCode)) return 'Escolha pt_BR ou en_US, conforme o idioma aprovado na Meta.'
+  const parameters = components.flatMap((component) => component.parameters || []).filter(cloudParameterHasContent)
+  const bodies = components.filter((component) => component.type === 'body')
+  const footers = components.filter((component) => component.type === 'footer')
+  const buttons = components.filter((component) => component.type === 'button')
+  if (bodies.some((body) => String(body.text || '').length > 1024)) return 'O corpo deve ter no máximo 1.024 caracteres.'
+  if (footers.some((footer) => String(footer.text || '').length > 60)) return 'O rodapé deve ter no máximo 60 caracteres.'
+  for (const button of buttons) {
+    const hasText = Boolean(String(button.text || '').trim())
+    const hasUrl = Boolean(String(button.url || '').trim())
+    const hasParameters = (button.parameters || []).some(cloudParameterHasContent)
+    if (!hasParameters && hasText !== hasUrl) return 'Para usar o botão opcional, informe o texto e o link HTTPS.'
+    if (String(button.text || '').length > 25) return 'O texto do botão deve ter no máximo 25 caracteres.'
+    const urlError = optionalCloudButtonUrlError(button.url)
+    if (urlError) return urlError
+  }
+  if (components.filter((component) => component.type === 'header').length > 1) return 'Use no máximo um componente de cabeçalho.'
+  if (components.filter((component) => component.type === 'body').length > 1) return 'Use no máximo um componente de corpo.'
+  if (components.some((component) => ['header', 'button'].includes(component.type) && (component.parameters || []).filter(cloudParameterHasContent).length > 1)) return 'Cabeçalhos e botões aceitam somente um parâmetro por componente.'
+  const buttonIndexes = buttons.map((component) => String(component.index))
+  if (new Set(buttonIndexes).size !== buttonIndexes.length) return 'Cada botão deve usar um índice diferente.'
+  const keys = parameters.map((parameter, index) => normalizeCloudVariableKey(parameter.key || parameter.label, `campo_${index + 1}`))
+  if (keys.some((key) => !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key))) return 'As variáveis devem começar com letra e ter no máximo 64 caracteres.'
+  if (components.some((component) => {
+    const componentKeys = (component.parameters || []).filter(cloudParameterHasContent).map((parameter, index) => normalizeCloudVariableKey(parameter.key || parameter.label, `campo_${index + 1}`))
+    return new Set(componentKeys).size !== componentKeys.length
+  })) return 'Cada parâmetro do mesmo componente deve usar uma variável diferente.'
+  if (parameters.some((parameter) => !String(parameter.label || '').trim())) return 'Informe um rótulo para cada parâmetro.'
+  for (const parameter of parameters.filter((item) => isCloudMediaParameter(item.type))) {
+    const fixedValue = String(parameter.fixedValue || parameter.example || '').trim()
+    if (parameter.mediaSource !== 'upload') {
+      if (!isValidHttpsTemplateUrl(fixedValue)) return `${cloudMediaExampleLabel(parameter.type)} deve usar uma URL HTTPS pública.`
+    } else if (!/^[a-f\d]{24}$/i.test(String(parameter.mediaAssetId || ''))) {
+      return `Faça o upload do arquivo para preencher ${cloudMediaExampleLabel(parameter.type).toLowerCase()}.`
+    }
+  }
+  for (const component of components) {
+    const metaNames = (component.parameters || []).filter(cloudParameterHasContent).map((parameter) => String(parameter.parameterName || '').trim())
+    if (component.type === 'button' && metaNames.some(Boolean)) return 'Botões usam parâmetros posicionais; remova o nome Meta do botão.'
+    if (metaNames.some((name) => name && !/^[a-z][a-z0-9_]{0,63}$/.test(name))) return 'O nome do parâmetro na Meta aceita letras minúsculas, números e sublinhado.'
+    if (metaNames.some(Boolean) && !metaNames.every(Boolean)) return 'Em cada componente, use todos os parâmetros nomeados ou todos posicionais.'
+  }
+  if (parameters.some((parameter) => parameter.type === 'currency' && !/^[A-Za-z]{3}$/.test(parameter.currencyCode || ''))) return 'Parâmetros de moeda exigem um código ISO de três letras, como BRL.'
+  if (buttons.some((component) => !/^[0-9]$/.test(String(component.index)))) return 'O índice de cada botão deve estar entre 0 e 9.'
+  return null
 }
 
 export function renderWhatsAppCloudPreview(value) {
@@ -580,9 +700,12 @@ const cloudStandardMedia = computed(() => cloudStandardHeader.value?.parameters?
 const cloudStandardBody = computed(() => form.cloudComponents.find((component) => component.type === 'body') || null)
 const cloudStandardFooter = computed(() => form.cloudComponents.find((component) => component.type === 'footer') || null)
 const cloudStandardButton = computed(() => form.cloudComponents.find((component) => component.type === 'button') || null)
+const availableCloudStandardComponents = computed(() => OPTIONAL_STANDARD_COMPONENTS.filter((option) => (
+  !form.cloudComponents.some((component) => component.type === option.type)
+)))
 const cloudPreviewText = computed(() => (
   isCustomCloudTemplate.value
-    ? cloudStandardBody.value?.text || 'Escreva o corpo fixo aprovado na Meta.'
+    ? cloudStandardBody.value?.text || 'Nenhum conteúdo visual opcional foi configurado.'
     : renderWhatsAppCloudPreview(form.cloudPreset)
 ))
 const cloudPreviewFooter = computed(() => isCustomCloudTemplate.value ? String(cloudStandardFooter.value?.text || '').trim() : '')
@@ -987,10 +1110,10 @@ function applyCloudPreset(value, { suggestName = false } = {}) {
   if (preset.value === 'custom') {
     form.metadata.approvedName = ''
     form.metadata.language = form.metadata.language || 'pt_BR'
-    form.description = 'Template de marketing aprovado na Meta.'
-    form.body = STANDARD_MARKETING_DEFAULTS.body
+    form.description = ''
+    form.body = ''
     form.variablesText = ''
-    form.cloudComponents = createStandardMarketingComponents()
+    form.cloudComponents = []
     if (canSuggestName) form.name = 'Campanha oficial do WhatsApp'
     return
   }
@@ -1179,11 +1302,24 @@ function onStandardMediaTypeChange(type) {
   parameter.mediaType = type
 }
 
+function addCloudStandardComponent(type) {
+  if (form.cloudComponents.some((component) => component.type === type)) return
+  form.cloudComponents.push(createOptionalStandardComponent(type))
+  const order = new Map(OPTIONAL_STANDARD_COMPONENTS.map((option, index) => [option.type, index]))
+  form.cloudComponents.sort((left, right) => (order.get(left.type) ?? 99) - (order.get(right.type) ?? 99))
+}
+
+function removeCloudStandardComponent(type) {
+  const index = form.cloudComponents.findIndex((component) => component.type === type)
+  if (index < 0) return
+  const [component] = form.cloudComponents.splice(index, 1)
+  if (type === 'header') {
+    for (const parameter of component.parameters || []) discardPendingCloudMedia(parameter.mediaAssetId).catch(() => {})
+  }
+}
+
 function cloudButtonUrlRule(value) {
-  if (!String(value || '').trim()) return 'Informe o link do botão aprovado na Meta'
-  if (!isValidHttpsTemplateUrl(value)) return 'Use um link HTTPS público, sem usuário ou senha na URL'
-  if (isForbiddenWhatsAppButtonUrl(value)) return 'Links para WhatsApp e wa.me não são permitidos neste botão'
-  return true
+  return optionalCloudButtonUrlError(value) || true
 }
 
 function warnForbiddenCloudButtonUrl() {
@@ -1278,57 +1414,11 @@ function onCloudMediaRejected(parameter, rejectedEntries = []) {
 }
 
 function customCloudValidationError() {
-  if (!form.metadata.approvedName.trim()) return 'Informe o nome exato aprovado na Meta.'
-  if (!/^[a-z0-9_]{1,512}$/.test(form.metadata.approvedName.trim())) return 'O nome Meta aceita somente letras minúsculas, números e sublinhado.'
-  if (!form.metadata.language.trim()) return 'Informe o idioma aprovado na Meta.'
-  if (!META_LANGUAGE_OPTIONS.some((option) => option.value === form.metadata.language.trim())) return 'Escolha pt_BR ou en_US, conforme o idioma aprovado na Meta.'
-  const parameters = form.cloudComponents.flatMap((component) => component.parameters)
-  const body = cloudStandardBody.value
-  const footer = cloudStandardFooter.value
-  const button = cloudStandardButton.value
-  const media = cloudStandardMedia.value
-  if (!body || !footer || !button || !media) return 'O perfil Marketing / padrão está incompleto. Reabra o template e tente novamente.'
-  if (!String(body.text || '').trim()) return 'Escreva o corpo fixo aprovado na Meta.'
-  if (String(body.text || '').length > 1024) return 'O corpo deve ter no máximo 1.024 caracteres.'
-  if (String(footer.text || '').length > 60) return 'O rodapé deve ter no máximo 60 caracteres.'
-  if (!String(button.text || '').trim()) return 'Informe o texto fixo do botão.'
-  if (String(button.text || '').length > 25) return 'O texto do botão deve ter no máximo 25 caracteres.'
-  const buttonUrlValidation = cloudButtonUrlRule(button.url)
-  if (buttonUrlValidation !== true) return buttonUrlValidation
-  if (form.cloudComponents.filter((component) => component.type === 'header').length > 1) return 'Use no máximo um componente de cabeçalho.'
-  if (form.cloudComponents.filter((component) => component.type === 'body').length > 1) return 'Use no máximo um componente de corpo.'
-  if (form.cloudComponents.some((component) => ['header', 'button'].includes(component.type) && component.parameters.length > 1)) return 'Cabeçalhos e botões aceitam somente um parâmetro por componente.'
-  const buttonIndexes = form.cloudComponents.filter((component) => component.type === 'button').map((component) => String(component.index))
-  if (new Set(buttonIndexes).size !== buttonIndexes.length) return 'Cada botão deve usar um índice diferente.'
-  const keys = parameters.map((parameter, index) => normalizeCloudVariableKey(parameter.key || parameter.label, `campo_${index + 1}`))
-  if (keys.some((key) => !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key))) return 'As variáveis devem começar com letra e ter no máximo 64 caracteres.'
-  if (form.cloudComponents.some((component) => {
-    const componentKeys = component.parameters.map((parameter, index) => normalizeCloudVariableKey(parameter.key || parameter.label, `campo_${index + 1}`))
-    return new Set(componentKeys).size !== componentKeys.length
-  })) return 'Cada parâmetro do mesmo componente deve usar uma variável diferente.'
-  if (parameters.some((parameter) => !String(parameter.label || '').trim())) return 'Informe um rótulo para cada parâmetro.'
-  for (const parameter of parameters.filter((item) => isCloudMediaParameter(item.type))) {
-    const fixedValue = String(parameter.fixedValue || parameter.example || '').trim()
-    if (!fixedValue && !String(parameter.mediaAssetId || '').trim()) {
-      return `Informe o ${cloudMediaExampleLabel(parameter.type).toLowerCase()} ou faça o upload da mídia.`
-    }
-    if (parameter.mediaSource !== 'upload') {
-      if (!isValidHttpsTemplateUrl(fixedValue)) {
-        return `${cloudMediaExampleLabel(parameter.type)} deve usar uma URL HTTPS pública.`
-      }
-    } else if (!/^[a-f\d]{24}$/i.test(String(parameter.mediaAssetId || ''))) {
-      return `Faça o upload do arquivo para preencher ${cloudMediaExampleLabel(parameter.type).toLowerCase()}.`
-    }
-  }
-  for (const component of form.cloudComponents) {
-    const metaNames = component.parameters.map((parameter) => String(parameter.parameterName || '').trim())
-    if (component.type === 'button' && metaNames.some(Boolean)) return 'Botões usam parâmetros posicionais; remova o nome Meta do botão.'
-    if (metaNames.some((name) => name && !/^[a-z][a-z0-9_]{0,63}$/.test(name))) return 'O nome do parâmetro na Meta aceita letras minúsculas, números e sublinhado.'
-    if (metaNames.some(Boolean) && !metaNames.every(Boolean)) return 'Em cada componente, use todos os parâmetros nomeados ou todos posicionais.'
-  }
-  if (parameters.some((parameter) => parameter.type === 'currency' && !/^[A-Za-z]{3}$/.test(parameter.currencyCode || ''))) return 'Parâmetros de moeda exigem um código ISO de três letras, como BRL.'
-  if (form.cloudComponents.some((component) => component.type === 'button' && !/^[0-9]$/.test(String(component.index)))) return 'O índice de cada botão deve estar entre 0 e 9.'
-  return null
+  return validateCustomWhatsAppCloudTemplate({
+    templateName: form.metadata.approvedName,
+    languageCode: form.metadata.language,
+    components: form.cloudComponents,
+  })
 }
 
 function openEdit(template) {
@@ -1859,7 +1949,7 @@ onMounted(loadPageData)
                     emit-value
                     map-options
                     :options="channelOptions"
-                    label="Canal de envio *"
+                    label="Canal de envio"
                     class="template-field"
                     @update:model-value="onChannelChange"
                   />
@@ -1922,7 +2012,7 @@ onMounted(loadPageData)
                     :options="cloudPresetOptionsForForm"
                     :readonly="isEditingFixedCloudTemplate"
                     :hide-dropdown-icon="isEditingFixedCloudTemplate"
-                    label="Perfil do template *"
+                    label="Perfil do template"
                     class="template-field cloud-preset-select"
                     @update:model-value="onCloudPresetChange"
                   >
@@ -1976,10 +2066,10 @@ onMounted(loadPageData)
                       emit-value
                       map-options
                       :options="META_LANGUAGE_OPTIONS"
-                      label="Idioma aprovado *"
-                      hint="Selecione exatamente o idioma da versão aprovada na Meta"
+                      clearable
+                      label="Idioma aprovado (opcional)"
+                      hint="Se ficar vazio, o Notify Flow usará pt_BR"
                       class="template-field language-field"
-                      :rules="[(value) => Boolean(value) || 'Informe o idioma']"
                     />
                     <q-input
                       v-model.trim="form.description"
@@ -1993,7 +2083,7 @@ onMounted(loadPageData)
                     />
                     <q-banner rounded class="meta-approved-reminder full-span">
                       <template #avatar><q-icon name="info" color="primary" /></template>
-                      Cadastre aqui exatamente o conteúdo aprovado. A criação e a aprovação continuam no painel da Meta.
+                      Apenas o título e o nome oficial são obrigatórios no Notify Flow. Componentes informados devem coincidir com o modelo aprovado na Meta.
                     </q-banner>
                   </div>
                 </section>
@@ -2003,22 +2093,49 @@ onMounted(loadPageData)
                     <span class="step-number">2</span>
                     <div>
                       <strong>{{ isCustomCloudTemplate ? 'Conteúdo fixo aprovado' : 'Campos automáticos do modelo fixo' }}</strong>
-                      <span v-if="isCustomCloudTemplate">Mídia, corpo, rodapé e botão ficam vinculados ao template e não serão solicitados novamente no disparo.</span>
+                      <span v-if="isCustomCloudTemplate">Adicione somente os componentes que existem no modelo aprovado. Para um teste simples, todos podem ficar ausentes.</span>
                       <span v-else-if="selectedCloudPreset.parameters.length">A integração preenche estes dados automaticamente conforme o modelo preservado.</span>
                       <span v-else>Este modelo fixo não exige dados adicionais.</span>
                     </div>
                   </div>
 
                   <div v-if="isCustomCloudTemplate" class="standard-marketing-builder">
+                    <div class="optional-component-picker">
+                      <div>
+                        <strong>Componentes opcionais</strong>
+                        <span>O título e o nome oficial são suficientes para salvar. Você pode completar o conteúdo depois.</span>
+                      </div>
+                      <div v-if="availableCloudStandardComponents.length" class="optional-component-actions">
+                        <q-btn
+                          v-for="option in availableCloudStandardComponents"
+                          :key="option.type"
+                          outline
+                          no-caps
+                          color="primary"
+                          :icon="option.icon"
+                          :label="`Adicionar ${option.label}`"
+                          @click="addCloudStandardComponent(option.type)"
+                        />
+                      </div>
+                    </div>
+                    <q-banner v-if="!form.cloudComponents.length" rounded class="no-parameters-banner optional-components-empty">
+                      <template #avatar><q-icon name="science" color="primary" /></template>
+                      Nenhum componente adicionado. O payload de teste enviará apenas o nome oficial e o idioma padrão pt_BR.
+                    </q-banner>
                     <article v-if="cloudStandardMedia" class="standard-field-card standard-field-card--media">
                       <header class="standard-field-card__header">
                         <span class="standard-field-card__icon"><q-icon name="perm_media" /></span>
                         <div><strong>Mídia do cabeçalho</strong><span>Repita o mesmo tipo usado no modelo aprovado.</span></div>
-                        <ContextHelp
-                          title="Cabeçalho de mídia na Meta"
-                          tooltip="Como configurar a mídia"
-                          :text="['Selecione exatamente o tipo de cabeçalho aprovado: imagem, vídeo ou documento.', 'A mídia fica fixa neste template. Você pode informar um link HTTPS público ou hospedar o arquivo no Notify Flow.']"
-                        />
+                        <div class="standard-field-card__actions">
+                          <ContextHelp
+                            title="Cabeçalho de mídia na Meta"
+                            tooltip="Como configurar a mídia"
+                            :text="['Este bloco é opcional. Use-o somente se o modelo aprovado tiver cabeçalho de imagem, vídeo ou documento.', 'Ao usar, selecione exatamente o tipo aprovado e informe um link HTTPS público ou faça upload para o Notify Flow.']"
+                          />
+                          <q-btn flat round dense color="negative" icon="delete_outline" aria-label="Remover cabeçalho" @click="removeCloudStandardComponent('header')">
+                            <q-tooltip>Remover cabeçalho opcional</q-tooltip>
+                          </q-btn>
+                        </div>
                       </header>
                       <div class="standard-field-grid">
                         <q-select
@@ -2028,7 +2145,7 @@ onMounted(loadPageData)
                           emit-value
                           map-options
                           :options="META_PARAMETER_OPTIONS.filter((option) => ['image', 'video', 'document'].includes(option.value))"
-                          label="Tipo da mídia *"
+                          label="Tipo da mídia"
                           class="template-field"
                           @update:model-value="onStandardMediaTypeChange"
                         />
@@ -2053,8 +2170,8 @@ onMounted(loadPageData)
                           outlined
                           stack-label
                           :readonly="cloudStandardMedia.mediaSource === 'upload'"
-                          :label="`${cloudMediaExampleLabel(cloudStandardMedia.type)} *`"
-                          :hint="cloudStandardMedia.mediaSource === 'upload' ? 'Preenchido automaticamente após o upload' : 'URL HTTPS pública e acessível pela Meta'"
+                          :label="cloudMediaExampleLabel(cloudStandardMedia.type)"
+                          :hint="cloudStandardMedia.mediaSource === 'upload' ? 'Faça o upload ou remova este bloco opcional' : 'Opcional enquanto vazio; se preenchido, use uma URL HTTPS pública'"
                           class="template-field full-span media-link-field"
                         >
                           <template #prepend><q-icon name="link" color="primary" /></template>
@@ -2113,16 +2230,26 @@ onMounted(loadPageData)
                       <header class="standard-field-card__header">
                         <span class="standard-field-card__icon"><q-icon name="subject" /></span>
                         <div><strong>Corpo da mensagem</strong><span>Texto fixo, idêntico ao modelo aprovado.</span></div>
-                        <ContextHelp title="Corpo aprovado na Meta" tooltip="Sobre o corpo" :text="['Cole o texto exatamente como aparece no Gerenciador do WhatsApp.', 'Este perfil não expõe variáveis ao operador: o conteúdo fica salvo e é reutilizado em todos os envios.']" />
+                        <div class="standard-field-card__actions">
+                          <ContextHelp title="Corpo aprovado na Meta" tooltip="Sobre o corpo" :text="['Este bloco é opcional no Notify Flow durante os testes.', 'Se usar, cole o texto exatamente como aparece no Gerenciador do WhatsApp.']" />
+                          <q-btn flat round dense color="negative" icon="delete_outline" aria-label="Remover corpo" @click="removeCloudStandardComponent('body')">
+                            <q-tooltip>Remover corpo opcional</q-tooltip>
+                          </q-btn>
+                        </div>
                       </header>
-                      <q-input v-model="cloudStandardBody.text" outlined stack-label type="textarea" autogrow maxlength="1024" counter label="Corpo fixo *" class="template-field" />
+                      <q-input v-model="cloudStandardBody.text" outlined stack-label type="textarea" autogrow maxlength="1024" counter label="Corpo fixo (opcional)" class="template-field" />
                     </article>
 
                     <article v-if="cloudStandardFooter" class="standard-field-card">
                       <header class="standard-field-card__header">
                         <span class="standard-field-card__icon"><q-icon name="short_text" /></span>
                         <div><strong>Rodapé</strong><span>Complemento discreto exibido abaixo da mensagem.</span></div>
-                        <ContextHelp title="Rodapé aprovado na Meta" tooltip="Sobre o rodapé" :text="['O rodapé é opcional na Meta e aceita até 60 caracteres.', 'Se o modelo aprovado não possui rodapé, deixe este campo vazio.']" />
+                        <div class="standard-field-card__actions">
+                          <ContextHelp title="Rodapé aprovado na Meta" tooltip="Sobre o rodapé" :text="['O rodapé é opcional na Meta e aceita até 60 caracteres.', 'Se o modelo aprovado não possui rodapé, remova este bloco ou deixe o campo vazio.']" />
+                          <q-btn flat round dense color="negative" icon="delete_outline" aria-label="Remover rodapé" @click="removeCloudStandardComponent('footer')">
+                            <q-tooltip>Remover rodapé opcional</q-tooltip>
+                          </q-btn>
+                        </div>
                       </header>
                       <q-input v-model="cloudStandardFooter.text" outlined stack-label maxlength="60" counter label="Rodapé fixo" class="template-field" />
                     </article>
@@ -2131,15 +2258,20 @@ onMounted(loadPageData)
                       <header class="standard-field-card__header">
                         <span class="standard-field-card__icon"><q-icon name="ads_click" /></span>
                         <div><strong>Botão de link</strong><span>Texto e destino fixos, iguais aos aprovados.</span></div>
-                        <ContextHelp title="Botão de ação na Meta" tooltip="Sobre o botão" :text="['Use o mesmo rótulo e o mesmo destino HTTPS cadastrados no botão do modelo oficial.', 'Para evitar loops e uma experiência confusa, links para WhatsApp, api.whatsapp.com e wa.me são bloqueados.']" />
+                        <div class="standard-field-card__actions">
+                          <ContextHelp title="Botão de ação na Meta" tooltip="Sobre o botão" :text="['Este bloco é opcional. Se usar, informe juntos o rótulo e o destino HTTPS cadastrados no modelo oficial.', 'Links para WhatsApp, api.whatsapp.com e wa.me continuam bloqueados.']" />
+                          <q-btn flat round dense color="negative" icon="delete_outline" aria-label="Remover botão" @click="removeCloudStandardComponent('button')">
+                            <q-tooltip>Remover botão opcional</q-tooltip>
+                          </q-btn>
+                        </div>
                       </header>
                       <div class="standard-field-grid standard-field-grid--button">
-                        <q-input v-model.trim="cloudStandardButton.text" outlined stack-label maxlength="25" counter label="Texto do botão *" class="template-field" />
+                        <q-input v-model.trim="cloudStandardButton.text" outlined stack-label maxlength="25" counter label="Texto do botão" hint="Opcional; ao preencher, informe também o link" class="template-field" />
                         <q-input
                           v-model.trim="cloudStandardButton.url"
                           outlined
                           stack-label
-                          label="Link HTTPS do botão *"
+                          label="Link HTTPS do botão"
                           hint="Exemplo: https://seudominio.com/convite"
                           class="template-field"
                           lazy-rules
@@ -2174,7 +2306,7 @@ onMounted(loadPageData)
                 <q-banner rounded class="automatic-payload-banner">
                   <template #avatar><q-icon name="auto_awesome" color="primary" /></template>
                   <strong>Sem configuração JSON.</strong>
-                  O nome oficial, idioma e componentes são gerados automaticamente ao salvar.
+                  O nome oficial é salvo com pt_BR por padrão. Somente os componentes opcionais preenchidos entram no builder.
                 </q-banner>
               </template>
 
@@ -2323,7 +2455,7 @@ onMounted(loadPageData)
               </div>
               <div class="preview-warning" :class="{ 'cloud-preview-note': form.channel === 'whatsapp_cloud' }">
                 <q-icon :name="form.channel === 'whatsapp_cloud' ? 'info' : 'security'" color="primary" />
-                <span v-if="form.channel === 'whatsapp_cloud'">A Meta controla o layout final. A descrição interna não faz parte desta mensagem; confira se mídia, texto e botão coincidem com o modelo aprovado.</span>
+                <span v-if="form.channel === 'whatsapp_cloud'">A Meta controla o layout final. A descrição interna não faz parte da mensagem; quando informados, mídia, texto e botão devem coincidir com o modelo aprovado.</span>
                 <span v-else-if="form.channel === 'telegram'">Somente texto simples é exibido; menus usam botões inline e mídias são validadas pelo servidor.</span>
                 <span v-else>HTML perigoso é removido da prévia. A API ainda deve sanitizar antes do envio.</span>
               </div>
@@ -2732,6 +2864,43 @@ onMounted(loadPageData)
   gap: 14px;
 }
 
+.optional-component-picker {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px dashed rgba(18, 104, 89, 0.25);
+  border-radius: 16px;
+  background: rgba(239, 253, 249, 0.72);
+}
+
+.optional-component-picker > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.optional-component-picker strong {
+  color: #183c35;
+  font-size: 0.92rem;
+}
+
+.optional-component-picker span {
+  color: #607872;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.optional-component-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.optional-components-empty {
+  border: 1px solid rgba(31, 163, 136, 0.18);
+  background: rgba(232, 251, 246, 0.76);
+  color: #315f56;
+}
+
 .standard-field-card {
   padding: 16px;
   border: 1px solid rgba(18, 104, 89, 0.16);
@@ -2750,6 +2919,12 @@ onMounted(loadPageData)
 .standard-field-card__header > div {
   display: grid;
   min-width: 0;
+  gap: 2px;
+}
+
+.standard-field-card__header > .standard-field-card__actions {
+  display: flex;
+  align-items: center;
   gap: 2px;
 }
 
@@ -3463,6 +3638,15 @@ onMounted(loadPageData)
 
   .standard-field-grid > .full-span {
     grid-column: auto;
+  }
+
+  .optional-component-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .optional-component-actions :deep(.q-btn) {
+    width: 100%;
   }
 
   .component-card-header {

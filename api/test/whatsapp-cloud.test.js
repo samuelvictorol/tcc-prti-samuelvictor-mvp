@@ -548,7 +548,7 @@ test('template salvo por preset deriva contrato Meta e variaveis da notificacao'
   });
 });
 
-test('cadastro WhatsApp Cloud aceita nomes legados e custom oficial com builder', () => {
+test('cadastro WhatsApp Cloud aceita nomes legados, custom minimo e custom oficial com builder', () => {
   const inferred = templatesManager.normalizeTemplateInput({
     name: 'Ola mundo existente',
     channel: 'whatsapp_cloud',
@@ -599,10 +599,36 @@ test('cadastro WhatsApp Cloud aceita nomes legados e custom oficial com builder'
     { type: 'body', parameters: [{ type: 'text', text: 'Ana' }] }
   ]);
 
-  assert.throws(() => templatesManager.normalizeTemplateInput({
-    name: 'Incompleto', channel: 'whatsapp_cloud', whatsappCloudPreset: 'custom',
-    externalTemplateName: 'nome_valido', languageCode: 'pt_BR', payload: {}
-  }), (error) => error.code === 'WHATSAPP_TEMPLATE_BUILDER_INVALID');
+  const minimal = templatesManager.normalizeTemplateInput({
+    name: 'Somente nome oficial',
+    channel: 'whatsapp_cloud',
+    externalTemplateName: 'nome_valido'
+  });
+  assert.doesNotThrow(() => templatesManager.validateTemplateInput(minimal));
+  assert.equal(minimal.whatsappCloudPreset, 'custom');
+  assert.equal(minimal.externalTemplateName, 'nome_valido');
+  assert.equal(minimal.languageCode, 'pt_BR');
+  assert.equal(minimal.body, null);
+  assert.deepEqual(minimal.payload, {
+    builder: {
+      version: 1,
+      category: 'marketing',
+      mode: 'standard',
+      components: []
+    },
+    components: []
+  });
+  assert.deepEqual(buildCustomTemplateMessage({
+    name: minimal.externalTemplateName,
+    languageCode: minimal.languageCode,
+    builder: minimal.payload.builder
+  }), {
+    type: 'template',
+    template: {
+      name: 'nome_valido',
+      language: { code: 'pt_BR' }
+    }
+  });
 });
 
 test('template Marketing Padrao usa valores fixos sem transformar descricao interna em body', () => {
@@ -795,7 +821,7 @@ test('builder rejeita botoes que redirecionam para WhatsApp ou wa.me', () => {
   );
 });
 
-test('novos custom oficiais exigem o perfil completo Marketing Padrao', () => {
+test('custom oficial torna componentes opcionais e valida rigorosamente os que forem preenchidos', () => {
   const base = {
     name: 'Novo marketing',
     channel: 'whatsapp_cloud',
@@ -803,7 +829,8 @@ test('novos custom oficiais exigem o perfil completo Marketing Padrao', () => {
     externalTemplateName: 'novo_marketing',
     languageCode: 'pt_BR'
   };
-  const builders = [
+  const acceptedBuilders = [
+    undefined,
     {
       version: 1,
       components: [
@@ -815,6 +842,36 @@ test('novos custom oficiais exigem o perfil completo Marketing Padrao', () => {
       version: 1, category: 'marketing', mode: 'standard',
       components: [{ type: 'body', text: 'Texto', parameters: [] }]
     },
+    {
+      version: 1, category: 'marketing', mode: 'standard',
+      components: [{
+        type: 'header',
+        parameters: [{ type: 'image', key: 'hero', label: 'Hero', fixedValue: 'https://cdn.example/hero.png' }]
+      }]
+    },
+    {
+      version: 1, category: 'marketing', mode: 'standard',
+      components: [{ type: 'footer', text: 'Rodape opcional', parameters: [] }]
+    },
+    {
+      version: 1, category: 'marketing', mode: 'standard',
+      components: [{
+        type: 'button', subType: 'url', index: 0, text: 'Abrir',
+        url: 'https://notify.example/destino', parameters: []
+      }]
+    }
+  ];
+  for (const builder of acceptedBuilders) {
+    const normalized = templatesManager.normalizeTemplateInput({
+      ...base,
+      ...(builder ? { payload: { builder } } : {})
+    });
+    assert.doesNotThrow(() => templatesManager.validateTemplateInput(normalized));
+    assert.equal(normalized.payload.builder.category, 'marketing');
+    assert.equal(normalized.payload.builder.mode, 'standard');
+  }
+
+  const invalidBuilders = [
     {
       version: 1, category: 'marketing', mode: 'standard',
       components: [
@@ -838,7 +895,7 @@ test('novos custom oficiais exigem o perfil completo Marketing Padrao', () => {
       ]
     }
   ];
-  for (const builder of builders) {
+  for (const builder of invalidBuilders) {
     assert.throws(
       () => templatesManager.normalizeTemplateInput({ ...base, payload: { builder } }),
       (error) => error.code === 'WHATSAPP_MARKETING_STANDARD_INVALID'

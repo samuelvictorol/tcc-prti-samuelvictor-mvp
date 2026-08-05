@@ -18,9 +18,11 @@ import {
   findWhatsAppCloudPreset,
   isForbiddenWhatsAppButtonUrl,
   isValidHttpsTemplateUrl,
+  meaningfulCloudComponents,
   renderWhatsAppPreviewMarkup,
   renderWhatsAppCloudPreview,
   standardMarketingComponentsFromTemplate,
+  validateCustomWhatsAppCloudTemplate,
 } from '../src/pages/TemplatesPage.vue'
 
 describe('templates oficiais do WhatsApp Cloud', () => {
@@ -93,6 +95,67 @@ describe('templates oficiais do WhatsApp Cloud', () => {
       label: 'Nome do cliente',
       example: 'Samuel',
     })
+  })
+
+  it('salva um template de teste somente com título e nome oficial, usando pt_BR como padrão', () => {
+    const blankComponents = createStandardMarketingComponents({
+      body: '',
+      footer: '',
+      buttonText: '',
+      buttonUrl: '',
+    })
+    const definition = buildCustomWhatsAppCloudDefinition({
+      templateName: 'modelo_minimo_teste',
+      languageCode: '',
+      components: blankComponents,
+    })
+    const preview = buildCustomWhatsAppCloudPreviewPayload({
+      templateName: 'modelo_minimo_teste',
+      languageCode: '',
+      components: blankComponents,
+    })
+
+    expect(validateCustomWhatsAppCloudTemplate({
+      templateName: 'modelo_minimo_teste',
+      languageCode: '',
+      components: blankComponents,
+    })).toBeNull()
+    expect(definition).toMatchObject({
+      externalTemplateName: 'modelo_minimo_teste',
+      languageCode: 'pt_BR',
+      body: null,
+      variables: [],
+    })
+    expect(definition.payload.builder.components).toEqual([])
+    expect(preview.template).toEqual({
+      name: 'modelo_minimo_teste',
+      language: { code: 'pt_BR' },
+    })
+  })
+
+  it('valida componentes opcionais somente quando o operador começa a preenchê-los', () => {
+    const blankHeader = createCloudComponent({
+      type: 'header',
+      parameters: [{ type: 'image', key: 'midia_cabecalho', label: 'Mídia do cabeçalho' }],
+    })
+    const invalidHeader = createCloudComponent({
+      type: 'header',
+      parameters: [{ type: 'image', key: 'midia_cabecalho', label: 'Mídia do cabeçalho', fixedValue: 'http://example.com/capa.png' }],
+    })
+    const partialButton = createCloudComponent({ type: 'button', text: 'Abrir', url: '' })
+    const completeButton = createCloudComponent({ type: 'button', text: 'Abrir', url: 'https://example.com/convite' })
+
+    expect(meaningfulCloudComponents([blankHeader])).toEqual([])
+    expect(validateCustomWhatsAppCloudTemplate({ templateName: 'teste_minimo', components: [blankHeader] })).toBeNull()
+    expect(validateCustomWhatsAppCloudTemplate({ templateName: 'teste_minimo', components: [invalidHeader] }))
+      .toContain('URL HTTPS pública')
+    expect(validateCustomWhatsAppCloudTemplate({ templateName: 'teste_minimo', components: [partialButton] }))
+      .toContain('texto e o link HTTPS')
+    expect(validateCustomWhatsAppCloudTemplate({ templateName: 'teste_minimo', components: [completeButton] })).toBeNull()
+    expect(validateCustomWhatsAppCloudTemplate({
+      templateName: 'teste_minimo',
+      components: [createCloudComponent({ type: 'button', text: 'Abrir', url: 'https://wa.me/5511999999999' })],
+    })).toContain('não são permitidos')
   })
 
   it('reabre a estrutura amigável salva sem depender de JSON manual', () => {
@@ -213,7 +276,9 @@ describe('templates oficiais do WhatsApp Cloud', () => {
   })
 
   it('cria novos modelos no perfil Marketing/Padrão sem campos dinâmicos', () => {
-    const components = createStandardMarketingComponents()
+    const components = createStandardMarketingComponents({
+      media: { fixedValue: 'https://example.com/capa.png' },
+    })
     const definition = buildCustomWhatsAppCloudDefinition({
       templateName: 'notify_flow_image_notification',
       languageCode: 'pt_BR',
@@ -258,6 +323,14 @@ describe('templates oficiais do WhatsApp Cloud', () => {
     expect(components.find((component) => component.type === 'body').text).toBe('Texto oficial')
   })
 
+  it('reabre um template mínimo sem inventar corpo, mídia, rodapé ou botão', () => {
+    expect(standardMarketingComponentsFromTemplate({
+      externalTemplateName: 'modelo_minimo_teste',
+      body: 'modelo_minimo_teste',
+      payload: { builder: { components: [] } },
+    })).toEqual([])
+  })
+
   it('bloqueia destinos do próprio WhatsApp e aceita páginas HTTPS externas', () => {
     expect(isForbiddenWhatsAppButtonUrl('https://wa.me/5561999999999')).toBe(true)
     expect(isForbiddenWhatsAppButtonUrl('https://api.whatsapp.com/send?phone=5561999999999')).toBe(true)
@@ -288,6 +361,19 @@ describe('templates oficiais do WhatsApp Cloud', () => {
     expect(source).toContain('v-model="cloudStandardBody.text"')
     expect(source).toContain('v-model="cloudStandardFooter.text"')
     expect(source).toContain('v-model.trim="cloudStandardButton.url"')
+    expect(source).toContain('Adicionar ${option.label}')
+    expect(source).toContain("removeCloudStandardComponent('header')")
+    expect(source).toContain("removeCloudStandardComponent('body')")
+    expect(source).toContain("removeCloudStandardComponent('footer')")
+    expect(source).toContain("removeCloudStandardComponent('button')")
+    expect(source).toContain('label="Nome no Notify App *"')
+    expect(source).toContain('label="Nome exato aprovado na Meta *"')
+    expect(source).not.toContain('label="Idioma aprovado *"')
+    expect(source).not.toContain('label="Tipo da mídia *"')
+    expect(source).not.toContain('label="Corpo fixo *"')
+    expect(source).not.toContain('label="Texto do botão *"')
+    expect(source).not.toContain('label="Link HTTPS do botão *"')
+    expect(source).not.toContain('`${cloudMediaExampleLabel(cloudStandardMedia.type)} *`')
     expect(source).not.toContain('label="Variável interna *"')
   })
 })
