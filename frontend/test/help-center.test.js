@@ -113,7 +113,7 @@ describe('Central de Ajuda', () => {
     expect(page).toContain("code: '/meu-perfil'")
     expect(page).toContain("code: '/cancelar'")
     expect(page).toContain("code: '/stop'")
-    expect(page).toContain("code: '/start <payload>'")
+    expect(page).toContain("code: '/start'")
     expect(page).toContain('Sem comandos de chat')
     expect(page).toContain('um único email válido')
     expect(page).toContain('label="Dinâmico"')

@@ -76,6 +76,47 @@ const permissionCards = computed(() => (profile.value?.permissions || [])
     ...channelMeta[permission.channel],
   })))
 
+const fallbackProfileCommands = Object.freeze({
+  whatsapp: [
+    { command: '/notify-me', title: 'Autorizar notificações', description: 'Autoriza as notificações pelo WhatsApp oficial.', dynamic: true },
+    { command: '/login', title: 'Entrar no Meu perfil', description: 'Gera um link temporário e de uso único.' },
+    { command: '/meu-perfil', title: 'Consultar meus dados', description: 'Mostra um resumo do cadastro e das permissões.' },
+    { command: '/help', title: 'Ver ajuda', description: 'Lista os comandos disponíveis no WhatsApp.' },
+    { command: '/cancelar', title: 'Cancelar alteração de email', description: 'Interrompe uma verificação de email em andamento.' },
+  ],
+  telegram: [
+    { command: '/verify-me', title: 'Autorizar o Telegram', description: 'Autoriza notificações e abre o menu inicial.', dynamic: true },
+    { command: '/notify-me', title: 'Autorizar pelo convite', description: 'O comando do WhatsApp também inicia o onboarding no Telegram.', dynamic: true },
+    { command: '/start', title: 'Iniciar o bot', description: 'Inicia a conversa; links de convite incluem o vínculo automaticamente.' },
+    { command: '/login', title: 'Entrar no Meu perfil', description: 'Gera um link temporário e de uso único.' },
+    { command: '/meu-perfil', title: 'Consultar meus dados', description: 'Mostra um resumo do cadastro e das permissões.' },
+    { command: '/help', title: 'Ver ajuda', description: 'Lista os comandos disponíveis no Telegram.' },
+    { command: '/cancelar', title: 'Cancelar alteração de email', description: 'Interrompe uma verificação de email em andamento.' },
+    { command: '/stop', title: 'Revogar o Telegram', description: 'Desativa a permissão do canal até uma nova autorização.' },
+  ],
+})
+
+const contactCommandGuides = computed(() => [
+  {
+    channel: 'WhatsApp',
+    accent: 'whatsapp',
+    icon: 'cloud_sync',
+    commands: activationLinks.value?.helpCommands?.whatsapp?.length
+      ? activationLinks.value.helpCommands.whatsapp
+      : fallbackProfileCommands.whatsapp,
+    note: 'Você também pode enviar um email válido para iniciar a confirmação desse endereço diretamente na conversa.',
+  },
+  {
+    channel: 'Telegram',
+    accent: 'telegram',
+    icon: 'send_to_mobile',
+    commands: activationLinks.value?.helpCommands?.telegram?.length
+      ? activationLinks.value.helpCommands.telegram
+      : fallbackProfileCommands.telegram,
+    note: 'Compartilhe o telefone somente pelo botão oficial do bot para vincular Telegram e WhatsApp com segurança.',
+  },
+])
+
 const historyColumns = [
   { name: 'date', label: 'Data', field: 'updatedAt', align: 'left' },
   { name: 'channel', label: 'Canal', field: 'channel', align: 'left' },
@@ -645,6 +686,42 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
             </q-card>
           </section>
 
+          <q-card flat class="profile-card profile-commands-card">
+            <q-card-section class="card-heading">
+              <div><span>AJUDA RÁPIDA</span><h2>Comandos das suas conversas</h2></div>
+              <q-icon name="support_agent" color="primary" size="30px" />
+            </q-card-section>
+            <q-card-section class="profile-command-grid">
+              <section
+                v-for="guide in contactCommandGuides"
+                :key="guide.channel"
+                :class="['profile-command-channel', `profile-command-channel--${guide.accent}`]"
+              >
+                <header>
+                  <q-avatar :icon="guide.icon" />
+                  <div>
+                    <strong>{{ guide.channel }}</strong>
+                    <span>Envie os comandos no chat com o Notify Flow.</span>
+                  </div>
+                </header>
+                <div class="profile-command-list">
+                  <article v-for="command in guide.commands" :key="`${guide.channel}:${command.command}`">
+                    <div>
+                      <code>{{ command.command }}</code>
+                      <q-badge v-if="command.dynamic" outline color="primary" label="Configurável" />
+                    </div>
+                    <strong>{{ command.title }}</strong>
+                    <p>{{ command.description }}</p>
+                  </article>
+                </div>
+                <q-banner rounded class="profile-command-note">
+                  <template #avatar><q-icon name="info" /></template>
+                  {{ guide.note }}
+                </q-banner>
+              </section>
+            </q-card-section>
+          </q-card>
+
           <q-card flat class="profile-card memberships-card">
             <q-card-section class="card-heading">
               <div><span>VÍNCULOS</span><h2>Convites e grupos</h2></div>
@@ -905,6 +982,23 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
 .permission-copy strong, .permission-copy span { display: block; }
 .permission-copy span { margin-top: 2px; color: #718480; font-size: .73rem; }
 .permission-copy small { display: block; max-width: 430px; margin-top: 4px; color: #4f706a; font-size: .68rem; line-height: 1.35; }
+.profile-commands-card { margin-top: 22px; overflow: hidden; }
+.profile-command-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 8px 26px 28px; }
+.profile-command-channel { min-width: 0; padding: 16px; border: 1px solid rgba(3,21,21,.07); border-top: 3px solid #1fae74; border-radius: 18px; background: #f7fcfa; }
+.profile-command-channel--telegram { border-top-color: #249bd7; }
+.profile-command-channel > header { display: flex; align-items: center; gap: 11px; margin-bottom: 14px; }
+.profile-command-channel > header .q-avatar { background: rgba(31,174,116,.12); color: #16895b; }
+.profile-command-channel--telegram > header .q-avatar { background: rgba(36,155,215,.12); color: #167caf; }
+.profile-command-channel header strong, .profile-command-channel header span { display: block; }
+.profile-command-channel header span { margin-top: 2px; color: #6a7d79; font-size: .7rem; }
+.profile-command-list { display: grid; gap: 8px; }
+.profile-command-list article { min-width: 0; padding: 11px 12px; border-radius: 14px; background: #fff; }
+.profile-command-list article > div { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 5px; }
+.profile-command-list code { max-width: 100%; overflow-wrap: anywhere; color: #137d6c; font-size: .76rem; font-weight: 800; }
+.profile-command-list strong, .profile-command-list p { display: block; }
+.profile-command-list strong { color: #234b44; font-size: .78rem; }
+.profile-command-list p { margin: 2px 0 0; color: #6a7d79; font-size: .7rem; line-height: 1.42; }
+.profile-command-note { margin-top: 12px; background: rgba(53,188,164,.09); color: #456660; font-size: .72rem; line-height: 1.42; }
 .memberships-card { position: relative; margin-top: 22px; overflow: hidden; }
 .memberships-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; padding: 8px 26px 28px; }
 .membership-column { min-width: 0; padding: 16px; border: 1px solid rgba(3,21,21,.07); border-radius: 18px; background: #f7fcfa; }
@@ -925,6 +1019,6 @@ onBeforeUnmount(() => window.removeEventListener('notify:profile-session-expired
 .membership-dialog__actions { flex: 0 0 auto; padding: 12px 18px; }
 .history-card { margin-top: 22px; overflow: hidden; }
 .revoke-card { width: min(480px, calc(100vw - 30px)); border-radius: 22px; }
-@media (max-width: 850px) { .profile-grid, .memberships-grid { grid-template-columns: 1fr; } .profile-hero { align-items: flex-start; } }
-@media (max-width: 560px) { .profile-toolbar { padding: 0 12px; } .profile-toolbar .q-btn :deep(.q-btn__content span) { display: none; } .profile-content { width: min(100% - 22px, 1240px); padding-top: 28px; } .profile-hero .q-avatar { display: none; } .edit-grid { grid-template-columns: 1fr; } .permission-row { grid-template-columns: auto 1fr auto; } .permission-row > .q-badge { display: none; } .memberships-grid { padding: 6px 12px 18px; } .membership-column { padding: 12px; } .membership-dialog { width: 100%; max-height: 100dvh; border-radius: 0; } .membership-dialog__actions { align-items: stretch; flex-direction: column; } }
+@media (max-width: 850px) { .profile-grid, .memberships-grid, .profile-command-grid { grid-template-columns: 1fr; } .profile-hero { align-items: flex-start; } }
+@media (max-width: 560px) { .profile-toolbar { padding: 0 12px; } .profile-toolbar .q-btn :deep(.q-btn__content span) { display: none; } .profile-content { width: min(100% - 22px, 1240px); padding-top: 28px; } .profile-hero .q-avatar { display: none; } .edit-grid { grid-template-columns: 1fr; } .permission-row { grid-template-columns: auto 1fr auto; } .permission-row > .q-badge { display: none; } .memberships-grid, .profile-command-grid { padding: 6px 12px 18px; } .membership-column, .profile-command-channel { padding: 12px; } .membership-dialog { width: 100%; max-height: 100dvh; border-radius: 0; } .membership-dialog__actions { align-items: stretch; flex-direction: column; } }
 </style>

@@ -1469,6 +1469,71 @@ test('/meu-perfil no WhatsApp responde com resumo privado e link publico', async
   assert.doesNotMatch(response.text.body, /507f1f77bcf86cd799439011/);
 });
 
+test('/help no WhatsApp responde com a lista fixa e o comando dinamico atual', async (context) => {
+  stubWebhookPersistence(context);
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [settingsManager, 'isWhatsappPermissionCommand'],
+    [contactsManager, 'findByChannelAddress'],
+    [contactsManager, 'findByChannelOrPhone'],
+    [contactsManager, 'upsertFromChannel'],
+    [logsManager, 'create'],
+    [adminNotificationsManager, 'create'],
+    [global, 'fetch']
+  ]);
+  const appSecret = 'cloud-secret';
+  settingsManager.getValue = async (key) => ({
+    WHATSAPP_CLOUD_APP_SECRET: appSecret,
+    WHATSAPP_CLOUD_ACCESS_TOKEN: 'test-access-token',
+    WHATSAPP_CLOUD_PHONE_NUMBER_ID: '1000000000000001',
+    WHATSAPP_CLOUD_API_VERSION: 'v25.0',
+    START_NOTIFY_WHATSAPP_PERMISSION: '/avisos',
+    START_VERIFY_TELEGRAM_PERMISSION: '/validar-telegram'
+  })[key] || null;
+  settingsManager.isWhatsappPermissionCommand = async () => false;
+  contactsManager.findByChannelAddress = async () => null;
+  contactsManager.findByChannelOrPhone = async () => null;
+  contactsManager.upsertFromChannel = async () => ({
+    id: '507f1f77bcf86cd799439011',
+    displayName: 'Samuel',
+    upsertState: { created: false, identityAdded: false }
+  });
+  logsManager.create = async (entry) => entry;
+  adminNotificationsManager.create = async () => ({});
+  const providerPayloads = [];
+  global.fetch = async (_url, options) => {
+    providerPayloads.push(JSON.parse(options.body));
+    return {
+      ok: true,
+      json: async () => ({ messages: [{ id: 'wamid.help-response' }] })
+    };
+  };
+  const payload = {
+    entry: [{ changes: [{ value: {
+      contacts: [{ wa_id: '551131234567', profile: { name: 'Samuel' } }],
+      messages: [{
+        id: 'wamid.help-command',
+        from: '551131234567',
+        type: 'text',
+        text: { body: '/help' }
+      }]
+    } }] }]
+  };
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256=' + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+
+  const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
+
+  assert.equal(result.receivedMessages, 1);
+  const response = providerPayloads.find((item) => /Ajuda do Notify Flow no WhatsApp/.test(item.text?.body || ''));
+  assert.ok(response);
+  assert.match(response.text.body, /\/avisos/);
+  assert.match(response.text.body, /\/login/);
+  assert.match(response.text.body, /\/meu-perfil/);
+  assert.match(response.text.body, /\/cancelar/);
+  assert.doesNotMatch(response.text.body, /\/stop/);
+});
+
 test('codigo de verificacao de email e redigido antes de salvar o chat do WhatsApp', async (context) => {
   stubWebhookPersistence(context);
   restoreAfter(context, [

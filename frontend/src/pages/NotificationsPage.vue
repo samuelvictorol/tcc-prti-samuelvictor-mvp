@@ -1111,7 +1111,6 @@ onMounted(loadData)
     <PageHeader
       eyebrow="Central de disparos"
       title="Notificações"
-      description="Monte o envio, revise os destinos e deixe a API aplicar consentimento, idempotência e limites de cada provedor."
       icon="send"
     >
       <template #actions>
@@ -1308,8 +1307,7 @@ onMounted(loadData)
 
       <aside class="safety-column">
         <q-card flat class="glass-card section-card">
-          <h2 class="section-title">Canais prontos</h2>
-          <p class="section-copy">Teste um por vez. No modo global, apenas os prontos e autorizados entram no envio.</p>
+          <h2 class="section-title">🟢 Canais prontos</h2>
           <div class="channel-ready-list">
             <div v-for="channel in channels" :key="channel.value">
               <q-icon :name="channel.icon" />

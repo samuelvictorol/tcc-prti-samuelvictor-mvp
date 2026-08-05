@@ -136,6 +136,11 @@ const automaticCommandGuides = computed(() => [
         text: 'Responde com o resumo do cadastro, permissões atuais e o acesso seguro disponível para edição.',
       },
       {
+        code: '/help',
+        title: 'Ver todos os comandos',
+        text: 'Mostra no próprio chat a lista atual de comandos disponíveis no WhatsApp.',
+      },
+      {
         code: '/cancelar',
         title: 'Cancelar alteração de email',
         text: 'Interrompe uma verificação de email em andamento sem modificar o cadastro.',
@@ -162,9 +167,9 @@ const automaticCommandGuides = computed(() => [
         text: 'O comando dinâmico do WhatsApp também é reconhecido pelo bot e abre o mesmo onboarding do Telegram.',
       },
       {
-        code: '/start <payload>',
-        title: 'Abrir por convite',
-        text: 'É criado automaticamente pelo link do bot. Somente um payload reconhecido concede consentimento; /start sozinho apenas inicia a conversa.',
+        code: '/start',
+        title: 'Iniciar o bot',
+        text: 'Inicia a conversa. Quando o acesso vem de um convite, o link inclui automaticamente o vínculo correto.',
       },
       {
         code: '/login',
@@ -175,6 +180,11 @@ const automaticCommandGuides = computed(() => [
         code: '/meu-perfil',
         title: 'Consultar os próprios dados',
         text: 'Mostra o resumo do cadastro e das permissões, com link seguro para editar o perfil.',
+      },
+      {
+        code: '/help',
+        title: 'Ver todos os comandos',
+        text: 'Mostra no próprio chat a lista atual de comandos disponíveis no Telegram.',
       },
       {
         code: '/cancelar',
@@ -212,7 +222,6 @@ const operationalSignals = [
     <PageHeader
       eyebrow="Orientação"
       title="Central de Ajuda"
-      description="Entenda o fluxo do Notify Flow sem precisar navegar por textos longos em cada tela."
       icon="help_center"
     />
 

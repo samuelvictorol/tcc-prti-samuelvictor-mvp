@@ -404,6 +404,44 @@ test('/meu-perfil responde com os dados do proprio contato e link publico', asyn
   assert.doesNotMatch(response.text, /507f1f77bcf86cd799439011/);
 });
 
+test('/help no Telegram responde com a lista fixa e os comandos dinamicos atuais', async (context) => {
+  const state = stubTelegramInbound(context, {
+    notifyCommand: '/avisos',
+    verifyCommand: '/validar-telegram'
+  });
+
+  await telegramManager.webhook(telegramUpdate(2_026_072_219, {
+    text: '/help'
+  }), 'webhook-secret');
+
+  const response = state.providerCalls.find((payload) => /Ajuda do Notify Flow no Telegram/.test(payload.text || ''));
+  assert.ok(response);
+  assert.match(response.text, /\/validar-telegram/);
+  assert.match(response.text, /\/avisos/);
+  assert.match(response.text, /\/login/);
+  assert.match(response.text, /\/meu-perfil/);
+  assert.match(response.text, /\/cancelar/);
+  assert.match(response.text, /\/stop/);
+  assert.doesNotMatch(response.text, /payload|chat_id|contactId|user_id|token/i);
+});
+
+test('/help com alias privado do bot usa a mesma ajuda segura', async (context) => {
+  const state = stubTelegramInbound(context, {
+    notifyCommand: '/avisos',
+    verifyCommand: '/validar-telegram'
+  });
+
+  await telegramManager.webhook(telegramUpdate(2_026_072_220, {
+    text: '/help@EjugNotifyBot'
+  }), 'webhook-secret');
+
+  const response = state.providerCalls.find((payload) => /Ajuda do Notify Flow no Telegram/.test(payload.text || ''));
+  assert.ok(response);
+  assert.match(response.text, /\/validar-telegram/);
+  assert.match(response.text, /\/help/);
+  assert.doesNotMatch(response.text, /payload|chat_id|contactId|user_id|token/i);
+});
+
 test('codigo de verificacao de email e redigido do historico e do websocket do Telegram', async (context) => {
   const state = stubTelegramInbound(context);
   const originalSafeInboundText = chatProfileFlow.safeInboundText;

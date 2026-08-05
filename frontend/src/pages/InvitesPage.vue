@@ -244,7 +244,6 @@ onMounted(loadInvites)
     <PageHeader
       eyebrow="Aquisição com transparência"
       title="Convites públicos"
-      description="Crie uma página clara para reunir links de grupos, iniciar bots e explicar como cada canal será utilizado."
       icon="link"
     >
       <template #actions><q-btn color="primary" unelevated no-caps icon="add_link" label="Novo convite" @click="openInvite()" /></template>

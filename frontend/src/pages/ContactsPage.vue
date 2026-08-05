@@ -364,7 +364,6 @@ watch(() => route.query.contactId || route.query.editContact, openContactFromQue
     <PageHeader
       eyebrow="Base de relacionamento"
       title="Contatos e grupos"
-      description="Centralize identidades, origens e consentimentos por canal antes de qualquer envio."
       icon="group"
     >
       <template #actions>

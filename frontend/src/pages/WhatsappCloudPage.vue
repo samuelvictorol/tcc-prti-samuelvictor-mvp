@@ -695,7 +695,7 @@ const cloudConnection = computed(() => whatsappConnectionIdentity({
   contacts: cloudContacts.value,
   events: events.value,
 }))
-const webhookStatusLabel = computed(() => webhookReady.value ? 'Webhook pronto para receber' : 'Webhook com configuração pendente')
+const webhookStatusLabel = computed(() => webhookReady.value ? 'Webhook Ativo' : 'Webhook Pendente')
 const webhookStatusDescription = computed(() => {
   if (webhookReady.value) return 'Verify Token e App Secret estão configurados. Mensagens recebidas podem cadastrar contatos automaticamente.'
   if (cloudStatus.value.webhookVerificationConfigured) return 'A callback pode ser validada; cadastre também o App Secret para processar os eventos POST.'

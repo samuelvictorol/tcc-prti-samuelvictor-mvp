@@ -169,7 +169,6 @@ onMounted(loadData)
     <PageHeader
       eyebrow="Governança e transparência"
       title="Termos e LGPD"
-      description="Versione documentos legais e acompanhe solicitações dos titulares em um fluxo auditável."
       icon="verified_user"
     />
 

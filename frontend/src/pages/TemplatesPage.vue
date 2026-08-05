@@ -863,9 +863,9 @@ const linkSetIds = ref([])
 const pendingCloudMediaAssetIds = new Set()
 
 const channelOptions = [
-  { label: 'Telegram', value: 'telegram', icon: 'send_to_mobile' },
-  { label: 'WhatsApp Cloud', value: 'whatsapp_cloud', icon: 'cloud_sync' },
-  { label: 'Email', value: 'email', icon: 'mail' },
+  { label: 'WhatsApp Cloud', value: 'whatsapp_cloud', icon: 'mdi-whatsapp', tone: 'whatsapp' },
+  { label: 'Telegram', value: 'telegram', icon: 'bi-telegram', tone: 'telegram' },
+  { label: 'Gmail', value: 'email', icon: 'mdi-gmail', tone: 'gmail' },
 ]
 
 const templateSetChannelOptions = channelOptions.map((channel) => ({
@@ -1098,6 +1098,15 @@ function channelLabel(value) {
 function channelIcon(value) {
   if (normalizedChannel(value) === 'global') return 'hub'
   return channelOptions.find((option) => option.value === normalizedChannel(value))?.icon || 'description'
+}
+
+function channelTone(value) {
+  if (normalizedChannel(value) === 'global') return 'global'
+  return channelOptions.find((option) => option.value === normalizedChannel(value))?.tone || 'neutral'
+}
+
+function templateRowClass(row) {
+  return `template-list-row template-list-row--${channelTone(row?.channel || row?.type)}`
 }
 
 function formatDate(value) {
@@ -1891,7 +1900,6 @@ onMounted(loadPageData)
     <PageHeader
       eyebrow="Biblioteca de conteúdo"
       title="Templates por canal"
-      description="Modele cada payload de acordo com as capacidades e políticas do canal de destino."
       icon="dashboard_customize"
     />
 
@@ -1900,7 +1908,6 @@ onMounted(loadPageData)
         <div>
           <div class="text-overline text-primary">Campanhas multicanal</div>
           <h2 class="section-title">Conjuntos de templates</h2>
-          <p class="section-copy">Agrupe de um a três templates, um por canal, e associe opcionalmente o conjunto a um convite.</p>
         </div>
         <q-btn color="primary" unelevated no-caps icon="add" label="Novo conjunto" @click="openCreateTemplateSet" />
       </div>
@@ -1979,7 +1986,7 @@ onMounted(loadPageData)
                 :key="channel"
                 dense
                 outline
-                color="primary"
+                :class="['template-channel-chip', `template-channel-chip--${channelTone(channel)}`]"
                 :icon="channelOptions.find((item) => item.value === channel)?.icon"
               >
                 {{ templateSetTemplateName(props.row, channel) }}
@@ -2009,18 +2016,22 @@ onMounted(loadPageData)
         <div>
           <div class="text-overline text-primary">Biblioteca por canal</div>
           <h2 class="section-title">Templates por canal</h2>
-          <p class="section-copy">
-            Crie mensagens para WhatsApp Cloud, Telegram ou Email e reutilize cada template em um ou mais conjuntos.
-          </p>
         </div>
         <q-btn color="primary" unelevated no-caps icon="add" label="Novo template" @click="openCreate()" />
       </div>
 
       <div class="toolbar-row">
         <div class="template-tabs-row">
-          <q-tabs v-model="tab" dense no-caps outside-arrows mobile-arrows active-color="primary" indicator-color="transparent">
-            <q-tab name="all" icon="view_list" label="Todos" />
-            <q-tab v-for="channel in channelOptions" :key="channel.value" :name="channel.value" :icon="channel.icon" :label="channel.label" />
+          <q-tabs v-model="tab" dense no-caps outside-arrows mobile-arrows indicator-color="transparent">
+            <q-tab name="all" icon="view_list" label="Todos" class="template-channel-tab template-channel-tab--all" />
+            <q-tab
+              v-for="channel in channelOptions"
+              :key="channel.value"
+              :name="channel.value"
+              :icon="channel.icon"
+              :label="channel.label"
+              :class="['template-channel-tab', `template-channel-tab--${channel.tone}`]"
+            />
           </q-tabs>
           <ContextHelp
             title="Templates oficiais e número remetente"
@@ -2039,11 +2050,21 @@ onMounted(loadPageData)
       <EmptyState v-if="!loading && !filteredTemplates.length" icon="note_add" title="Nenhum template neste filtro" description="Crie uma mensagem reutilizável para começar.">
         <q-btn color="primary" unelevated no-caps label="Criar template" @click="openCreate()" />
       </EmptyState>
-      <q-table v-else flat :rows="filteredTemplates" :columns="columns" row-key="id" :loading="loading" :rows-per-page-options="[10, 25, 50]">
+      <q-table
+        v-else
+        flat
+        class="template-library-table"
+        :rows="filteredTemplates"
+        :columns="columns"
+        row-key="id"
+        :loading="loading"
+        :rows-per-page-options="[10, 25, 50]"
+        :table-row-class-fn="templateRowClass"
+      >
         <template #body-cell-name="props">
           <q-td :props="props">
             <div class="template-name">
-              <span class="template-icon" aria-hidden="true">
+              <span :class="['template-icon', `template-icon--${channelTone(props.row.channel || props.row.type)}`]" aria-hidden="true">
                 <q-icon :name="channelIcon(props.row.channel || props.row.type)" size="22px" />
               </span>
               <div class="template-name__copy">
@@ -2056,7 +2077,17 @@ onMounted(loadPageData)
             </div>
           </q-td>
         </template>
-        <template #body-cell-channel="props"><q-td :props="props"><q-badge outline color="primary" :label="channelLabel(props.row.channel || props.row.type)" /></q-td></template>
+        <template #body-cell-channel="props">
+          <q-td :props="props">
+            <q-badge
+              outline
+              :class="['template-channel-badge', `template-channel-badge--${channelTone(props.row.channel || props.row.type)}`]"
+            >
+              <q-icon :name="channelIcon(props.row.channel || props.row.type)" size="13px" />
+              <span>{{ channelLabel(props.row.channel || props.row.type) }}</span>
+            </q-badge>
+          </q-td>
+        </template>
         <template #body-cell-format="props">
           <q-td :props="props">
             {{ templateFormatLabel(props.row) }}
@@ -2161,7 +2192,11 @@ onMounted(loadPageData)
             </div>
 
             <div class="template-set-channel-grid">
-              <article v-for="channel in templateSetChannelOptions" :key="channel.value" class="template-set-channel-card">
+              <article
+                v-for="channel in templateSetChannelOptions"
+                :key="channel.value"
+                :class="['template-set-channel-card', `template-set-channel-card--${channel.tone}`]"
+              >
                 <header>
                   <span><q-icon :name="channel.icon" /></span>
                   <div>
@@ -2338,7 +2373,6 @@ onMounted(loadPageData)
                     <span class="step-number">1</span>
                     <div>
                       <strong>Perfil do modelo oficial</strong>
-                      <span>Novos cadastros usam o perfil Marketing / padrão; os modelos fixos continuam preservados.</span>
                     </div>
                   </div>
 
@@ -2407,7 +2441,6 @@ onMounted(loadPageData)
                       :options="META_LANGUAGE_OPTIONS"
                       clearable
                       label="Idioma aprovado (opcional)"
-                      hint="Se ficar vazio, o Notify Flow usará pt_BR"
                       class="template-field language-field"
                     />
                     <q-input
@@ -2417,7 +2450,7 @@ onMounted(loadPageData)
                       type="textarea"
                       autogrow
                       label="Descrição interna"
-                      hint="Ajuda o administrador a localizar o template. Não entra no corpo, na prévia nem no payload."
+                      hint="Ajuda o administrador a localizar o template. Não entra no payload oficial."
                       class="template-field full-span"
                     />
                   </div>
@@ -2438,7 +2471,6 @@ onMounted(loadPageData)
                     <div class="optional-component-picker">
                       <div>
                         <strong>Componentes opcionais</strong>
-                        <span>O título e o nome oficial são suficientes para salvar. Você pode completar o conteúdo depois.</span>
                       </div>
                       <div v-if="availableCloudStandardComponents.length" class="optional-component-actions">
                         <q-btn
@@ -2487,7 +2519,6 @@ onMounted(loadPageData)
                         <div class="friendly-mode-picker full-span">
                           <div>
                             <strong>Quando a mídia será escolhida?</strong>
-                            <span>Compatível com modelos antigos de imagem dinâmica e com mídia fixa.</span>
                           </div>
                           <q-btn-toggle
                             :model-value="cloudStandardMediaMode"
@@ -2646,16 +2677,14 @@ onMounted(loadPageData)
                           v-model.trim="cloudStandardBodyVariable.label"
                           outlined
                           stack-label
-                          label="Rótulo mostrado no disparo"
-                          hint="Exemplo: Descrição da mensagem"
+                          label="Título"
                           class="template-field"
                         />
                         <q-input
                           v-model="cloudStandardBodyVariable.example"
                           outlined
                           stack-label
-                          label="Exemplo para a prévia"
-                          hint="Este exemplo não será enviado automaticamente."
+                          label="Descrição"
                           class="template-field full-span"
                         />
                       </div>
@@ -2703,7 +2732,7 @@ onMounted(loadPageData)
                         />
                       </div>
                       <div class="standard-field-grid standard-field-grid--button">
-                        <q-input v-model.trim="cloudStandardButton.text" outlined stack-label maxlength="25" counter label="Texto do botão" hint="Opcional; ao preencher, informe também o link" class="template-field" />
+                        <q-input v-model.trim="cloudStandardButton.text" outlined stack-label maxlength="25" counter label="Texto do botão" class="template-field" />
                         <q-input
                           v-if="cloudStandardButtonMode === 'fixed'"
                           v-model.trim="cloudStandardButton.url"
@@ -2790,11 +2819,6 @@ onMounted(loadPageData)
                   </q-banner>
                 </section>
 
-                <q-banner rounded class="automatic-payload-banner">
-                  <template #avatar><q-icon name="auto_awesome" color="primary" /></template>
-                  <strong>Sem configuração JSON.</strong>
-                  O nome oficial é salvo com pt_BR por padrão. Somente os componentes opcionais preenchidos entram no builder.
-                </q-banner>
               </template>
 
               <template v-else>
@@ -2974,6 +2998,60 @@ onMounted(loadPageData)
   min-width: 0;
 }
 
+.template-tabs-row :deep(.q-tabs__content) {
+  gap: 6px;
+}
+
+.template-channel-tab {
+  min-height: 50px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  opacity: 0.86;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, opacity 160ms ease;
+}
+
+.template-channel-tab--all {
+  color: #425a56;
+}
+
+.template-channel-tab--whatsapp {
+  background: linear-gradient(105deg, rgba(71, 211, 162, 0.13), rgba(18, 140, 106, 0.04));
+  color: #185f4d;
+}
+
+.template-channel-tab--telegram {
+  background: linear-gradient(105deg, rgba(91, 184, 245, 0.13), rgba(36, 139, 214, 0.04));
+  color: #245b7d;
+}
+
+.template-channel-tab--gmail {
+  background: linear-gradient(105deg, rgba(242, 130, 126, 0.12), rgba(217, 81, 78, 0.035));
+  color: #87413f;
+}
+
+.template-channel-tab--whatsapp.q-tab--active {
+  border-color: rgba(18, 140, 106, 0.16);
+  background: linear-gradient(105deg, rgba(71, 211, 162, 0.26), rgba(18, 140, 106, 0.1));
+  color: #086146;
+}
+
+.template-channel-tab--telegram.q-tab--active {
+  border-color: rgba(36, 139, 214, 0.16);
+  background: linear-gradient(105deg, rgba(91, 184, 245, 0.24), rgba(36, 139, 214, 0.09));
+  color: #11669d;
+}
+
+.template-channel-tab--gmail.q-tab--active {
+  border-color: rgba(217, 81, 78, 0.15);
+  background: linear-gradient(105deg, rgba(242, 130, 126, 0.23), rgba(217, 81, 78, 0.08));
+  color: #a93431;
+}
+
+.template-channel-tab.q-tab--active {
+  opacity: 1;
+  font-weight: 750;
+}
+
 .template-sets-panel {
   overflow: hidden;
 }
@@ -3050,11 +3128,61 @@ onMounted(loadPageData)
   color: #137d6c;
 }
 
+.template-set-channel-card--whatsapp {
+  border-color: rgba(18, 140, 106, 0.17);
+  background: linear-gradient(145deg, rgba(71, 211, 162, 0.1), rgba(255, 255, 255, 0.96));
+}
+
+.template-set-channel-card--telegram {
+  border-color: rgba(36, 139, 214, 0.17);
+  background: linear-gradient(145deg, rgba(91, 184, 245, 0.1), rgba(255, 255, 255, 0.96));
+}
+
+.template-set-channel-card--gmail {
+  border-color: rgba(217, 81, 78, 0.16);
+  background: linear-gradient(145deg, rgba(242, 130, 126, 0.1), rgba(255, 255, 255, 0.96));
+}
+
+.template-set-channel-card--whatsapp header > span {
+  background: rgba(71, 211, 162, 0.17);
+  color: #128c6a;
+}
+
+.template-set-channel-card--telegram header > span {
+  background: rgba(91, 184, 245, 0.17);
+  color: #248bd6;
+}
+
+.template-set-channel-card--gmail header > span {
+  background: rgba(242, 130, 126, 0.16);
+  color: #d9514e;
+}
+
 .template-set-channel-list {
   display: flex;
   min-width: 280px;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+.template-channel-chip {
+  border-color: currentColor !important;
+  font-weight: 650;
+}
+
+.template-channel-chip--whatsapp {
+  background: rgba(71, 211, 162, 0.08) !important;
+  color: #128c6a;
+}
+
+.template-channel-chip--telegram {
+  background: rgba(91, 184, 245, 0.09) !important;
+  color: #248bd6;
+}
+
+.template-channel-chip--gmail {
+  background: rgba(242, 130, 126, 0.08) !important;
+  color: #d9514e;
 }
 
 .template-set-dialog,
@@ -3161,6 +3289,95 @@ onMounted(loadPageData)
   height: 22px;
   font-size: 22px !important;
   line-height: 1;
+}
+
+.template-icon--whatsapp {
+  background: rgba(71, 211, 162, 0.17);
+  color: #128c6a;
+}
+
+.template-icon--telegram {
+  background: rgba(91, 184, 245, 0.17);
+  color: #248bd6;
+}
+
+.template-icon--gmail {
+  background: rgba(242, 130, 126, 0.16);
+  color: #d9514e;
+}
+
+.template-icon--global,
+.template-icon--neutral {
+  background: rgba(130, 248, 230, 0.22);
+  color: #137d6c;
+}
+
+.template-channel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-color: currentColor !important;
+  border-radius: 999px;
+  font-weight: 650;
+}
+
+.template-channel-badge--whatsapp {
+  background: rgba(71, 211, 162, 0.08) !important;
+  color: #128c6a;
+}
+
+.template-channel-badge--telegram {
+  background: rgba(91, 184, 245, 0.09) !important;
+  color: #248bd6;
+}
+
+.template-channel-badge--gmail {
+  background: rgba(242, 130, 126, 0.08) !important;
+  color: #d9514e;
+}
+
+.template-channel-badge--global,
+.template-channel-badge--neutral {
+  background: rgba(130, 248, 230, 0.1) !important;
+  color: #137d6c;
+}
+
+.template-library-table :deep(.template-list-row) {
+  transition: background 160ms ease, box-shadow 160ms ease;
+}
+
+.template-library-table :deep(.template-list-row--whatsapp) {
+  background: linear-gradient(105deg, rgba(71, 211, 162, 0.13), rgba(18, 140, 106, 0.04));
+  box-shadow: inset 3px 0 #128c6a;
+}
+
+.template-library-table :deep(.template-list-row--telegram) {
+  background: linear-gradient(105deg, rgba(91, 184, 245, 0.13), rgba(36, 139, 214, 0.04));
+  box-shadow: inset 3px 0 #248bd6;
+}
+
+.template-library-table :deep(.template-list-row--gmail) {
+  background: linear-gradient(105deg, rgba(242, 130, 126, 0.12), rgba(217, 81, 78, 0.035));
+  box-shadow: inset 3px 0 #d9514e;
+}
+
+.template-library-table :deep(.template-list-row--global),
+.template-library-table :deep(.template-list-row--neutral) {
+  background: linear-gradient(105deg, rgba(130, 248, 230, 0.1), rgba(19, 125, 108, 0.025));
+  box-shadow: inset 3px 0 #6ba99d;
+}
+
+.template-library-table :deep(.template-list-row--whatsapp:hover) {
+  background: linear-gradient(105deg, rgba(71, 211, 162, 0.2), rgba(18, 140, 106, 0.07));
+}
+
+.template-library-table :deep(.template-list-row--telegram:hover) {
+  background: linear-gradient(105deg, rgba(91, 184, 245, 0.2), rgba(36, 139, 214, 0.07));
+}
+
+.template-library-table :deep(.template-list-row--gmail:hover) {
+  background: linear-gradient(105deg, rgba(242, 130, 126, 0.19), rgba(217, 81, 78, 0.065));
 }
 
 .template-name__copy {
@@ -4167,6 +4384,16 @@ onMounted(loadPageData)
     height: 42px;
     min-width: 42px;
     min-height: 42px;
+  }
+
+  .template-library-table :deep(.q-table__middle) {
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .template-channel-badge {
+    max-width: 132px;
+    white-space: nowrap;
   }
 
   .template-dialog__header,

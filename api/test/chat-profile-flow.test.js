@@ -6,6 +6,7 @@ const ChatEmailChallenge = require('../src/models/chat-email-challenge.model');
 const ConsentEvent = require('../src/models/consent-event.model');
 const contactsManager = require('../src/managers/contacts.manager');
 const gmailManager = require('../src/managers/gmail.manager');
+const settingsManager = require('../src/managers/settings.manager');
 const chatProfileFlow = require('../src/services/chat-profile-flow.service');
 const { encrypt, decrypt, searchHash } = require('../src/services/crypto.service');
 const { env } = require('../src/config/env');
@@ -103,6 +104,76 @@ function stubEmailChallenges(context) {
   };
 }
 
+test('/help exato lista os comandos reais de WhatsApp e Telegram', async (context) => {
+  restoreAfter(context, [[settingsManager, 'getValidatedPermissionCommands']]);
+  settingsManager.getValidatedPermissionCommands = async () => ({
+    whatsapp: '/autorizar-wpp',
+    telegram: '/autorizar-telegram'
+  });
+
+  const whatsapp = await chatProfileFlow.handleInbound({
+    contactId: '507f1f77bcf86cd799439011',
+    channel: 'whatsapp_cloud',
+    text: '/help'
+  });
+  const telegram = await chatProfileFlow.handleInbound({
+    contactId: '507f1f77bcf86cd799439011',
+    channel: 'telegram',
+    text: '/help'
+  });
+  const telegramAlias = await chatProfileFlow.handleInbound({
+    contactId: '507f1f77bcf86cd799439011',
+    channel: 'telegram',
+    text: '/help@EjugNotifyBot'
+  });
+  const notExact = await chatProfileFlow.handleInbound({
+    contactId: '507f1f77bcf86cd799439011',
+    channel: 'telegram',
+    text: '/help agora'
+  });
+
+  assert.equal(whatsapp.handled, true);
+  assert.equal(whatsapp.kind, 'help');
+  assert.match(whatsapp.text, /Ajuda do Notify Flow no WhatsApp/);
+  assert.match(whatsapp.text, /\/autorizar-wpp/);
+  assert.match(whatsapp.text, /\/login/);
+  assert.match(whatsapp.text, /\/meu-perfil/);
+  assert.match(whatsapp.text, /\/cancelar/);
+  assert.doesNotMatch(whatsapp.text, /\/stop/);
+
+  assert.equal(telegram.handled, true);
+  assert.equal(telegram.kind, 'help');
+  assert.match(telegram.text, /Ajuda do Notify Flow no Telegram/);
+  assert.match(telegram.text, /\/autorizar-telegram/);
+  assert.match(telegram.text, /\/autorizar-wpp/);
+  assert.match(telegram.text, /\/start/);
+  assert.doesNotMatch(telegram.text, /payload|chat_id|contactId|user_id|token/i);
+  assert.match(telegram.text, /\/stop/);
+  assert.equal(telegramAlias.handled, true);
+  assert.equal(telegramAlias.kind, 'help');
+  assert.equal(telegramAlias.text, telegram.text);
+  assert.equal(notExact.handled, false);
+});
+
+test('/help continua disponivel com comandos padrao quando a configuracao legada e invalida', async (context) => {
+  restoreAfter(context, [[settingsManager, 'getValidatedPermissionCommands']]);
+  settingsManager.getValidatedPermissionCommands = async () => {
+    throw new Error('configuracao legada invalida');
+  };
+
+  const result = await chatProfileFlow.handleInbound({
+    contactId: '507f1f77bcf86cd799439011',
+    channel: 'whatsapp_cloud',
+    text: '/help'
+  });
+
+  assert.equal(result.handled, true);
+  assert.equal(result.kind, 'help');
+  assert.match(result.text, /Ajuda do Notify Flow no WhatsApp/);
+  assert.match(result.text, /\/notify-me/);
+  assert.match(result.text, /\/login/);
+});
+
 test('chat privado mostra o proprio perfil sem expor identificadores internos', async (context) => {
   restoreAfter(context, [[contactsManager, 'getById']]);
   contactsManager.getById = async () => ({
@@ -124,6 +195,12 @@ test('chat privado mostra o proprio perfil sem expor identificadores internos', 
     text: '/meu-perfil',
     profileUrl: 'https://notify.example/meu-perfil'
   });
+  const aliasResult = await chatProfileFlow.handleInbound({
+    contactId: '507f1f77bcf86cd799439011',
+    channel: 'telegram',
+    text: '/meu-perfil@EjugNotifyBot',
+    profileUrl: 'https://notify.example/meu-perfil'
+  });
 
   assert.equal(result.handled, true);
   assert.equal(result.kind, 'profile');
@@ -133,6 +210,9 @@ test('chat privado mostra o proprio perfil sem expor identificadores internos', 
   assert.match(result.text, /somente o email/i);
   assert.match(result.text, /https:\/\/notify\.example\/meu-perfil/);
   assert.doesNotMatch(result.text, /507f1f77bcf86cd799439011/);
+  assert.equal(aliasResult.handled, true);
+  assert.equal(aliasResult.kind, 'profile');
+  assert.equal(aliasResult.text, result.text);
 });
 
 test('resumo considera o consentimento efetivo quando ha mais de uma identidade no canal', () => {

@@ -3,7 +3,9 @@ const { z } = require('zod');
 const ChatEmailChallenge = require('../models/chat-email-challenge.model');
 const contactsManager = require('../managers/contacts.manager');
 const gmailManager = require('../managers/gmail.manager');
+const settingsManager = require('../managers/settings.manager');
 const { env } = require('../config/env');
+const chatCommands = require('./chat-commands.service');
 const {
   decrypt,
   encrypt,
@@ -679,16 +681,31 @@ function profileSummary(contact, profileUrl) {
   return lines.join('\n');
 }
 
-function exactCommand(text, command) {
-  return String(text || '').normalize('NFKC').trim().toLocaleLowerCase('pt-BR')
-    === String(command).toLocaleLowerCase('pt-BR');
+function exactCommand(text, command, channel) {
+  const candidate = String(text || '').normalize('NFKC').trim().toLocaleLowerCase('pt-BR');
+  const expected = String(command || '').normalize('NFKC').trim().toLocaleLowerCase('pt-BR');
+  if (candidate === expected) return true;
+  if (channel !== 'telegram' || expected.includes(' ')) return false;
+  return candidate.startsWith(`${expected}@`)
+    && /^[a-z0-9_]{3,32}$/i.test(candidate.slice(expected.length + 1));
 }
 
 async function handleInbound({ contactId, channel, text, profileUrl, providerEvidence = {} }) {
   const normalizedText = String(text || '').normalize('NFKC').trim();
   if (!normalizedText) return { handled: false };
+  const safeChannel = normalizedChannel(channel);
 
-  if (exactCommand(normalizedText, '/meu-perfil')) {
+  if (exactCommand(normalizedText, chatCommands.FIXED_CHAT_COMMANDS.help, safeChannel)) {
+    const permissionCommands = await settingsManager.getValidatedPermissionCommands()
+      .catch(() => ({}));
+    return {
+      handled: true,
+      kind: 'help',
+      text: chatCommands.helpMessage(safeChannel, permissionCommands)
+    };
+  }
+
+  if (exactCommand(normalizedText, '/meu-perfil', safeChannel)) {
     const contact = await contactsManager.getById(contactId);
     return {
       handled: true,
@@ -697,7 +714,7 @@ async function handleInbound({ contactId, channel, text, profileUrl, providerEvi
     };
   }
 
-  if (exactCommand(normalizedText, '/cancelar')) {
+  if (exactCommand(normalizedText, '/cancelar', safeChannel)) {
     await clearEmailCaptures(contactId);
     const cancellation = await cancelEmailVerification(contactId);
     if (cancellation.inProgress) {
@@ -728,7 +745,7 @@ async function handleInbound({ contactId, channel, text, profileUrl, providerEvi
   if (emailCandidates.length === 1) {
     const verification = await beginEmailVerification({
       contactId,
-      channel: normalizedChannel(channel),
+      channel: safeChannel,
       email: emailCandidates[0],
       providerEvidence
     });
@@ -738,7 +755,7 @@ async function handleInbound({ contactId, channel, text, profileUrl, providerEvi
   if (/^\d{6}$/.test(normalizedText)) {
     const verification = await verifyEmailCode({
       contactId,
-      channel: normalizedChannel(channel),
+      channel: safeChannel,
       code: normalizedText,
       providerEvidence
     });
@@ -787,6 +804,7 @@ module.exports = {
   clearEmailCaptures,
   emailCapturePrompt,
   profileSummary,
+  chatHelpMessage: chatCommands.helpMessage,
   handleInbound,
   beginEmailVerification,
   verifyEmailCode,

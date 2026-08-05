@@ -761,14 +761,6 @@ onBeforeUnmount(() => {
             </q-item>
           </template>
         </q-list>
-
-        <div class="drawer-footer">
-          <q-icon name="security" color="primary" />
-          <div>
-            <strong>Privacidade ativa</strong>
-            <span>Consentimentos validados antes de cada envio.</span>
-          </div>
-        </div>
       </div>
     </q-drawer>
 

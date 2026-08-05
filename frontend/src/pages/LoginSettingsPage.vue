@@ -85,7 +85,6 @@ onMounted(() => load())
       <div>
         <div class="eyebrow">ACESSO DO CONTATO</div>
         <h1>Logins do Meu Perfil</h1>
-        <p>Links de acesso assinados, de uso único e com validade máxima de 7 dias.</p>
       </div>
       <q-btn outline no-caps icon="refresh" label="Atualizar" :loading="loading" @click="load()" />
     </header>

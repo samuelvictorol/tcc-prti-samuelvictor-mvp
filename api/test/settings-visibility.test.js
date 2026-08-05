@@ -156,6 +156,14 @@ test('comandos de permissao nao podem usar rotas reservadas nem colidir entre ca
     (error) => error.statusCode === 422 && error.code === 'PERMISSION_COMMAND_RESERVED'
   );
   await assert.rejects(
+    settingsManager.setValue(
+      'START_VERIFY_TELEGRAM_PERMISSION',
+      '/help',
+      '507f1f77bcf86cd799439011'
+    ),
+    (error) => error.statusCode === 422 && error.code === 'PERMISSION_COMMAND_RESERVED'
+  );
+  await assert.rejects(
     settingsManager.setBulk({
       whatsappPermission: { command: '/mesmo-comando' },
       telegramPermission: { command: '/MESMO-COMANDO' }

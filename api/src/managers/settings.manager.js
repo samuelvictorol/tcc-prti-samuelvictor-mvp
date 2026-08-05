@@ -64,6 +64,7 @@ const TELEGRAM_MESSAGE_KEYS = new Set([
   'TELEGRAM_HELP_MESSAGE'
 ]);
 const RESERVED_CHAT_COMMANDS = new Set([
+  '/help',
   '/login',
   '/meu-perfil',
   '/cancelar',

@@ -383,10 +383,12 @@ test('perfil permite ativar e revogar somente email com confirmacao e auditoria'
 test('links de ativacao usam numero runtime e adaptam comando configurado ao deep-link Telegram', async (context) => {
   restoreAfter(context, [
     [contactsManager, 'getById'], [settingsManager, 'getWhatsappPermissionCommand'],
+    [settingsManager, 'getTelegramPermissionCommand'],
     [settingsManager, 'getValue'], [telegramManager, 'status']
   ]);
   contactsManager.getById = async () => profileContact();
   settingsManager.getWhatsappPermissionCommand = async () => '/notify-me';
+  settingsManager.getTelegramPermissionCommand = async () => '/verify-me';
   settingsManager.getValue = async (key) => key === 'WHATSAPP_CLOUD_DISPLAY_PHONE_NUMBER'
     ? '+1 (555) 000-1111'
     : null;
@@ -394,11 +396,20 @@ test('links de ativacao usam numero runtime e adaptam comando configurado ao dee
 
   const result = await profileManager.activationLinks('507f1f77bcf86cd799439011');
   assert.equal(result.telegram.command, '/notify-me');
+  assert.equal(result.telegram.permissionCommand, '/verify-me');
   assert.equal(result.telegram.deepLinkPayload, 'notify-me');
   assert.equal(result.telegram.deepLinkCommand, '/start notify-me');
   assert.equal(result.telegram.url, 'https://t.me/NotifyFlowBot?start=notify-me');
   assert.match(result.telegram.explanation, /\/start notify-me/);
   assert.equal(result.whatsapp.url, 'https://wa.me/15550001111?text=%2Fnotify-me');
+  assert.deepEqual(
+    result.helpCommands.whatsapp.map((item) => item.command),
+    ['/notify-me', '/login', '/meu-perfil', '/help', '/cancelar']
+  );
+  assert.deepEqual(
+    result.helpCommands.telegram.map((item) => item.command),
+    ['/verify-me', '/notify-me', '/start', '/login', '/meu-perfil', '/help', '/cancelar', '/stop']
+  );
 });
 
 test('historico filtra delivery do contato e retorna grupos/templates sem dados de terceiros', async (context) => {

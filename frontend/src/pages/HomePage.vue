@@ -468,8 +468,7 @@ onBeforeUnmount(() => {
   <q-page class="page-container">
     <PageHeader
       eyebrow="Visão operacional"
-      title="Início e Configurações"
-      description="Acompanhe a disponibilidade dos canais, proteja credenciais e observe cada evento da operação."
+      title="Início e configurações"
       icon="space_dashboard"
     >
       <template #actions>
@@ -691,77 +690,6 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
-
-        <q-expansion-item
-          icon="bi-telegram"
-          label="Telegram"
-          :caption="app.isChannelEnabled('telegram') ? 'Configurado e disponível' : undefined"
-          :header-class="channelConfigHeaderClass('telegram')"
-        >
-          <div class="form-grid q-pa-md">
-            <div v-if="telegramBot" class="full-span telegram-bot-card">
-              <q-avatar class="telegram-bot-avatar" color="primary" text-color="white" icon="smart_toy" size="36px" />
-              <div class="telegram-bot-copy">
-                <span>Bot identificado automaticamente</span>
-                <strong>{{ telegramBot.displayName }}</strong>
-                <small v-if="telegramBotUsername">{{ telegramBotUsername }}</small>
-              </div>
-              <q-icon name="verified" color="positive" size="22px" />
-            </div>
-            <div class="full-span credential-visibility" aria-live="polite">
-              <div>
-                <q-icon :name="channelCredentialsVisible.telegram ? 'visibility' : 'visibility_off'" />
-                <span>{{ channelCredentialsVisible.telegram ? 'Credenciais visíveis nesta sessão' : 'Valores salvos protegidos por máscara' }}</span>
-              </div>
-              <q-btn
-                flat
-                round
-                color="primary"
-                :icon="channelCredentialsVisible.telegram ? 'edit_off' : 'edit'"
-                :loading="revealingCredentials.telegram"
-                :disable="!channelHasSavedCredentials('telegram')"
-                :aria-label="channelCredentialsVisible.telegram ? 'Ocultar todas as credenciais do Telegram' : 'Exibir todas as credenciais do Telegram'"
-                @click="toggleChannelCredentials('telegram')"
-              >
-                <q-tooltip>{{ channelCredentialsVisible.telegram ? 'Ocultar todas as credenciais' : 'Exibir todas as credenciais' }}</q-tooltip>
-              </q-btn>
-            </div>
-            <q-input
-              v-model="settings.telegram.botToken"
-              outlined
-              :type="channelCredentialsVisible.telegram ? 'text' : 'password'"
-              :readonly="credentialFieldIsMasked('telegram', 'botToken')"
-              label="Token do Bot API"
-              autocomplete="off"
-              hint="O token sozinho já permite testar envios manuais"
-            />
-            <q-input
-              :model-value="telegramCallbackUrl"
-              class="full-span"
-              outlined
-              readonly
-              label="URL de callback do webhook"
-            >
-              <template #append>
-                <ContextHelp
-                  title="Callback automático do Telegram"
-                  tooltip="Entenda a configuração automática"
-                  :text="[
-                    'Ao salvar um token de bot válido, a API gera um segredo interno e registra este callback automaticamente no Telegram.',
-                    'Em produção, PUBLIC_APP_URL deve apontar para o domínio HTTPS público exibido aqui. O segredo nunca é mostrado ou copiado pelo painel.',
-                  ]"
-                />
-                <q-btn flat round dense color="primary" icon="content_copy" aria-label="Copiar URL de callback do Telegram" @click="copyTelegramCallbackUrl" />
-              </template>
-            </q-input>
-            <div class="full-span channel-actions">
-              <q-btn outline color="primary" no-caps icon="save" label="Salvar Telegram" :loading="savingChannel.telegram" @click="saveChannel('telegram')" />
-              <q-btn flat color="primary" no-caps icon="send" label="Teste manual" to="/telegram" :disable="!app.isChannelEnabled('telegram')" />
-            </div>
-            <div class="full-span channel-hint"><q-icon name="verified_user" /> O webhook é registrado automaticamente; o segredo permanece protegido no servidor.</div>
-          </div>
-        </q-expansion-item>
-        <q-separator />
         <q-expansion-item
           icon="mdi-whatsapp"
           label="WhatsApp Cloud API"
@@ -855,6 +783,75 @@ onBeforeUnmount(() => {
               <q-btn outline color="primary" no-caps icon="save" label="Salvar WhatsApp Cloud" :loading="savingChannel.whatsappCloud" @click="saveChannel('whatsappCloud')" />
               <q-btn flat color="primary" no-caps icon="send" label="Teste manual" to="/whatsapp-cloud" :disable="!app.isChannelEnabled('whatsappCloud')" />
             </div>
+          </div>
+        </q-expansion-item>
+           <q-expansion-item
+          icon="bi-telegram"
+          label="Telegram"
+          :caption="app.isChannelEnabled('telegram') ? 'Configurado e disponível' : undefined"
+          :header-class="channelConfigHeaderClass('telegram')"
+        >
+          <div class="form-grid q-pa-md">
+            <div v-if="telegramBot" class="full-span telegram-bot-card">
+              <q-avatar class="telegram-bot-avatar" color="primary" text-color="white" icon="smart_toy" size="36px" />
+              <div class="telegram-bot-copy">
+                <span>Bot identificado automaticamente</span>
+                <strong>{{ telegramBot.displayName }}</strong>
+                <small v-if="telegramBotUsername">{{ telegramBotUsername }}</small>
+              </div>
+              <q-icon name="verified" color="positive" size="22px" />
+            </div>
+            <div class="full-span credential-visibility" aria-live="polite">
+              <div>
+                <q-icon :name="channelCredentialsVisible.telegram ? 'visibility' : 'visibility_off'" />
+                <span>{{ channelCredentialsVisible.telegram ? 'Credenciais visíveis nesta sessão' : 'Valores salvos protegidos por máscara' }}</span>
+              </div>
+              <q-btn
+                flat
+                round
+                color="primary"
+                :icon="channelCredentialsVisible.telegram ? 'edit_off' : 'edit'"
+                :loading="revealingCredentials.telegram"
+                :disable="!channelHasSavedCredentials('telegram')"
+                :aria-label="channelCredentialsVisible.telegram ? 'Ocultar todas as credenciais do Telegram' : 'Exibir todas as credenciais do Telegram'"
+                @click="toggleChannelCredentials('telegram')"
+              >
+                <q-tooltip>{{ channelCredentialsVisible.telegram ? 'Ocultar todas as credenciais' : 'Exibir todas as credenciais' }}</q-tooltip>
+              </q-btn>
+            </div>
+            <q-input
+              v-model="settings.telegram.botToken"
+              outlined
+              :type="channelCredentialsVisible.telegram ? 'text' : 'password'"
+              :readonly="credentialFieldIsMasked('telegram', 'botToken')"
+              label="Token do Bot API"
+              autocomplete="off"
+              hint="O token sozinho já permite testar envios manuais"
+            />
+            <q-input
+              :model-value="telegramCallbackUrl"
+              class="full-span"
+              outlined
+              readonly
+              label="URL de callback do webhook"
+            >
+              <template #append>
+                <ContextHelp
+                  title="Callback automático do Telegram"
+                  tooltip="Entenda a configuração automática"
+                  :text="[
+                    'Ao salvar um token de bot válido, a API gera um segredo interno e registra este callback automaticamente no Telegram.',
+                    'Em produção, PUBLIC_APP_URL deve apontar para o domínio HTTPS público exibido aqui. O segredo nunca é mostrado ou copiado pelo painel.',
+                  ]"
+                />
+                <q-btn flat round dense color="primary" icon="content_copy" aria-label="Copiar URL de callback do Telegram" @click="copyTelegramCallbackUrl" />
+              </template>
+            </q-input>
+            <div class="full-span channel-actions">
+              <q-btn outline color="primary" no-caps icon="save" label="Salvar Telegram" :loading="savingChannel.telegram" @click="saveChannel('telegram')" />
+              <q-btn flat color="primary" no-caps icon="send" label="Teste manual" to="/telegram" :disable="!app.isChannelEnabled('telegram')" />
+            </div>
+            <div class="full-span channel-hint"><q-icon name="verified_user" /> O webhook é registrado automaticamente; o segredo permanece protegido no servidor.</div>
           </div>
         </q-expansion-item>
         <q-separator />
@@ -1086,7 +1083,7 @@ onBeforeUnmount(() => {
       <div class="toolbar-row">
         <div>
           <h2 class="section-title">Console de eventos</h2>
-          <p class="section-copy"><span class="status-dot status-dot--online" /> Atualizações recebidas em tempo real e dados sensíveis ocultados pela API.</p>
+          <p class="section-copy"><span class="status-dot status-dot--online q-mr-xs" /> Atualizações recebidas em tempo real e dados sensíveis ocultados pela API.</p>
         </div>
         <q-btn flat round icon="refresh" aria-label="Atualizar logs" :loading="logLoading" @click="loadLogs" />
       </div>

@@ -14,6 +14,7 @@ const telegramManager = require('./telegram.manager');
 const settingsManager = require('./settings.manager');
 const { env } = require('../config/env');
 const { searchHash, tokenHash } = require('../services/crypto.service');
+const chatCommands = require('../services/chat-commands.service');
 const { getRedis } = require('../services/redis.service');
 const {
   normalizeEmail,
@@ -991,8 +992,9 @@ function telegramStartPayload(command) {
 
 async function activationLinks(contactId) {
   const contact = await contactsManager.getById(contactId);
-  const command = await settingsManager.getWhatsappPermissionCommand();
-  const [telegramStatus, whatsappNumber] = await Promise.all([
+  const [command, telegramPermissionCommand, telegramStatus, whatsappNumber] = await Promise.all([
+    settingsManager.getWhatsappPermissionCommand(),
+    settingsManager.getTelegramPermissionCommand(),
     telegramManager.status({ probe: true }).catch(() => ({ configured: false })),
     businessWhatsappNumber(contact)
   ]);
@@ -1008,6 +1010,7 @@ async function activationLinks(contactId) {
   return {
     telegram: {
       command,
+      permissionCommand: telegramPermissionCommand,
       deepLinkCommand: `/start ${telegramPayload}`,
       deepLinkPayload: telegramPayload,
       url: telegramUrl,
@@ -1019,6 +1022,16 @@ async function activationLinks(contactId) {
       url: whatsappUrl,
       appliesTo: ['whatsapp_cloud'],
       unavailableReason: whatsappUrl ? null : 'Numero empresarial do WhatsApp ainda nao identificado'
+    },
+    helpCommands: {
+      whatsapp: chatCommands.commandCatalog('whatsapp_cloud', {
+        whatsapp: command,
+        telegram: telegramPermissionCommand
+      }),
+      telegram: chatCommands.commandCatalog('telegram', {
+        whatsapp: command,
+        telegram: telegramPermissionCommand
+      })
     }
   };
 }
