@@ -443,7 +443,9 @@ describe('Chats oficiais do WhatsApp Cloud', () => {
     expect(chats).toContain('let messagesRequest = 0')
     expect(chats).toContain('requestId !== messagesRequest')
     expect(chats).toContain("await loadConversation(current, { background: true, markRead: false })")
-    expect(chats).toContain('messages.value = mergeCloudMessages([...messages.value, payload.message])')
+    expect(chats).toContain('const mergedMessages = mergeCloudMessages([...messages.value, payload.message])')
+    expect(chats).toContain('chatWindowAfterRealtime(mergedMessages')
+    expect(chats).toContain('params: { page: 1, limit: CHAT_MESSAGE_PAGE_SIZE }')
     expect(chats).not.toContain('if (current) await selectConversation(current)')
     expect(chats).toMatch(
       /<div v-if="loadingMessages"[\s\S]+?<template v-else>[\s\S]+?v-for="item in messages"/,

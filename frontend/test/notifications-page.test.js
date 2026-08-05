@@ -510,7 +510,7 @@ describe('compositor amigável de notificações', () => {
     expect(source).toContain('Bloqueios temporários da Meta')
     expect(source).toContain('uma única tentativa automática após 24 horas')
     expect(source).toContain('Tentar novamente')
-    expect(source).toContain('Erros internos do Notify Flow não aparecem aqui')
+    expect(source).not.toContain('Erros internos do Notify Flow não aparecem aqui')
     expect(source).toContain('v-model="metaBlockDetailDialog"')
     expect(source).toContain(':grid="$q.screen.lt.md"')
   })

@@ -20,11 +20,14 @@ import {
   cloudButtonSuffixParameter,
   cloudButtonUrlMode,
   cloudBuilderFromTemplate,
+  cloneCloudComponentsForDraft,
   createCloudParameter,
   createCloudComponent,
+  createOptionalStandardComponent,
   createStandardMarketingComponents,
   findWhatsAppCloudPreset,
   isForbiddenWhatsAppButtonUrl,
+  isSystemTemplateRecord,
   isValidHttpsTemplateUrl,
   meaningfulCloudComponents,
   previewCloudButtonUrl,
@@ -36,6 +39,7 @@ import {
   setCloudButtonUrlMode,
   setCloudMediaContentMode,
   standardMarketingComponentsFromTemplate,
+  templateCopyName,
   updateCloudButtonBaseUrl,
   updateCloudMediaValue,
   validateCustomWhatsAppCloudTemplate,
@@ -377,6 +381,51 @@ describe('templates oficiais do WhatsApp Cloud', () => {
     expect(media.example).toBe('https://example.com/fixa.png')
   })
 
+  it('inicia novos cabeçalhos com mídia fixa e mantém o modo explícito de templates existentes', () => {
+    const newHeader = createOptionalStandardComponent('header')
+    expect(cloudMediaContentMode(newHeader.parameters[0])).toBe('fixed')
+
+    const existingDynamic = createCloudParameter({
+      type: 'image',
+      contentMode: 'dynamic',
+      example: 'https://example.com/amostra.png',
+    })
+    expect(cloudMediaContentMode(existingDynamic)).toBe('dynamic')
+  })
+
+  it('prepara uma cópia independente com nome claro e novos IDs internos', () => {
+    const original = [createCloudComponent({
+      id: 'component-original',
+      type: 'header',
+      parameters: [{
+        id: 'parameter-original',
+        type: 'image',
+        key: 'midia_cabecalho',
+        label: 'Mídia',
+        fixedValue: 'https://example.com/capa.png',
+        mediaAssetId: '507f1f77bcf86cd799439011',
+      }],
+    })]
+    const copy = cloneCloudComponentsForDraft(original)
+
+    expect(templateCopyName('Campanha', ['Campanha', 'Campanha (cópia)']))
+      .toBe('Campanha (cópia 2)')
+    expect(copy[0].id).not.toBe(original[0].id)
+    expect(copy[0].parameters[0].id).not.toBe(original[0].parameters[0].id)
+    expect(copy[0].parameters[0]).toMatchObject({
+      fixedValue: 'https://example.com/capa.png',
+      mediaAssetId: '507f1f77bcf86cd799439011',
+    })
+    copy[0].parameters[0].fixedValue = 'https://example.com/outra.png'
+    expect(original[0].parameters[0].fixedValue).toBe('https://example.com/capa.png')
+    expect(isSystemTemplateRecord({
+      channel: 'whatsapp_cloud',
+      externalTemplateName: 'jaspers_market_plain_text_v1_copia',
+      systemManaged: false,
+      deletable: true,
+    })).toBe(false)
+  })
+
   it('configura um corpo nomeado amigável e mantém key, parameterName e marcador sincronizados', () => {
     const body = createCloudComponent({ type: 'body', text: 'Olá!' })
 
@@ -611,7 +660,16 @@ describe('templates oficiais do WhatsApp Cloud', () => {
     expect(source).toContain("{ label: 'Sufixo dinâmico', value: 'dynamic', icon: 'route' }")
     expect(source).toContain('label="Variável interna do sufixo"')
     expect(source).toContain('cloudButtonBaseUrl(cloudStandardButton)')
-    expect(source).toContain('Nenhum JSON precisa ser editado.')
+    expect(source).not.toContain('Nenhum JSON precisa ser editado.')
+    expect(source).toContain('aria-label="Clonar template"')
+    expect(source).toContain('Clonar como um novo template editável')
+    expect(source).toContain("form.cloudPreset = 'custom'")
+    expect(source).toContain('copiedMetaTemplateName(')
+    expect(source).toContain('position: sticky;')
+    expect(source.indexOf("{ label: 'Sempre esta mídia', value: 'fixed', icon: 'lock' }"))
+      .toBeLessThan(source.indexOf("{ label: 'Em cada disparo', value: 'dynamic', icon: 'sync_alt' }"))
+    expect(source).not.toContain('Apenas o título e o nome oficial são obrigatórios no Notify Flow.')
+    expect(source).not.toContain('A Meta controla o layout final. A descrição interna não faz parte da mensagem')
     expect(source).toContain('Adicionar ${option.label}')
     expect(source).toContain("removeCloudStandardComponent('header')")
     expect(source).toContain("removeCloudStandardComponent('body')")

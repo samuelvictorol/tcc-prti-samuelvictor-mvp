@@ -103,4 +103,27 @@ describe('Central de Ajuda', () => {
     expect(home).not.toContain('aria-label="Copiar webhook secret"')
     expect(home).toContain('aria-label="Copiar URL de callback do Telegram"')
   })
+
+  it('documenta comandos reais e destaca os comandos dinâmicos por canal', () => {
+    const page = source('pages/HelpPage.vue')
+
+    expect(page).toContain('whatsappPermissionCommandFromSettings')
+    expect(page).toContain('telegramPermissionCommandFromSettings')
+    expect(page).toContain("code: '/login'")
+    expect(page).toContain("code: '/meu-perfil'")
+    expect(page).toContain("code: '/cancelar'")
+    expect(page).toContain("code: '/stop'")
+    expect(page).toContain("code: '/start <payload>'")
+    expect(page).toContain('Sem comandos de chat')
+    expect(page).toContain('um único email válido')
+    expect(page).toContain('label="Dinâmico"')
+  })
+
+  it('remove explicações redundantes da central de notificações', () => {
+    const page = source('pages/NotificationsPage.vue')
+
+    expect(page).not.toContain('Envio responsável')
+    expect(page).not.toContain('A exclusão ou revogação de um contato deve prevalecer até sobre tarefas já enfileiradas')
+    expect(page).not.toContain('Falhas externas agrupadas pelo motivo. Erros internos do Notify Flow não aparecem aqui.')
+  })
 })

@@ -67,6 +67,29 @@ export function isSystemTemplateRecord(template = {}) {
     && SYSTEM_WHATSAPP_TEMPLATE_NAMES.includes(String(template.externalTemplateName || '').trim())
 }
 
+export function templateCopyName(value = '', usedNames = []) {
+  const base = String(value || 'Template').trim() || 'Template'
+  const used = new Set((usedNames || []).map((name) => String(name || '').trim().toLocaleLowerCase('pt-BR')))
+  const firstCopy = `${base} (cópia)`
+  if (!used.has(firstCopy.toLocaleLowerCase('pt-BR'))) return firstCopy
+  let suffix = 2
+  while (used.has(`${base} (cópia ${suffix})`.toLocaleLowerCase('pt-BR'))) suffix += 1
+  return `${base} (cópia ${suffix})`
+}
+
+export function cloneCloudComponentsForDraft(components = []) {
+  return (components || []).map((component) => createCloudComponent({
+    ...component,
+    id: undefined,
+    parameters: (component.parameters || []).map((parameter) => ({
+      ...parameter,
+      id: undefined,
+      uploadFile: null,
+      uploading: false,
+    })),
+  }))
+}
+
 export function templateFormatLabel(template = {}) {
   const externalName = String(template.externalTemplateName || '').trim()
   if (externalName === '3p_direct_integration_test_template') return 'OFICIAL META PROD NUMBER'
@@ -242,7 +265,7 @@ export const OPTIONAL_STANDARD_COMPONENTS = Object.freeze([
   Object.freeze({ type: 'button', label: 'Botão de link', icon: 'ads_click' }),
 ])
 
-function createOptionalStandardComponent(type) {
+export function createOptionalStandardComponent(type) {
   if (type === 'header') {
     return createCloudComponent({
       type: 'header',
@@ -251,6 +274,7 @@ function createOptionalStandardComponent(type) {
         key: 'midia_cabecalho',
         label: 'Mídia do cabeçalho',
         mediaType: 'image',
+        contentMode: 'fixed',
       })],
     })
   }
@@ -814,6 +838,7 @@ const cloudPreviewMode = ref('visual')
 const tab = ref('all')
 const search = ref('')
 const editingId = ref(null)
+const cloningSourceId = ref(null)
 const templates = ref([])
 const invites = ref([])
 const templateSets = ref([])
@@ -1297,6 +1322,7 @@ async function saveTemplateSetLinks() {
 function openCreate(channel = tab.value) {
   cleanupPendingCloudMedia().catch(() => {})
   editingId.value = null
+  cloningSourceId.value = null
   Object.assign(form, emptyForm(), { channel: channel === 'all' ? 'telegram' : channel })
   if (form.channel === 'email') form.format = 'html'
   if (form.channel === 'telegram') form.format = 'telegram_text'
@@ -1676,6 +1702,7 @@ function openEdit(template) {
     return
   }
   editingId.value = recordId(template)
+  cloningSourceId.value = null
   const metadata = template.metadata || {}
   const variables = template.variables || []
   const cloudPreset = findWhatsAppCloudPreset(template.whatsappCloudPreset || template.externalTemplateName).value
@@ -1700,6 +1727,55 @@ function openEdit(template) {
   if (channel === 'whatsapp_cloud' && cloudPreset !== 'custom') applyCloudPreset(cloudPreset)
   cloudPreviewMode.value = 'visual'
   dialog.value = true
+}
+
+function copiedMetaTemplateName(value = '') {
+  const base = normalizeCloudVariableKey(value, 'modelo_meta').toLowerCase()
+  const copyBase = `${base.slice(0, 506)}_copia`
+  const used = new Set(templates.value.map((template) => String(template.externalTemplateName || '').trim().toLowerCase()))
+  let candidate = copyBase
+  let suffix = 2
+  while (used.has(candidate)) {
+    candidate = `${copyBase.slice(0, Math.max(1, 511 - String(suffix).length))}_${suffix}`
+    suffix += 1
+  }
+  return candidate
+}
+
+function openClone(template) {
+  const channel = normalizedChannel(template.channel || template.type)
+  if (channel === 'global') {
+    $q.notify({ type: 'info', message: 'Templates globais antigos são somente leitura e não podem ser clonados.' })
+    return
+  }
+
+  openEdit(template)
+  if (!dialog.value) return
+
+  editingId.value = null
+  cloningSourceId.value = recordId(template)
+  form.name = templateCopyName(
+    template.name || template.title || 'Template',
+    templates.value.map((item) => item.name || item.title),
+  )
+
+  if (channel === 'whatsapp_cloud') {
+    const restoredComponents = isSystemTemplateRecord(template)
+      ? standardMarketingComponentsFromTemplate(template)
+      : form.cloudComponents
+    form.cloudComponents = cloneCloudComponentsForDraft(restoredComponents)
+
+    if (isSystemTemplateRecord(template)) {
+      form.cloudPreset = 'custom'
+      form.metadata.approvedName = copiedMetaTemplateName(
+        template.externalTemplateName || template.metadata?.approvedName || template.name,
+      )
+      form.body = ''
+      form.variablesText = ''
+    }
+  }
+
+  cloudPreviewMode.value = 'visual'
 }
 
 async function save() {
@@ -1765,7 +1841,8 @@ async function save() {
     for (const id of cloudMediaAssetIds()) pendingCloudMediaAssetIds.delete(id)
     await cleanupPendingCloudMedia()
     dialog.value = false
-    $q.notify({ type: 'positive', message: 'Template salvo com sucesso.' })
+    $q.notify({ type: 'positive', message: cloningSourceId.value ? 'Cópia do template salva com sucesso.' : 'Template salvo com sucesso.' })
+    cloningSourceId.value = null
     await loadTemplates()
   } catch (error) {
     $q.notify({ type: 'negative', message: errorMessage(error) })
@@ -1775,7 +1852,10 @@ async function save() {
 }
 
 watch(dialog, (open) => {
-  if (!open) cleanupPendingCloudMedia().catch(() => {})
+  if (!open) {
+    cloningSourceId.value = null
+    cleanupPendingCloudMedia().catch(() => {})
+  }
 })
 
 onBeforeUnmount(() => {
@@ -2002,6 +2082,18 @@ onMounted(loadPageData)
               flat
               round
               dense
+              color="primary"
+              icon="content_copy"
+              aria-label="Clonar template"
+              @click="openClone(props.row)"
+            >
+              <q-tooltip>Clonar como um novo template editável</q-tooltip>
+            </q-btn>
+            <q-btn
+              v-if="normalizedChannel(props.row.channel || props.row.type) !== 'global'"
+              flat
+              round
+              dense
               icon="edit"
               aria-label="Editar template"
               @click="openEdit(props.row)"
@@ -2159,7 +2251,7 @@ onMounted(loadPageData)
       <q-card class="template-dialog">
         <q-card-section class="row items-center q-px-lg q-py-md template-dialog__header">
           <div>
-            <div class="text-h6 text-weight-bold">{{ editingId ? 'Editar template' : 'Novo template' }}</div>
+            <div class="text-h6 text-weight-bold">{{ cloningSourceId ? 'Clonar template' : editingId ? 'Editar template' : 'Novo template' }}</div>
             <div class="dialog-subtitle">
               {{ form.channel === 'whatsapp_cloud'
                 ? 'Escolha um modelo aprovado pela Meta; o sistema monta o payload automaticamente.'
@@ -2328,10 +2420,6 @@ onMounted(loadPageData)
                       hint="Ajuda o administrador a localizar o template. Não entra no corpo, na prévia nem no payload."
                       class="template-field full-span"
                     />
-                    <q-banner rounded class="meta-approved-reminder full-span">
-                      <template #avatar><q-icon name="info" color="primary" /></template>
-                      Apenas o título e o nome oficial são obrigatórios no Notify Flow. Componentes informados devem coincidir com o modelo aprovado na Meta.
-                    </q-banner>
                   </div>
                 </section>
 
@@ -2409,8 +2497,8 @@ onMounted(loadPageData)
                             color="white"
                             text-color="primary"
                             :options="[
-                              { label: 'Em cada disparo', value: 'dynamic', icon: 'sync_alt' },
                               { label: 'Sempre esta mídia', value: 'fixed', icon: 'lock' },
+                              { label: 'Em cada disparo', value: 'dynamic', icon: 'sync_alt' },
                             ]"
                             @update:model-value="onCloudMediaModeChange"
                           />
@@ -2571,10 +2659,6 @@ onMounted(loadPageData)
                           class="template-field full-span"
                         />
                       </div>
-                      <q-banner v-if="cloudStandardBodyMode === 'dynamic'" rounded class="dynamic-component-note">
-                        <template #avatar><q-icon name="sync_alt" color="primary" /></template>
-                        O payload usará <strong>parameter_name</strong> com o mesmo nome da variável interna. Nenhum JSON precisa ser editado.
-                      </q-banner>
                     </article>
 
                     <article v-if="cloudStandardFooter" class="standard-field-card">
@@ -2856,10 +2940,9 @@ onMounted(loadPageData)
                 </div>
                 <pre>{{ cloudPreviewPayloadJson }}</pre>
               </div>
-              <div class="preview-warning" :class="{ 'cloud-preview-note': form.channel === 'whatsapp_cloud' }">
-                <q-icon :name="form.channel === 'whatsapp_cloud' ? 'info' : 'security'" color="primary" />
-                <span v-if="form.channel === 'whatsapp_cloud'">A Meta controla o layout final. A descrição interna não faz parte da mensagem; quando informados, mídia, texto e botão devem coincidir com o modelo aprovado.</span>
-                <span v-else-if="form.channel === 'telegram'">Somente texto simples é exibido; menus usam botões inline e mídias são validadas pelo servidor.</span>
+              <div v-if="form.channel !== 'whatsapp_cloud'" class="preview-warning">
+                <q-icon name="security" color="primary" />
+                <span v-if="form.channel === 'telegram'">Somente texto simples é exibido; menus usam botões inline e mídias são validadas pelo servidor.</span>
                 <span v-else>HTML perigoso é removido da prévia. A API ainda deve sanitizar antes do envio.</span>
               </div>
             </aside>
@@ -3268,12 +3351,17 @@ onMounted(loadPageData)
 }
 
 .optional-component-picker {
+  position: sticky;
+  z-index: 4;
+  top: 0;
   display: grid;
   gap: 12px;
   padding: 14px;
   border: 1px dashed rgba(18, 104, 89, 0.25);
   border-radius: 16px;
-  background: rgba(239, 253, 249, 0.72);
+  background: rgba(247, 255, 252, 0.98);
+  box-shadow: 0 10px 24px rgba(18, 104, 89, 0.09);
+  backdrop-filter: blur(10px);
 }
 
 .optional-component-picker > div:first-child {
@@ -4118,12 +4206,22 @@ onMounted(loadPageData)
   }
 
   .optional-component-actions {
-    display: grid;
-    grid-template-columns: 1fr;
+    display: flex;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 3px;
+    scrollbar-width: thin;
   }
 
   .optional-component-actions :deep(.q-btn) {
-    width: 100%;
+    width: auto;
+    flex: 0 0 auto;
+  }
+
+  .optional-component-picker {
+    margin-right: -4px;
+    margin-left: -4px;
+    padding: 12px;
   }
 
   .component-card-header {

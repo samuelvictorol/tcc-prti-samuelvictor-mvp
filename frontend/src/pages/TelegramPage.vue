@@ -10,6 +10,14 @@ import { connectSocket, getSocket } from '../services/socket.js'
 import { telegramBotIdentity } from '../services/telegram.js'
 import { playAppSound } from '../services/sounds.js'
 import {
+  CHAT_MESSAGE_PAGE_SIZE,
+  chatWindowAfterRealtime,
+  chatPageHasMore,
+  isNearChatBottom,
+  preservedChatScrollTop,
+  shouldLoadOlderChatMessages,
+} from '../services/chat-pagination.js'
+import {
   channelIdentity,
   deliveryStatusColor,
   dispatchDeliveryCount,
@@ -29,6 +37,7 @@ const $q = useQuasar()
 const tab = ref('chats')
 const loading = ref(false)
 const loadingMessages = ref(false)
+const loadingOlderMessages = ref(false)
 const sending = ref(false)
 const bulkSending = ref(false)
 const issuesLoading = ref(false)
@@ -64,6 +73,9 @@ const sendMode = ref('quick')
 const message = ref('')
 const templateId = ref(null)
 const messagesPanel = ref(null)
+const messagePage = ref(1)
+const messageHasMore = ref(false)
+const messageTotal = ref(0)
 const groupForm = reactive({ name: '', externalId: '', inviteLink: '', description: '' })
 const bulkForm = reactive({
   recipientMode: 'contacts',
@@ -75,6 +87,7 @@ const bulkForm = reactive({
 })
 let chatRefreshTimer
 let queueRefreshTimer
+let conversationMessagesRequest = 0
 let issueRequestSequence = 0
 let deliveryRequestSequence = 0
 
@@ -145,8 +158,8 @@ const lastDispatchFailed = computed(() => dispatchDeliveryCount(lastDispatch.val
 const lastDispatchHasIssues = computed(() => lastDispatchSkipped.value + lastDispatchFailed.value > 0)
 
 const selectedRealtimeMessages = computed(() => realtimeMessages.value
-  .filter((item) => String(item.conversationId) === String(recordId(selected.value)))
-  .slice(-50))
+  .filter((item) => String(item.conversationId) === String(recordId(selected.value))))
+const hasOlderMessages = computed(() => messageHasMore.value)
 
 const botUsername = computed(() => bot.value?.username ? `@${bot.value.username}` : '')
 const selectedTelegramIdentity = computed(() => contactIdentity(selectedContactRecord.value || {}, 'telegram') || {
@@ -307,28 +320,144 @@ async function loadData() {
   }
 }
 
-async function loadConversationMessages(chat) {
-  if (!recordId(chat)) return
-  loadingMessages.value = true
-  try {
-    const items = await fetchAll(`/conversations/${recordId(chat)}/messages`, { params: { limit: 100 }, preferredKey: 'items' })
-    realtimeMessages.value = items.reverse().map((item) => ({
-      ...item,
-      text: item.body || '',
-      sentAt: item.sentAt || item.createdAt,
-    }))
-    await http.patch(`/conversations/${recordId(chat)}/read`).catch(() => undefined)
-    scrollMessagesToBottom()
-  } catch (error) {
-    realtimeMessages.value = []
-    $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível carregar o histórico da conversa.') })
-  } finally {
-    loadingMessages.value = false
+function telegramMessageTimestamp(item = {}) {
+  const parsed = new Date(item.sentAt || item.createdAt || 0).getTime()
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function mergeTelegramMessages(items = []) {
+  const merged = new Map()
+  for (const item of items) {
+    const key = realtimeMessageKey(item)
+    const previous = merged.get(key)
+    merged.set(key, previous ? { ...previous, ...item } : item)
+  }
+  return [...merged.values()].sort((left, right) => telegramMessageTimestamp(left) - telegramMessageTimestamp(right))
+}
+
+function normalizeTelegramConversationMessage(item = {}, conversationId = '') {
+  return {
+    ...item,
+    conversationId: item.conversationId || conversationId,
+    text: item.body || item.text || '',
+    sentAt: item.sentAt || item.createdAt,
   }
 }
 
+function resetTelegramMessagePagination() {
+  messagePage.value = 1
+  messageHasMore.value = false
+  messageTotal.value = 0
+  loadingOlderMessages.value = false
+}
+
+function updateTelegramMessagePagination(payload = {}, page = 1, receivedCount = 0) {
+  messagePage.value = Math.max(1, Number(payload.page || page) || page)
+  messageTotal.value = Math.max(0, Number(payload.total) || 0)
+  messageHasMore.value = chatPageHasMore(
+    payload,
+    messagePage.value,
+    receivedCount,
+    CHAT_MESSAGE_PAGE_SIZE,
+  )
+}
+
+async function loadConversationMessages(chat) {
+  const conversationId = recordId(chat)
+  if (!conversationId) return
+  const requestId = ++conversationMessagesRequest
+  loadingMessages.value = true
+  realtimeMessages.value = []
+  resetTelegramMessagePagination()
+  try {
+    const payload = unwrap(await http.get(`/conversations/${conversationId}/messages`, {
+      params: { page: 1, limit: CHAT_MESSAGE_PAGE_SIZE },
+    })) || {}
+    if (requestId !== conversationMessagesRequest || String(recordId(selected.value)) !== String(conversationId)) return
+    const items = asList(payload, 'items')
+    const mergedMessages = mergeTelegramMessages([
+      ...realtimeMessages.value,
+      ...items.map((item) => normalizeTelegramConversationMessage(item, conversationId)),
+    ])
+    updateTelegramMessagePagination(payload, 1, items.length)
+    const initialWindow = chatWindowAfterRealtime(mergedMessages, {
+      loadedPages: messagePage.value,
+      total: Math.max(messageTotal.value, mergedMessages.length),
+      pageSize: CHAT_MESSAGE_PAGE_SIZE,
+    })
+    realtimeMessages.value = initialWindow.items
+    messageTotal.value = initialWindow.total
+    messageHasMore.value = messageHasMore.value || initialWindow.hasMore
+    await http.patch(`/conversations/${conversationId}/read`).catch(() => undefined)
+    loadingMessages.value = false
+    scrollMessagesToBottom()
+  } catch (error) {
+    if (requestId !== conversationMessagesRequest || String(recordId(selected.value)) !== String(conversationId)) return
+    $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível carregar o histórico da conversa.') })
+  } finally {
+    if (requestId === conversationMessagesRequest && String(recordId(selected.value)) === String(conversationId)) {
+      loadingMessages.value = false
+    }
+  }
+}
+
+async function loadOlderTelegramMessages() {
+  const conversationId = recordId(selected.value)
+  const element = messagesPanel.value
+  if (!conversationId || !element || !shouldLoadOlderChatMessages({
+    scrollTop: element.scrollTop,
+    hasMore: hasOlderMessages.value,
+    loading: loadingOlderMessages.value || loadingMessages.value,
+  })) return
+
+  const activeRequest = conversationMessagesRequest
+  const requestedPage = messagePage.value + 1
+  const previousScrollTop = element.scrollTop
+  const previousScrollHeight = element.scrollHeight
+  loadingOlderMessages.value = true
+  try {
+    const payload = unwrap(await http.get(`/conversations/${conversationId}/messages`, {
+      params: { page: requestedPage, limit: CHAT_MESSAGE_PAGE_SIZE },
+    })) || {}
+    if (activeRequest !== conversationMessagesRequest || String(recordId(selected.value)) !== String(conversationId)) return
+    const items = asList(payload, 'items')
+    realtimeMessages.value = mergeTelegramMessages([
+      ...realtimeMessages.value,
+      ...items.map((item) => normalizeTelegramConversationMessage(item, conversationId)),
+    ])
+    updateTelegramMessagePagination(payload, requestedPage, items.length)
+    await nextTick()
+    element.scrollTop = preservedChatScrollTop({
+      previousScrollTop,
+      previousScrollHeight,
+      nextScrollHeight: element.scrollHeight,
+    })
+  } catch (error) {
+    if (activeRequest === conversationMessagesRequest && String(recordId(selected.value)) === String(conversationId)) {
+      $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível carregar mensagens anteriores.') })
+    }
+  } finally {
+    if (activeRequest === conversationMessagesRequest && String(recordId(selected.value)) === String(conversationId)) {
+      loadingOlderMessages.value = false
+    }
+  }
+}
+
+function onTelegramMessagesScroll(event) {
+  const element = event?.currentTarget || messagesPanel.value
+  if (!element || !shouldLoadOlderChatMessages({
+    scrollTop: element.scrollTop,
+    hasMore: hasOlderMessages.value,
+    loading: loadingOlderMessages.value || loadingMessages.value,
+  })) return
+  void loadOlderTelegramMessages()
+}
+
 async function selectChat(chat) {
+  conversationMessagesRequest += 1
   selected.value = chat
+  realtimeMessages.value = []
+  resetTelegramMessagePagination()
   loadSelectedContact(chat)
   await loadConversationMessages(chat)
 }
@@ -360,7 +489,9 @@ async function sync() {
 }
 
 function realtimeMessageKey(item) {
-  return `${item.chatId}:${item.id}`
+  const conversationId = item?.conversationId || item?.chatId || item?.contactId || 'chat'
+  const messageId = item?.providerMessageId || item?.messageId || item?.id || `${telegramMessageTimestamp(item)}:${item?.text || item?.body || ''}`
+  return `${conversationId}:${messageId}`
 }
 
 function scrollMessagesToBottom() {
@@ -373,8 +504,19 @@ function addRealtimeMessage(item) {
   if (!item) return
   const key = realtimeMessageKey(item)
   if (realtimeMessages.value.some((current) => realtimeMessageKey(current) === key)) return
-  realtimeMessages.value = [...realtimeMessages.value, item].slice(-200)
-  scrollMessagesToBottom()
+  const followLatest = !messagesPanel.value || isNearChatBottom(messagesPanel.value)
+  const nextWindow = chatWindowAfterRealtime(
+    mergeTelegramMessages([...realtimeMessages.value, item]),
+    {
+      loadedPages: messagePage.value,
+      total: messageTotal.value + 1,
+      pageSize: CHAT_MESSAGE_PAGE_SIZE,
+    },
+  )
+  realtimeMessages.value = nextWindow.items
+  messageTotal.value = nextWindow.total
+  messageHasMore.value = nextWindow.hasMore
+  if (followLatest) scrollMessagesToBottom()
 }
 
 function scheduleChatRefresh() {
@@ -421,7 +563,9 @@ function removeConversation(chat) {
   }).onOk(async () => {
     try {
       await http.delete(`/conversations/${recordId(chat)}`)
+      conversationMessagesRequest += 1
       realtimeMessages.value = []
+      resetTelegramMessagePagination()
       selected.value = null
       selectedContactRecord.value = null
       await loadChats()
@@ -445,8 +589,10 @@ async function onConversationRemoved(payload = {}) {
   if (!removedId || !chats.value.some((chat) => String(recordId(chat)) === removedId)) return
   const selectedWasRemoved = String(recordId(selected.value)) === removedId
   if (selectedWasRemoved) {
+    conversationMessagesRequest += 1
     selected.value = null
     realtimeMessages.value = []
+    resetTelegramMessagePagination()
   }
   await loadChats({ background: true })
   if (selectedWasRemoved && selected.value) await loadConversationMessages(selected.value)
@@ -948,21 +1094,35 @@ onBeforeUnmount(() => {
                   <q-btn flat color="info" no-caps icon="manage_accounts" :label="selected.contactId ? 'Editar contato' : 'Salvar como contato'" @click="openContact" />
                   <q-btn flat color="negative" no-caps icon="delete_sweep" label="Remover conversa" @click="removeConversation(selected)" />
                 </div>
-                <div ref="messagesPanel" class="telegram-message-stream" aria-live="polite">
+                <div
+                  ref="messagesPanel"
+                  class="telegram-message-stream"
+                  aria-live="polite"
+                  @scroll.passive="onTelegramMessagesScroll"
+                >
                   <div v-if="loadingMessages" class="message-session-note">Carregando histórico…</div>
-                  <div v-else-if="!selectedRealtimeMessages.length" class="message-session-note">
-                    Nenhuma mensagem armazenada nesta conversa.
-                  </div>
-                  <div
-                    v-for="item in selectedRealtimeMessages"
-                    :key="realtimeMessageKey(item)"
-                    :class="['telegram-message-row', { 'telegram-message-row--mine': item.direction === 'outbound' }]"
-                  >
-                    <div class="telegram-message-bubble">
-                      <div>{{ item.text }}</div>
-                      <span>{{ formatMessageTime(item.sentAt) }}</span>
+                  <template v-else>
+                    <div v-if="loadingOlderMessages" class="telegram-history-progress" aria-live="polite">
+                      <q-spinner-dots color="info" size="22px" />
+                      <span>Carregando mensagens anteriores…</span>
                     </div>
-                  </div>
+                    <div v-else-if="hasOlderMessages" class="telegram-history-progress telegram-history-progress--hint">
+                      Role até o topo para carregar mais 10 mensagens
+                    </div>
+                    <div v-if="!selectedRealtimeMessages.length" class="message-session-note">
+                      Nenhuma mensagem armazenada nesta conversa.
+                    </div>
+                    <div
+                      v-for="item in selectedRealtimeMessages"
+                      :key="realtimeMessageKey(item)"
+                      :class="['telegram-message-row', { 'telegram-message-row--mine': item.direction === 'outbound' }]"
+                    >
+                      <div class="telegram-message-bubble">
+                        <div>{{ item.text }}</div>
+                        <span>{{ formatMessageTime(item.sentAt) }}</span>
+                      </div>
+                    </div>
+                  </template>
                 </div>
                 <q-banner v-if="!chatIsAuthorized(selected)" rounded class="bg-blue-1 text-blue-10 q-mt-lg">
                   A conversa pode ser acompanhada, mas o envio fica disponível somente depois que o contato autorizar notificações pelo bot.
@@ -1106,9 +1266,25 @@ onBeforeUnmount(() => {
   margin-top: 10px;
   padding: 14px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid rgba(3, 21, 21, 0.07);
   border-radius: 15px;
   background: rgba(241, 249, 247, 0.66);
+}
+
+.telegram-history-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 28px;
+  margin-bottom: 6px;
+  color: #42758d;
+  font-size: 0.7rem;
+}
+
+.telegram-history-progress--hint {
+  opacity: 0.72;
 }
 
 .message-session-note {

@@ -437,11 +437,21 @@ import { asList, errorMessage, fetchAll, http, unwrap } from '../services/http.j
 import { connectSocket, getSocket } from '../services/socket.js'
 import { newIdempotencyKey } from '../services/bulk-notifications.js'
 import { playAppSound } from '../services/sounds.js'
+import {
+  CHAT_MESSAGE_PAGE_SIZE,
+  chatWindowAfterRealtime,
+  chatPageHasMore,
+  isNearChatBottom,
+  preservedChatScrollTop,
+  retainLoadedChatWindow,
+  shouldLoadOlderChatMessages,
+} from '../services/chat-pagination.js'
 
 const props = defineProps({ embedded: { type: Boolean, default: false } })
 const $q = useQuasar()
 const loading = ref(false)
 const loadingMessages = ref(false)
+const loadingOlderMessages = ref(false)
 const sending = ref(false)
 const requestingConsent = ref(false)
 const backingUp = ref(false)
@@ -458,6 +468,9 @@ const templates = ref([])
 const historyNote = ref('')
 const now = ref(Date.now())
 const messagesPanel = ref(null)
+const messagePage = ref(1)
+const messageHasMore = ref(false)
+const messageTotal = ref(0)
 const contactDialog = ref(false)
 const contactForDialog = ref(null)
 let clockTimer = null
@@ -509,6 +522,7 @@ const selectedTemplatePreview = computed(() => cloudChatTemplatePreview(
   selectedTemplate.value || {},
   selectedTemplateVariables.value,
 ))
+const hasOlderMessages = computed(() => messageHasMore.value)
 
 watch(templateId, () => {
   templateValues.value = {}
@@ -656,19 +670,42 @@ async function markConversationRead(id) {
   }
 }
 
+function resetMessagePagination() {
+  messagePage.value = 1
+  messageHasMore.value = false
+  messageTotal.value = 0
+  loadingOlderMessages.value = false
+}
+
+function updateMessagePagination(payload = {}, page = 1, receivedCount = 0) {
+  messagePage.value = Math.max(1, Number(payload.page || page) || page)
+  messageTotal.value = Math.max(0, Number(payload.total) || 0)
+  messageHasMore.value = chatPageHasMore(
+    payload,
+    messagePage.value,
+    receivedCount,
+    CHAT_MESSAGE_PAGE_SIZE,
+  )
+}
+
 async function loadConversation(conversation, { background = false, markRead = false } = {}) {
   const id = cloudConversationId(conversation)
   if (!id) return
   const requestId = ++messagesRequest
+  const messageElement = messagesPanel.value?.$el || messagesPanel.value
+  const followLatest = !background || !messageElement || isNearChatBottom(messageElement)
   if (!background) {
     messages.value = []
     historyNote.value = ''
     loadingMessages.value = true
+    resetMessagePagination()
   }
   try {
     const [detailResult, messagesResult] = await Promise.all([
       http.get(`/whatsapp-cloud/conversations/${id}`).catch(() => null),
-      http.get(`/whatsapp-cloud/conversations/${id}/messages`, { params: { page: 1, limit: 100 } }),
+      http.get(`/whatsapp-cloud/conversations/${id}/messages`, {
+        params: { page: 1, limit: CHAT_MESSAGE_PAGE_SIZE },
+      }),
     ])
     if (requestId !== messagesRequest || cloudConversationId(selected.value) !== id) return
     const detail = detailResult ? unwrap(detailResult) : null
@@ -676,14 +713,32 @@ async function loadConversation(conversation, { background = false, markRead = f
       selected.value = { ...selected.value, ...detail }
       conversations.value = upsertCloudConversation(conversations.value, selected.value)
     }
-    const loadedMessages = asList(unwrap(messagesResult), 'items')
-    messages.value = mergeCloudMessages([...messages.value, ...loadedMessages])
+    const messagePayload = unwrap(messagesResult) || {}
+    const loadedMessages = asList(messagePayload, 'items')
+    const previousCount = messages.value.length
+    const mergedMessages = mergeCloudMessages([...messages.value, ...loadedMessages])
+    const receivedNewerMessage = mergedMessages.length > previousCount
+    messages.value = background
+      ? retainLoadedChatWindow(mergedMessages, messagePage.value, CHAT_MESSAGE_PAGE_SIZE)
+      : mergedMessages
+    if (background && messagePage.value > 1) {
+      messageTotal.value = Math.max(0, Number(messagePayload.total) || messageTotal.value)
+      messageHasMore.value = chatPageHasMore(
+        { ...messagePayload, page: messagePage.value },
+        messagePage.value,
+        loadedMessages.length,
+        CHAT_MESSAGE_PAGE_SIZE,
+      )
+    } else {
+      updateMessagePagination(messagePayload, 1, loadedMessages.length)
+    }
     if (!messages.value.length) historyNote.value = 'Ainda não há mensagens armazenadas nesta conversa.'
     else historyNote.value = ''
     if (markRead && Number(selected.value?.unreadCount || conversation.unreadCount || 0) > 0) {
       await markConversationRead(id).catch(() => undefined)
     }
-    await scrollToBottom()
+    if (!background) loadingMessages.value = false
+    if (!background || (receivedNewerMessage && followLatest)) await scrollToBottom()
   } catch (error) {
     if (requestId !== messagesRequest || cloudConversationId(selected.value) !== id) return
     if (!background) {
@@ -695,6 +750,55 @@ async function loadConversation(conversation, { background = false, markRead = f
       loadingMessages.value = false
     }
   }
+}
+
+async function loadOlderMessages() {
+  const id = cloudConversationId(selected.value)
+  const element = messagesPanel.value?.$el || messagesPanel.value
+  if (!id || !element || !shouldLoadOlderChatMessages({
+    scrollTop: element.scrollTop,
+    hasMore: hasOlderMessages.value,
+    loading: loadingOlderMessages.value || loadingMessages.value,
+  })) return
+
+  const activeRequest = messagesRequest
+  const requestedPage = messagePage.value + 1
+  const previousScrollTop = element.scrollTop
+  const previousScrollHeight = element.scrollHeight
+  loadingOlderMessages.value = true
+  try {
+    const payload = unwrap(await http.get(`/whatsapp-cloud/conversations/${id}/messages`, {
+      params: { page: requestedPage, limit: CHAT_MESSAGE_PAGE_SIZE },
+    })) || {}
+    if (activeRequest !== messagesRequest || cloudConversationId(selected.value) !== id) return
+    const olderMessages = asList(payload, 'items')
+    messages.value = mergeCloudMessages([...messages.value, ...olderMessages])
+    updateMessagePagination(payload, requestedPage, olderMessages.length)
+    await nextTick()
+    element.scrollTop = preservedChatScrollTop({
+      previousScrollTop,
+      previousScrollHeight,
+      nextScrollHeight: element.scrollHeight,
+    })
+  } catch (error) {
+    if (activeRequest === messagesRequest && cloudConversationId(selected.value) === id) {
+      $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível carregar mensagens anteriores.') })
+    }
+  } finally {
+    if (activeRequest === messagesRequest && cloudConversationId(selected.value) === id) {
+      loadingOlderMessages.value = false
+    }
+  }
+}
+
+function onMessagesScroll(event) {
+  const element = event?.currentTarget || messagesPanel.value?.$el || messagesPanel.value
+  if (!element || !shouldLoadOlderChatMessages({
+    scrollTop: element.scrollTop,
+    hasMore: hasOlderMessages.value,
+    loading: loadingOlderMessages.value || loadingMessages.value,
+  })) return
+  void loadOlderMessages()
 }
 
 async function selectConversation(conversation) {
@@ -709,6 +813,7 @@ async function selectConversation(conversation) {
     sendMode.value = 'quick'
     draft.value = ''
     templateId.value = null
+    resetMessagePagination()
   }
   await loadConversation(selected.value, {
     background: !switching && messages.value.length > 0,
@@ -721,6 +826,7 @@ function closeConversation() {
   loadingMessages.value = false
   selected.value = null
   messages.value = []
+  resetMessagePagination()
   historyNote.value = ''
   sendMode.value = 'quick'
   draft.value = ''
@@ -904,6 +1010,7 @@ function clearMessages() {
       await http.delete(`/whatsapp-cloud/conversations/${id}/messages`)
       if (cloudConversationId(selected.value) === id) {
         messages.value = []
+        resetMessagePagination()
         historyNote.value = 'O histórico armazenado desta conversa foi removido.'
       }
       await loadConversations({ background: true })
@@ -938,9 +1045,24 @@ function onRealtimeMessage(payload = {}) {
   if (!id || !payload.message) return
   if (payload.message.direction === 'inbound') void playAppSound('whatsapp')
   if (cloudConversationId(selected.value) !== id) return
-  messages.value = mergeCloudMessages([...messages.value, payload.message])
+  const element = messagesPanel.value?.$el || messagesPanel.value
+  const followLatest = !element || isNearChatBottom(element)
+  const previousCount = messages.value.length
+  const mergedMessages = mergeCloudMessages([...messages.value, payload.message])
+  if (mergedMessages.length > previousCount) {
+    const nextWindow = chatWindowAfterRealtime(mergedMessages, {
+      loadedPages: messagePage.value,
+      total: messageTotal.value + 1,
+      pageSize: CHAT_MESSAGE_PAGE_SIZE,
+    })
+    messages.value = nextWindow.items
+    messageTotal.value = nextWindow.total
+    messageHasMore.value = nextWindow.hasMore
+  } else {
+    messages.value = retainLoadedChatWindow(mergedMessages, messagePage.value, CHAT_MESSAGE_PAGE_SIZE)
+  }
   historyNote.value = ''
-  void scrollToBottom()
+  if (followLatest) void scrollToBottom()
   if (payload.message.direction === 'inbound' && Number(conversation.unreadCount || 0) > 0) {
     void markConversationRead(id).catch(() => undefined)
   }
@@ -1196,11 +1318,18 @@ onBeforeUnmount(() => {
             </div>
           </q-banner>
 
-          <div ref="messagesPanel" class="message-stream">
+          <div ref="messagesPanel" class="message-stream" @scroll.passive="onMessagesScroll">
             <div v-if="loadingMessages" class="q-pa-lg">
               <q-skeleton v-for="item in 5" :key="item" type="text" />
             </div>
             <template v-else>
+              <div v-if="loadingOlderMessages" class="chat-history-progress" aria-live="polite">
+                <q-spinner-dots color="primary" size="22px" />
+                <span>Carregando mensagens anteriores…</span>
+              </div>
+              <div v-else-if="hasOlderMessages" class="chat-history-progress chat-history-progress--hint">
+                Role até o topo para carregar mais 10 mensagens
+              </div>
               <div v-if="!messages.length" class="day-note">
                 {{ historyNote || 'Nenhuma mensagem armazenada' }}
               </div>
@@ -1612,6 +1741,22 @@ onBeforeUnmount(() => {
   max-height: 490px;
   padding: 24px;
   overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-history-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 30px;
+  margin-bottom: 8px;
+  color: #52726d;
+  font-size: 0.7rem;
+}
+
+.chat-history-progress--hint {
+  opacity: 0.72;
 }
 
 .day-note {

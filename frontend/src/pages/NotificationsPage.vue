@@ -1318,11 +1318,6 @@ onMounted(loadData)
             </div>
           </div>
         </q-card>
-        <q-card flat class="glass-card section-card safety-card">
-          <q-icon name="verified_user" size="34px" color="primary" />
-          <h2 class="section-title q-mt-md">Envio responsável</h2>
-          <p class="section-copy">A exclusão ou revogação de um contato deve prevalecer até sobre tarefas já enfileiradas.</p>
-        </q-card>
       </aside>
     </section>
 
@@ -1333,7 +1328,6 @@ onMounted(loadData)
             <span class="meta-blocks-icon"><q-icon name="policy" /></span>
             <div>
               <h2 class="section-title">Bloqueios temporários da Meta</h2>
-              <p class="section-copy">Falhas externas agrupadas pelo motivo. Erros internos do Notify Flow não aparecem aqui.</p>
             </div>
           </div>
         </div>
@@ -1975,10 +1969,6 @@ onMounted(loadData)
   padding: 10px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.52);
-}
-
-.safety-card {
-  background: linear-gradient(145deg, rgba(255,255,255,.8), rgba(130,248,230,.15));
 }
 
 .meta-blocks-card {

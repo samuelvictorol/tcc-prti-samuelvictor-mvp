@@ -1,9 +1,19 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import ContextHelp from '../components/ContextHelp.vue'
 import PageHeader from '../components/PageHeader.vue'
+import { telegramPermissionCommandFromSettings } from '../services/telegram.js'
+import { whatsappPermissionCommandFromSettings } from '../services/whatsapp.js'
+import { useAppStore } from '../stores/app.js'
 
+const app = useAppStore()
 const profileImageAvailable = ref(true)
+const whatsappPermissionCommand = computed(() => whatsappPermissionCommandFromSettings(app.settings))
+const telegramPermissionCommand = computed(() => telegramPermissionCommandFromSettings(app.settings))
+
+onMounted(() => {
+  if (!Object.keys(app.settings || {}).length) app.fetchSettings().catch(() => undefined)
+})
 
 const gettingStarted = [
   {
@@ -102,6 +112,93 @@ const channelGuides = [
   },
 ]
 
+const automaticCommandGuides = computed(() => [
+  {
+    channel: 'WhatsApp Cloud',
+    accent: 'whatsapp',
+    icon: 'cloud_sync',
+    intro: 'A API oficial processa comandos somente em mensagens recebidas pelo webhook.',
+    commands: [
+      {
+        code: whatsappPermissionCommand.value,
+        dynamic: true,
+        title: 'Autorizar notificações',
+        text: 'Concede consentimento ao WhatsApp oficial e registra a origem. Convites podem acrescentar um marcador seguro automaticamente.',
+      },
+      {
+        code: '/login',
+        title: 'Entrar no Meu perfil',
+        text: 'Gera um link pessoal, de uso único, com validade de até sete dias. O marcador assinado usado pela tela de login é montado pelo sistema.',
+      },
+      {
+        code: '/meu-perfil',
+        title: 'Consultar os próprios dados',
+        text: 'Responde com o resumo do cadastro, permissões atuais e o acesso seguro disponível para edição.',
+      },
+      {
+        code: '/cancelar',
+        title: 'Cancelar alteração de email',
+        text: 'Interrompe uma verificação de email em andamento sem modificar o cadastro.',
+      },
+    ],
+    automation: 'Ao receber um único email válido, o sistema envia um código de seis dígitos para esse endereço. O código é confirmado no próprio chat; depois da validação, o email é salvo e autorizado.',
+  },
+  {
+    channel: 'Telegram',
+    accent: 'telegram',
+    icon: 'send_to_mobile',
+    intro: 'Os comandos funcionam no chat privado com o bot e também nos deep-links gerados pelos convites.',
+    commands: [
+      {
+        code: telegramPermissionCommand.value,
+        dynamic: true,
+        title: 'Autorizar e abrir o onboarding',
+        text: 'Autoriza o Telegram e abre o menu para compartilhar o telefone, acessar o Meu perfil e consultar a ajuda.',
+      },
+      {
+        code: whatsappPermissionCommand.value,
+        dynamic: true,
+        title: 'Usar o mesmo convite do WhatsApp',
+        text: 'O comando dinâmico do WhatsApp também é reconhecido pelo bot e abre o mesmo onboarding do Telegram.',
+      },
+      {
+        code: '/start <payload>',
+        title: 'Abrir por convite',
+        text: 'É criado automaticamente pelo link do bot. Somente um payload reconhecido concede consentimento; /start sozinho apenas inicia a conversa.',
+      },
+      {
+        code: '/login',
+        title: 'Entrar no Meu perfil',
+        text: 'Entrega um link temporário e de uso único para acessar os próprios dados sem informar código no site.',
+      },
+      {
+        code: '/meu-perfil',
+        title: 'Consultar os próprios dados',
+        text: 'Mostra o resumo do cadastro e das permissões, com link seguro para editar o perfil.',
+      },
+      {
+        code: '/cancelar',
+        title: 'Cancelar alteração de email',
+        text: 'Cancela a verificação de email que estiver em andamento.',
+      },
+      {
+        code: '/stop',
+        title: 'Revogar o Telegram',
+        text: 'Marca a permissão do canal como revogada. Iniciar o bot novamente não reativa campanhas sem um novo comando de autorização.',
+      },
+    ],
+    automation: 'Um email válido inicia a verificação automática; o código de seis dígitos volta pelo chat. O botão nativo de compartilhar contato vincula o telefone somente quando ele pertence ao próprio usuário.',
+  },
+  {
+    channel: 'Email / Gmail',
+    accent: 'email',
+    icon: 'mail',
+    intro: 'O Gmail é um canal de entrega: ele não interpreta comandos enviados por resposta ao email.',
+    commands: [],
+    automation: 'Envia links seguros do Meu perfil, códigos de verificação e notificações rápidas ou por template. A confirmação de um código recebido por email acontece no chat do WhatsApp ou Telegram que iniciou a alteração.',
+  },
+])
+
 const operationalSignals = [
   { icon: 'schedule_send', title: 'Fila', text: 'Organiza cada entrega individualmente.' },
   { icon: 'replay', title: 'Tentativas', text: 'Falhas transitórias podem ser tentadas novamente.' },
@@ -198,6 +295,63 @@ const operationalSignals = [
           <q-btn outline color="primary" no-caps label="Abrir canal" :to="channel.to" />
         </q-card>
       </div>
+    </section>
+
+    <section class="help-section" aria-labelledby="commands-title">
+      <div class="help-section__heading">
+        <div>
+          <span>Atendimento automático</span>
+          <h2 id="commands-title">Comandos e respostas por canal</h2>
+        </div>
+        <p>Os comandos dinâmicos exibem o valor configurado agora. Links de convite acrescentam seus marcadores seguros sem exigir digitação manual.</p>
+      </div>
+
+      <div class="command-help-grid">
+        <q-card
+          v-for="guide in automaticCommandGuides"
+          :key="guide.channel"
+          flat
+          :class="['glass-card', 'command-help', `command-help--${guide.accent}`]"
+        >
+          <header class="command-help__heading">
+            <span><q-icon :name="guide.icon" /></span>
+            <div>
+              <h3>{{ guide.channel }}</h3>
+              <p>{{ guide.intro }}</p>
+            </div>
+          </header>
+
+          <div v-if="guide.commands.length" class="command-help__list">
+            <article v-for="command in guide.commands" :key="`${guide.channel}:${command.code}:${command.title}`">
+              <div class="command-help__command">
+                <code>{{ command.code }}</code>
+                <q-badge v-if="command.dynamic" outline color="primary" label="Dinâmico" />
+              </div>
+              <strong>{{ command.title }}</strong>
+              <p>{{ command.text }}</p>
+            </article>
+          </div>
+          <div v-else class="command-help__empty">
+            <q-icon name="mark_email_read" />
+            <div>
+              <strong>Sem comandos de chat</strong>
+              <small>Respostas ao email não são interpretadas como comandos pelo Notify Flow.</small>
+            </div>
+          </div>
+
+          <q-banner rounded class="command-help__automation">
+            <template #avatar><q-icon name="auto_awesome" /></template>
+            <strong>Automação relacionada</strong>
+            <span>{{ guide.automation }}</span>
+          </q-banner>
+        </q-card>
+      </div>
+
+      <q-banner rounded class="command-help-note">
+        <template #avatar><q-icon name="security" color="primary" /></template>
+        <strong>Use os links gerados pelo Notify Flow.</strong>
+        Marcadores de convite e de login são assinados pelo sistema e não devem ser montados manualmente.
+      </q-banner>
     </section>
 
     <section class="help-section" aria-labelledby="profile-title">
@@ -516,6 +670,172 @@ const operationalSignals = [
   align-self: flex-start;
 }
 
+.command-help-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.command-help {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 18px;
+  padding: clamp(18px, 2.5vw, 26px);
+  border-top: 4px solid #35bca4;
+}
+
+.command-help--whatsapp {
+  border-top-color: #1fae74;
+}
+
+.command-help--telegram {
+  border-top-color: #249bd7;
+}
+
+.command-help--email {
+  grid-column: 1 / -1;
+  border-top-color: #d96a57;
+}
+
+.command-help__heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+}
+
+.command-help__heading > span {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  border-radius: 15px;
+  background: rgba(53, 188, 164, 0.13);
+  color: #137d6c;
+  font-size: 23px;
+  place-items: center;
+}
+
+.command-help--telegram .command-help__heading > span {
+  background: rgba(36, 155, 215, 0.12);
+  color: #167caf;
+}
+
+.command-help--email .command-help__heading > span {
+  background: rgba(217, 106, 87, 0.12);
+  color: #b74e3c;
+}
+
+.command-help__heading h3 {
+  margin: 1px 0 4px;
+  color: var(--ink);
+  font-size: 1.08rem;
+}
+
+.command-help__heading p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.command-help__list {
+  display: grid;
+  gap: 10px;
+}
+
+.command-help__list article {
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid rgba(3, 62, 55, 0.08);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.command-help__command {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-bottom: 7px;
+}
+
+.command-help__command code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: #0f7464;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.command-help__list strong,
+.command-help__list p {
+  display: block;
+}
+
+.command-help__list strong {
+  color: #1d4640;
+  font-size: 0.84rem;
+}
+
+.command-help__list p {
+  margin: 3px 0 0;
+  color: #5a716d;
+  font-size: 0.76rem;
+  line-height: 1.48;
+}
+
+.command-help__empty {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px dashed rgba(217, 106, 87, 0.3);
+  border-radius: 15px;
+  color: #b74e3c;
+}
+
+.command-help__empty .q-icon {
+  font-size: 25px;
+}
+
+.command-help__empty strong,
+.command-help__empty small {
+  display: block;
+}
+
+.command-help__empty small {
+  margin-top: 2px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.command-help__automation {
+  margin-top: auto;
+  border: 1px solid rgba(53, 188, 164, 0.17);
+  background: rgba(130, 248, 230, 0.09);
+  color: #49635f;
+  font-size: 0.77rem;
+  line-height: 1.45;
+}
+
+.command-help__automation strong,
+.command-help__automation span {
+  display: block;
+}
+
+.command-help__automation strong {
+  margin-bottom: 3px;
+  color: #173f39;
+}
+
+.command-help-note {
+  border: 1px solid rgba(53, 188, 164, 0.2);
+  background: rgba(130, 248, 230, 0.11);
+  color: #49635f;
+}
+
 .profile-help {
   display: grid;
   grid-template-columns: minmax(320px, 0.95fr) minmax(0, 1.05fr);
@@ -677,6 +997,14 @@ const operationalSignals = [
 
   .channel-help-grid {
     grid-template-columns: 1fr;
+  }
+
+  .command-help-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .command-help--email {
+    grid-column: auto;
   }
 
   .channel-help {
