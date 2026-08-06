@@ -17,11 +17,13 @@ import {
   mergeWebhookEventVersions,
   mergeWebhookEvents,
   normalizeDeliveryIssuePage,
+  normalizeCloudTab,
   normalizeWebhookEventPage,
   sanitizeWebhookPayload,
   selectedGroupEligibility,
   templateParameterDefinitions,
   templateVariableValuesForSend,
+  unsupportedWebhookMessageInfo,
   whatsappConnectionIdentity,
   whatsappDispatchTemplatePreview,
   webhookEventFieldOptionsFrom,
@@ -287,6 +289,20 @@ describe('disparo oficial WhatsApp Cloud', () => {
 })
 
 describe('histórico persistente de webhooks da Meta', () => {
+  it('mantém a navegação na ordem disparos, conversas e webhook', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/WhatsappCloudPage.vue', import.meta.url)), 'utf8')
+    const broadcastTab = source.indexOf('<q-tab name="broadcast"')
+    const conversationsTab = source.indexOf('<q-tab name="conversations"')
+    const webhookTab = source.indexOf('<q-tab name="webhook"')
+
+    expect(broadcastTab).toBeGreaterThan(-1)
+    expect(conversationsTab).toBeGreaterThan(broadcastTab)
+    expect(webhookTab).toBeGreaterThan(conversationsTab)
+    expect(source).toContain('v-show="activeTab === \'webhook\'"')
+    expect(normalizeCloudTab('webhook')).toBe('webhook')
+    expect(normalizeCloudTab('invalida')).toBe('conversations')
+  })
+
   it('normaliza a resposta paginada do endpoint dedicado', () => {
     const result = normalizeWebhookEventPage({
       items: [{ id: 'event-1', field: 'messages' }],
@@ -414,5 +430,39 @@ describe('histórico persistente de webhooks da Meta', () => {
       access_token: '[PROTEGIDO]',
       nested: { appSecret: '[PROTEGIDO]', phone_number_id: '123' },
     })
+  })
+
+  it('explica claramente mensagens unsupported META_131051 sem descartar o payload', () => {
+    const event = {
+      field: 'messages',
+      eventType: 'message',
+      eventTypes: ['message:unsupported'],
+      summary: { messageCount: 1, messageTypes: ['unsupported'] },
+      payload: {
+        entry: [{
+          changes: [{
+            value: {
+              messages: [{
+                type: 'unsupported',
+                unsupported: { type: 'unknown', raw_type: 'unknown' },
+                errors: [{
+                  code: 131051,
+                  message: 'Message type unknown',
+                  error_data: { details: 'Message type is currently not supported.' },
+                }],
+              }],
+            },
+          }],
+        }],
+      },
+    }
+
+    expect(unsupportedWebhookMessageInfo(event)).toEqual({
+      unsupported: true,
+      code: 131051,
+      details: 'Message type is currently not supported.',
+    })
+    expect(webhookEventPresentation(event).eventTypeLabel).toBe('Mensagem não suportada')
+    expect(webhookEventSummary(event)).toBe('Mensagem não compatível com a API oficial (META_131051)')
   })
 })

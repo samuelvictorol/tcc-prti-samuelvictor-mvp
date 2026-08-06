@@ -55,6 +55,40 @@ function fictitiousMessagePayload() {
   };
 }
 
+function unsupportedMessagePayload() {
+  return {
+    object: 'whatsapp_business_account',
+    entry: [{
+      id: '1111222233334444',
+      changes: [{
+        field: 'messages',
+        value: {
+          messaging_product: 'whatsapp',
+          metadata: {
+            display_phone_number: '551131234567',
+            phone_number_id: '9999000011112222'
+          },
+          contacts: [{ wa_id: '441234567890', user_id: 'GB.1234567890123456' }],
+          messages: [{
+            from: '441234567890',
+            from_user_id: 'GB.1234567890123456',
+            id: 'wamid.unsupported-fictitious',
+            timestamp: '1786036548',
+            errors: [{
+              code: 131051,
+              title: 'Message type unknown',
+              message: 'Message type unknown',
+              error_data: { details: 'Message type is currently not supported.' }
+            }],
+            type: 'unsupported',
+            unsupported: { type: 'unknown', raw_type: 'unknown' }
+          }]
+        }
+      }]
+    }]
+  };
+}
+
 test('modelo protege o payload por padrao e possui indices de deduplicacao e consulta', () => {
   assert.equal(WhatsappCloudWebhookEvent.schema.path('payloadEncrypted').options.select, false);
   const indexes = WhatsappCloudWebhookEvent.schema.indexes();
@@ -100,6 +134,30 @@ test('extrai messages, campos Meta arbitrarios e formato sample sem perder class
   assert.equal(sampleEvent.source, 'sample');
   assert.equal(sampleEvent.field, 'calls');
   assert.equal(sampleEvent.value.event, 'connect');
+});
+
+test('classifica mensagem unsupported 131051 e expoe apenas diagnostico seguro no resumo', () => {
+  const event = webhookEventsManager.extractEvents(unsupportedMessagePayload())[0];
+  assert.equal(event.kind, 'message');
+  assert.equal(webhookEventsManager.eventTypeFor(event.field, event.value), 'unsupported_message');
+  assert.deepEqual(
+    webhookEventsManager.eventTypesFor(event.field, event.value),
+    ['message:unsupported', 'error', 'error:131051']
+  );
+
+  const summary = webhookEventsManager.buildSummary(event.field, event.value);
+  assert.equal(summary.messageCount, 1);
+  assert.equal(summary.unsupportedCount, 1);
+  assert.equal(summary.errorCount, 1);
+  assert.deepEqual(summary.unsupportedTypes, ['unknown']);
+  assert.deepEqual(summary.providerErrors, [{
+    code: 131051,
+    title: 'Message type unknown',
+    message: 'Message type unknown',
+    details: 'Message type is currently not supported.'
+  }]);
+  assert.match(summary.description, /mensagem nao suportada/);
+  assert.doesNotMatch(JSON.stringify(summary), /441234567890|GB\.1234567890123456|wamid\.unsupported/);
 });
 
 test('dedupe semantico ignora ordem e envelope, mas preserva transicoes de status', () => {
@@ -488,6 +546,66 @@ test('webhook assinado persiste campo Meta desconhecido e o marca como processad
   assert.equal(result.persistedEvents, 1);
   assert.equal(result.receivedMessages, 0);
   assert.equal(result.receivedStatuses, 0);
+});
+
+test('webhook unsupported 131051 e preservado e processado sem criar contato ou conversa', async (context) => {
+  restoreAfter(context, [
+    [settingsManager, 'getValue'],
+    [contactsManager, 'findByChannelAddress'],
+    [contactsManager, 'findByChannelOrPhone'],
+    [contactsManager, 'upsertFromChannel'],
+    [conversationsManager, 'recordInbound'],
+    [webhookEventsManager, 'persistPayload'],
+    [webhookEventsManager, 'claimEvent'],
+    [webhookEventsManager, 'markProcessed'],
+    [webhookEventsManager, 'markFailed']
+  ]);
+  const appSecret = 'segredo-ficticio-da-meta';
+  settingsManager.getValue = async (key) => key === 'WHATSAPP_CLOUD_APP_SECRET'
+    ? appSecret
+    : null;
+  let contactOperations = 0;
+  contactsManager.findByChannelAddress = async () => { contactOperations += 1; return null; };
+  contactsManager.findByChannelOrPhone = async () => { contactOperations += 1; return null; };
+  contactsManager.upsertFromChannel = async () => { contactOperations += 1; return null; };
+  let conversationWrites = 0;
+  conversationsManager.recordInbound = async () => { conversationWrites += 1; return null; };
+
+  const payload = unsupportedMessagePayload();
+  const descriptor = webhookEventsManager.extractEvents(payload)[0];
+  webhookEventsManager.persistPayload = async () => ({
+    events: [{
+      id: '507f1f77bcf86cd799439077',
+      field: 'messages',
+      eventType: 'unsupported_message',
+      summary: webhookEventsManager.buildSummary(descriptor.field, descriptor.value),
+      processingStatus: 'received',
+      created: true
+    }],
+    workItems: [{ eventId: '507f1f77bcf86cd799439077', descriptor }],
+    createdCount: 1,
+    duplicateCount: 0
+  });
+  webhookEventsManager.claimEvent = async (id) => ({ id, token: 'claim-unsupported' });
+  let processedClaim;
+  webhookEventsManager.markProcessed = async (claim) => { processedClaim = claim; return true; };
+  webhookEventsManager.markFailed = async () => assert.fail('evento unsupported nao deve falhar');
+
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const signature = 'sha256=' + crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex');
+  const result = await whatsappCloudManager.webhook(payload, rawBody, signature);
+
+  assert.equal(result.received, true);
+  assert.equal(result.unsupportedMessages, 1);
+  assert.equal(result.receivedMessages, 0);
+  assert.equal(result.createdContacts, 0);
+  assert.equal(result.updatedContacts, 0);
+  assert.equal(contactOperations, 0);
+  assert.equal(conversationWrites, 0);
+  assert.deepEqual(processedClaim, {
+    id: '507f1f77bcf86cd799439077',
+    token: 'claim-unsupported'
+  });
 });
 
 test('webhook identifica desafio ativo e pede redacao do codigo antes da persistencia', async (context) => {

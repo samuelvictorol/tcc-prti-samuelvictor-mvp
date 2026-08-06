@@ -63,16 +63,52 @@ function cleanText(value, max = 160) {
   return normalized ? normalized.slice(0, max) : null;
 }
 
+function safeDiagnosticText(value, max) {
+  const normalized = cleanText(value, max);
+  if (!normalized) return null;
+  return normalized
+    .replace(/(bearer\s+)[^\s,;]+/gi, '$1[REDACTED]')
+    .replace(/((?:token|secret|password|authorization|cookie)\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]');
+}
+
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function isUnsupportedMessage(message = {}) {
+  return String(message.type || '').toLowerCase() === 'unsupported'
+    || asArray(message.errors).some((error) => Number(error?.code) === 131051);
+}
+
+function safeProviderError(error = {}) {
+  const rawCode = error.code;
+  const code = Number.isFinite(Number(rawCode))
+    ? Number(rawCode)
+    : cleanText(rawCode, 100);
+  const details = cleanText(error.error_data?.details ?? error.details, 500);
+  return {
+    code: code ?? null,
+    title: safeDiagnosticText(error.title, 160),
+    message: safeDiagnosticText(error.message, 300),
+    details: safeDiagnosticText(details, 500)
+  };
+}
+
+function providerErrorsFor(value = {}) {
+  return [
+    ...asArray(value.errors),
+    ...asArray(value.messages).flatMap((message) => asArray(message?.errors))
+  ].map(safeProviderError);
+}
+
 function eventTypeFor(field, value = {}) {
   if (field !== 'messages') return field || 'unknown';
-  const hasMessages = Array.isArray(value.messages) && value.messages.length > 0;
+  const messages = asArray(value.messages);
+  const hasMessages = messages.length > 0;
   const hasStatuses = Array.isArray(value.statuses) && value.statuses.length > 0;
   const hasErrors = Array.isArray(value.errors) && value.errors.length > 0;
   if (hasMessages && hasStatuses) return 'message_and_status';
+  if (hasMessages && messages.every(isUnsupportedMessage)) return 'unsupported_message';
   if (hasMessages) return 'message';
   if (hasStatuses) return 'status';
   if (hasErrors) return 'error';
@@ -84,7 +120,10 @@ function eventTypesFor(field, value = {}) {
   const types = unique([
     ...asArray(value.messages).map((message) => 'message:' + cleanText(message?.type || 'unknown', 40)),
     ...asArray(value.statuses).map((status) => 'status:' + cleanText(status?.status || 'unknown', 40)),
-    ...asArray(value.errors).map(() => 'error')
+    ...providerErrorsFor(value).flatMap((error) => [
+      'error',
+      'error:' + cleanText(error.code || 'unknown', 40)
+    ])
   ]);
   return types.length ? types : ['messages'];
 }
@@ -115,14 +154,21 @@ function buildSummary(field, value = {}) {
   const messages = Array.isArray(value.messages) ? value.messages : [];
   const statuses = Array.isArray(value.statuses) ? value.statuses : [];
   const contacts = Array.isArray(value.contacts) ? value.contacts : [];
-  const errors = Array.isArray(value.errors) ? value.errors : [];
+  const providerErrors = providerErrorsFor(value);
+  const unsupportedMessages = messages.filter(isUnsupportedMessage);
   const messageTypes = unique(messages.map((message) => cleanText(message?.type || 'unknown', 40)));
   const statusTypes = unique(statuses.map((status) => cleanText(status?.status || 'unknown', 40)));
   const parts = [];
-  if (messages.length) parts.push(messages.length + (messages.length === 1 ? ' mensagem' : ' mensagens'));
+  if (unsupportedMessages.length) {
+    parts.push(unsupportedMessages.length + (unsupportedMessages.length === 1
+      ? ' mensagem nao suportada'
+      : ' mensagens nao suportadas'));
+  } else if (messages.length) {
+    parts.push(messages.length + (messages.length === 1 ? ' mensagem' : ' mensagens'));
+  }
   if (statuses.length) parts.push(statuses.length + (statuses.length === 1 ? ' status' : ' status'));
   if (contacts.length) parts.push(contacts.length + (contacts.length === 1 ? ' contato' : ' contatos'));
-  if (errors.length) parts.push(errors.length + (errors.length === 1 ? ' erro informado' : ' erros informados'));
+  if (providerErrors.length) parts.push(providerErrors.length + (providerErrors.length === 1 ? ' erro informado' : ' erros informados'));
   if (!parts.length) parts.push('Atualização recebida da Meta');
   return {
     title: 'WhatsApp Cloud · ' + humanizeField(field),
@@ -130,7 +176,12 @@ function buildSummary(field, value = {}) {
     messageCount: messages.length,
     statusCount: statuses.length,
     contactCount: contacts.length,
-    errorCount: errors.length,
+    errorCount: providerErrors.length,
+    unsupportedCount: unsupportedMessages.length,
+    unsupportedTypes: unique(unsupportedMessages.map((message) => (
+      cleanText(message?.unsupported?.raw_type ?? message?.unsupported?.type ?? 'unknown', 80)
+    ))),
+    providerErrors,
     messageTypes,
     statusTypes
   };

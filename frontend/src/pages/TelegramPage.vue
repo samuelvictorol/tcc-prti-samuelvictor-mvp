@@ -1,3 +1,70 @@
+<script>
+export function telegramWebhookActivityKey(record = {}) {
+  if (record.source === 'webhook') {
+    return `webhook:${record.updateId || record.id || record.at || JSON.stringify(record)}`
+  }
+  return `log:${record.id || record._id || `${record.action || 'event'}:${record.createdAt || ''}`}`
+}
+
+export function telegramWebhookActivityPresentation(record = {}) {
+  if (record.source === 'webhook') {
+    const kinds = {
+      message: { label: 'Atualização recebida', icon: 'webhook', status: 'recebido', color: 'info' },
+      menu_callback: { label: 'Interação com menu', icon: 'touch_app', status: 'processado', color: 'positive' },
+    }
+    return kinds[record.kind] || {
+      label: 'Evento do webhook',
+      icon: 'webhook',
+      status: 'recebido',
+      color: 'info',
+    }
+  }
+
+  const actions = {
+    'message.received': { label: 'Mensagem recebida', icon: 'mark_chat_unread' },
+    'group.seen': { label: 'Mensagem em grupo', icon: 'groups' },
+    'menu.navigate': { label: 'Navegação no menu', icon: 'account_tree' },
+    'notification.completed': { label: 'Disparo concluído', icon: 'task_alt' },
+    'notification.failed': { label: 'Falha no disparo', icon: 'error_outline' },
+  }
+  const presentation = actions[record.action] || {
+    label: String(record.action || 'Evento do Telegram').replaceAll('.', ' · '),
+    icon: String(record.action || '').startsWith('notification.') ? 'outbox' : 'receipt_long',
+  }
+  return {
+    ...presentation,
+    status: record.context?.status || record.status || (record.level === 'error' ? 'falhou' : 'registrado'),
+    color: record.level === 'error' ? 'negative' : record.level === 'warn' ? 'warning' : 'positive',
+  }
+}
+
+export function normalizeTelegramWebhookActivity(logs = [], events = []) {
+  const rows = [
+    ...events.map((event) => ({
+      ...event,
+      id: telegramWebhookActivityKey({ ...event, source: 'webhook' }),
+      source: 'webhook',
+      action: `webhook.${event.kind || 'event'}`,
+      createdAt: event.at || event.createdAt,
+      message: event.kind === 'menu_callback'
+        ? 'O Telegram entregou uma interação de menu ao Notify Flow.'
+        : 'O Telegram entregou uma atualização ao Notify Flow.',
+      raw: event,
+    })),
+    ...logs.map((log) => ({
+      ...log,
+      id: telegramWebhookActivityKey({ ...log, source: 'log' }),
+      source: 'log',
+      raw: log,
+    })),
+  ]
+  const unique = new Map(rows.map((row) => [telegramWebhookActivityKey(row), row]))
+  return [...unique.values()].sort((left, right) => (
+    new Date(right.createdAt || right.at || 0).getTime() - new Date(left.createdAt || left.at || 0).getTime()
+  ))
+}
+</script>
+
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
@@ -54,6 +121,10 @@ const contactGroups = ref([])
 const contacts = ref([])
 const templates = ref([])
 const queueLogs = ref([])
+const webhookEvents = ref([])
+const webhookLoading = ref(false)
+const webhookDetailsDialog = ref(false)
+const selectedWebhookActivity = ref(null)
 const deliveryIssues = ref([])
 const dispatchDeliveries = ref([])
 const lastDispatch = ref(null)
@@ -98,12 +169,13 @@ const groupColumns = [
   { name: 'actions', label: '', field: 'actions', align: 'right' },
 ]
 
-const queueLogColumns = [
+const webhookActivityColumns = [
   { name: 'createdAt', label: 'Quando', field: 'createdAt', align: 'left' },
   { name: 'event', label: 'Evento', field: 'action', align: 'left' },
   { name: 'contact', label: 'Contato', field: 'contact', align: 'left' },
   { name: 'status', label: 'Status', field: 'status', align: 'left' },
   { name: 'message', label: 'Resumo', field: 'message', align: 'left' },
+  { name: 'actions', label: '', field: 'actions', align: 'right' },
 ]
 
 const issueColumns = [
@@ -156,6 +228,13 @@ const lastDispatchQueued = computed(() => dispatchDeliveryCount(lastDispatch.val
 const lastDispatchSkipped = computed(() => dispatchDeliveryCount(lastDispatch.value, 'skipped'))
 const lastDispatchFailed = computed(() => dispatchDeliveryCount(lastDispatch.value, 'failed'))
 const lastDispatchHasIssues = computed(() => lastDispatchSkipped.value + lastDispatchFailed.value > 0)
+const webhookActivity = computed(() => normalizeTelegramWebhookActivity(queueLogs.value, webhookEvents.value))
+const selectedWebhookPresentation = computed(() => telegramWebhookActivityPresentation(selectedWebhookActivity.value || {}))
+const selectedWebhookJson = computed(() => JSON.stringify(
+  selectedWebhookActivity.value?.raw || selectedWebhookActivity.value || {},
+  null,
+  2,
+))
 
 const selectedRealtimeMessages = computed(() => realtimeMessages.value
   .filter((item) => String(item.conversationId) === String(recordId(selected.value))))
@@ -238,6 +317,20 @@ async function loadBotIdentity() {
     bot.value = telegramBotIdentity(status)
   } catch {
     bot.value = null
+  }
+}
+
+async function loadTelegramLogs({ showError = true } = {}) {
+  webhookLoading.value = true
+  try {
+    const response = await http.get('/logs', { params: { channel: 'telegram', limit: 50 } })
+    queueLogs.value = asList(unwrap(response), 'logs')
+  } catch (error) {
+    if (showError) {
+      $q.notify({ type: 'warning', message: errorMessage(error, 'Não foi possível carregar os eventos do Telegram.') })
+    }
+  } finally {
+    webhookLoading.value = false
   }
 }
 
@@ -584,6 +677,20 @@ function onChatsChanged() {
   scheduleChatRefresh()
 }
 
+function onTelegramWebhook(event = {}) {
+  const normalized = {
+    ...event,
+    source: 'webhook',
+    at: event.at || new Date().toISOString(),
+  }
+  const incomingKey = telegramWebhookActivityKey(normalized)
+  webhookEvents.value = [
+    normalized,
+    ...webhookEvents.value.filter((item) => telegramWebhookActivityKey({ ...item, source: 'webhook' }) !== incomingKey),
+  ].slice(0, 50)
+  scheduleChatRefresh()
+}
+
 async function onConversationRemoved(payload = {}) {
   const removedId = String(payload.conversationId || '')
   if (!removedId || !chats.value.some((chat) => String(recordId(chat)) === removedId)) return
@@ -599,13 +706,38 @@ async function onConversationRemoved(payload = {}) {
 }
 
 function onQueueLog(log) {
-  if (log?.channel !== 'telegram' || !String(log.action || '').startsWith('notification.')) return
-  queueLogs.value = [log, ...queueLogs.value.filter((item) => String(recordId(item)) !== String(recordId(log)))].slice(0, 50)
+  if (log?.channel !== 'telegram') return
+  const incomingKey = telegramWebhookActivityKey({ ...log, source: 'log' })
+  queueLogs.value = [
+    log,
+    ...queueLogs.value.filter((item) => telegramWebhookActivityKey({ ...item, source: 'log' }) !== incomingKey),
+  ].slice(0, 50)
   clearTimeout(queueRefreshTimer)
   queueRefreshTimer = setTimeout(async () => {
-    await loadData()
+    await loadTelegramLogs({ showError: false })
     if (lastDispatchId.value) await loadDispatchDeliveries({ showError: false })
   }, 450)
+}
+
+async function refreshWebhookActivity() {
+  await Promise.all([
+    loadTelegramLogs(),
+    loadBotIdentity(),
+  ])
+}
+
+function openWebhookDetails(activity) {
+  selectedWebhookActivity.value = activity
+  webhookDetailsDialog.value = true
+}
+
+async function copyWebhookDetails() {
+  try {
+    await navigator.clipboard.writeText(selectedWebhookJson.value)
+    $q.notify({ type: 'positive', message: 'Detalhes copiados.' })
+  } catch {
+    $q.notify({ type: 'warning', message: 'Não foi possível copiar os detalhes.' })
+  }
 }
 
 function onSocketConnected() {
@@ -628,12 +760,8 @@ function formatDate(value) {
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
 }
 
-function queueLogStatus(log = {}) {
-  return log.context?.status || log.status || (log.level === 'error' ? 'failed' : log.action?.split('.').at(-1)) || 'info'
-}
-
 function queueLogContact(log = {}) {
-  const contactId = String(log.context?.contactId || '')
+  const contactId = String(log.context?.contactId || log.contactId || '')
   const contact = contacts.value.find((item) => String(recordId(item)) === contactId)
   return contact?.displayName || contact?.name || log.context?.contactName || contactId || 'Lote'
 }
@@ -829,7 +957,7 @@ onMounted(() => {
   socket.on('disconnect', onSocketDisconnected)
   socket.on('system:ready', onSocketConnected)
   socket.on('telegram:chats', onChatsChanged)
-  socket.on('telegram:webhook', onChatsChanged)
+  socket.on('telegram:webhook', onTelegramWebhook)
   socket.on('conversation:message', onConversationMessage)
   socket.on('conversation:removed', onConversationRemoved)
   socket.on('log:created', onQueueLog)
@@ -846,7 +974,7 @@ onBeforeUnmount(() => {
   socket.off('disconnect', onSocketDisconnected)
   socket.off('system:ready', onSocketConnected)
   socket.off('telegram:chats', onChatsChanged)
-  socket.off('telegram:webhook', onChatsChanged)
+  socket.off('telegram:webhook', onTelegramWebhook)
   socket.off('conversation:message', onConversationMessage)
   socket.off('conversation:removed', onConversationRemoved)
   socket.off('log:created', onQueueLog)
@@ -892,6 +1020,7 @@ onBeforeUnmount(() => {
         <q-tab name="broadcast" icon="campaign" label="Disparos em massa" />
         <q-tab name="chats" icon="forum" label="Conversas" />
         <q-tab name="groups" icon="groups" label="Grupos vinculados" />
+        <q-tab name="webhook" icon="webhook" label="Webhook" />
       </q-tabs>
 
       <q-tab-panels v-model="tab" animated class="transparent">
@@ -1029,17 +1158,6 @@ onBeforeUnmount(() => {
             </q-table>
           </section>
 
-          <section class="bulk-log-section q-mt-xl">
-            <div class="section-title-row"><div><h3 class="section-title">Logs da fila</h3><p class="section-copy">Sucessos, falhas e tentativas recentes de cada entrega.</p></div></div>
-            <EmptyState v-if="!loading && !queueLogs.length" icon="receipt_long" title="Nenhum disparo processado" description="Os próximos eventos da fila aparecerão aqui." />
-            <q-table v-else flat :rows="queueLogs" :columns="queueLogColumns" row-key="id" :loading="loading" :rows-per-page-options="[10, 25, 50]">
-              <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt) }}</q-td></template>
-              <template #body-cell-event="props"><q-td :props="props"><strong>{{ props.row.action || 'notification.event' }}</strong></q-td></template>
-              <template #body-cell-contact="props"><q-td :props="props">{{ queueLogContact(props.row) }}</q-td></template>
-              <template #body-cell-status="props"><q-td :props="props"><q-badge :color="deliveryStatusColor(queueLogStatus(props.row))" :label="queueLogStatus(props.row)" /></q-td></template>
-              <template #body-cell-message="props"><q-td :props="props" class="truncate" style="max-width: 420px">{{ props.row.message || props.row.summary || 'Evento processado' }}</q-td></template>
-            </q-table>
-          </section>
         </q-tab-panel>
 
         <q-tab-panel name="chats" class="q-pa-none">
@@ -1147,8 +1265,118 @@ onBeforeUnmount(() => {
             <template #body-cell-actions="props"><q-td :props="props"><q-btn flat round dense color="info" icon="send" aria-label="Enviar ao grupo" @click="openGroupSend(props.row)" /><q-btn flat round dense color="info" icon="edit" aria-label="Editar grupo" @click="openGroup(props.row)" /><q-btn flat round dense color="negative" icon="delete" aria-label="Remover grupo" @click="removeGroup(props.row)" /></q-td></template>
           </q-table>
         </q-tab-panel>
+
+        <q-tab-panel name="webhook" class="q-pa-none">
+          <section class="telegram-webhook-panel">
+            <div class="telegram-webhook-header">
+              <div class="telegram-webhook-heading">
+                <q-avatar rounded color="blue-1" text-color="info" icon="webhook" size="48px" />
+                <div>
+                  <h2 class="section-title">Webhook do Telegram</h2>
+                  <p class="section-copy">Atualizações entregues pelo Telegram e registros persistentes do processamento, sem expor credenciais do bot.</p>
+                </div>
+              </div>
+              <div class="telegram-webhook-actions">
+                <q-badge
+                  rounded
+                  :color="liveConnected ? 'positive' : 'grey-6'"
+                  :label="liveConnected ? 'Tempo real conectado' : 'Reconectando tempo real'"
+                />
+                <q-btn
+                  outline
+                  color="info"
+                  no-caps
+                  icon="refresh"
+                  label="Atualizar eventos"
+                  :loading="webhookLoading"
+                  @click="refreshWebhookActivity"
+                />
+              </div>
+            </div>
+
+            <div class="telegram-webhook-stats q-mt-lg">
+              <div><q-icon name="webhook" color="info" /><strong>{{ webhookEvents.length }}</strong><span>eventos desta sessão</span></div>
+              <div><q-icon name="history" color="info" /><strong>{{ queueLogs.length }}</strong><span>registros persistentes</span></div>
+              <div><q-icon name="smart_toy" color="info" /><strong>{{ bot?.displayName || 'Telegram Bot' }}</strong><span>{{ botUsername || 'identidade conectada' }}</span></div>
+            </div>
+
+            <EmptyState
+              v-if="!webhookLoading && !webhookActivity.length"
+              icon="webhook"
+              title="Nenhum evento do Telegram registrado"
+              description="Mensagens, comandos, interações de menu e processamentos aparecerão aqui quando o webhook receber uma atualização."
+            />
+            <q-table
+              v-else
+              flat
+              wrap-cells
+              :rows="webhookActivity"
+              :columns="webhookActivityColumns"
+              row-key="id"
+              :loading="webhookLoading"
+              :rows-per-page-options="[10, 25, 50]"
+              class="telegram-webhook-table q-mt-lg"
+            >
+              <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt || props.row.at) }}</q-td></template>
+              <template #body-cell-event="props">
+                <q-td :props="props">
+                  <div class="telegram-webhook-event">
+                    <q-avatar rounded size="36px" color="blue-1" text-color="info" :icon="telegramWebhookActivityPresentation(props.row).icon" />
+                    <div><strong>{{ telegramWebhookActivityPresentation(props.row).label }}</strong><span>{{ props.row.source === 'webhook' ? 'Tempo real' : 'Histórico' }}</span></div>
+                  </div>
+                </q-td>
+              </template>
+              <template #body-cell-contact="props"><q-td :props="props">{{ queueLogContact(props.row) }}</q-td></template>
+              <template #body-cell-status="props">
+                <q-td :props="props">
+                  <q-badge
+                    :color="telegramWebhookActivityPresentation(props.row).color"
+                    :label="telegramWebhookActivityPresentation(props.row).status"
+                  />
+                </q-td>
+              </template>
+              <template #body-cell-message="props"><q-td :props="props" class="telegram-webhook-summary">{{ props.row.message || props.row.summary || 'Evento processado' }}</q-td></template>
+              <template #body-cell-actions="props"><q-td :props="props"><q-btn flat round dense color="info" icon="data_object" aria-label="Ver detalhes do evento" @click="openWebhookDetails(props.row)"><q-tooltip>Ver detalhes</q-tooltip></q-btn></q-td></template>
+            </q-table>
+          </section>
+        </q-tab-panel>
       </q-tab-panels>
     </q-card>
+
+    <q-dialog v-model="webhookDetailsDialog" :maximized="$q.screen.lt.sm">
+      <q-card class="telegram-webhook-dialog">
+        <q-card-section class="telegram-webhook-dialog__header">
+          <div class="telegram-webhook-event">
+            <q-avatar rounded color="blue-1" text-color="info" :icon="selectedWebhookPresentation.icon" />
+            <div>
+              <span class="text-caption text-muted">Detalhes do evento</span>
+              <strong>{{ selectedWebhookPresentation.label }}</strong>
+            </div>
+          </div>
+          <q-space />
+          <q-btn v-close-popup flat round dense icon="close" aria-label="Fechar detalhes" />
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="telegram-webhook-dialog__body">
+          <div class="telegram-webhook-detail-grid">
+            <div><span>Recebido em</span><strong>{{ formatDate(selectedWebhookActivity?.createdAt || selectedWebhookActivity?.at) }}</strong></div>
+            <div><span>Origem</span><strong>{{ selectedWebhookActivity?.source === 'webhook' ? 'Webhook em tempo real' : 'Log persistente' }}</strong></div>
+            <div><span>Status</span><q-badge :color="selectedWebhookPresentation.color" :label="selectedWebhookPresentation.status" /></div>
+            <div><span>Contato</span><strong>{{ queueLogContact(selectedWebhookActivity || {}) }}</strong></div>
+          </div>
+          <section class="telegram-webhook-json q-mt-lg">
+            <div class="row items-center">
+              <div><strong>Dados seguros do evento</strong><p>Credenciais e segredos não são incluídos neste histórico.</p></div>
+              <q-space />
+              <q-btn flat color="info" no-caps icon="content_copy" label="Copiar" @click="copyWebhookDetails" />
+            </div>
+            <pre>{{ selectedWebhookJson }}</pre>
+          </section>
+        </q-card-section>
+        <q-separator />
+        <q-card-actions align="right" class="q-pa-md"><q-btn v-close-popup color="info" unelevated no-caps label="Fechar" /></q-card-actions>
+      </q-card>
+    </q-dialog>
 
     <q-dialog v-model="groupDialog" persistent :maximized="$q.screen.lt.sm">
       <q-card class="dialog-card dialog-card--medium">
@@ -1368,6 +1596,150 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+.telegram-webhook-panel {
+  min-width: 0;
+}
+
+.telegram-webhook-header,
+.telegram-webhook-heading,
+.telegram-webhook-actions,
+.telegram-webhook-event,
+.telegram-webhook-dialog__header {
+  display: flex;
+  align-items: center;
+}
+
+.telegram-webhook-header {
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.telegram-webhook-heading,
+.telegram-webhook-event {
+  min-width: 0;
+  gap: 12px;
+}
+
+.telegram-webhook-heading > div,
+.telegram-webhook-event > div {
+  display: grid;
+  min-width: 0;
+}
+
+.telegram-webhook-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.telegram-webhook-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.telegram-webhook-stats > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 9px;
+  padding: 14px;
+  border: 1px solid rgba(34, 158, 217, 0.16);
+  border-radius: 14px;
+  background: rgba(239, 248, 253, 0.76);
+}
+
+.telegram-webhook-stats .q-icon {
+  grid-row: span 2;
+  align-self: center;
+  font-size: 24px;
+}
+
+.telegram-webhook-stats strong,
+.telegram-webhook-stats span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.telegram-webhook-stats span,
+.telegram-webhook-event span {
+  color: #657976;
+  font-size: 0.7rem;
+}
+
+.telegram-webhook-table {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(3, 21, 21, 0.07);
+  border-radius: 14px;
+}
+
+.telegram-webhook-summary {
+  max-width: 360px;
+  white-space: normal;
+}
+
+.telegram-webhook-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-width: 760px;
+  max-height: min(820px, calc(100vh - 32px));
+  overflow: hidden;
+  border-radius: 22px;
+}
+
+.telegram-webhook-dialog__header {
+  padding: 18px 20px;
+}
+
+.telegram-webhook-dialog__body {
+  max-height: calc(100vh - 190px);
+  padding: 20px;
+  overflow: auto;
+}
+
+.telegram-webhook-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.telegram-webhook-detail-grid > div {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(239, 248, 253, 0.82);
+}
+
+.telegram-webhook-detail-grid span,
+.telegram-webhook-json p {
+  margin: 0;
+  color: #657976;
+  font-size: 0.7rem;
+}
+
+.telegram-webhook-json {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(34, 158, 217, 0.16);
+  border-radius: 14px;
+  background: #f7fbfd;
+}
+
+.telegram-webhook-json pre {
+  max-height: 360px;
+  margin: 12px 0 0;
+  padding: 14px;
+  overflow: auto;
+  border-radius: 10px;
+  background: #102a33;
+  color: #d8f4ff;
+  font: 0.75rem/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .bulk-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(250px, 0.65fr);
@@ -1531,6 +1903,32 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 780px) {
+  .telegram-webhook-header,
+  .telegram-webhook-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .telegram-webhook-actions .q-btn {
+    width: 100%;
+  }
+
+  .telegram-webhook-stats,
+  .telegram-webhook-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .telegram-webhook-table {
+    overflow-x: auto;
+  }
+
+  .telegram-webhook-dialog {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+  }
+
   .telegram-workspace {
     grid-template-columns: 1fr;
   }

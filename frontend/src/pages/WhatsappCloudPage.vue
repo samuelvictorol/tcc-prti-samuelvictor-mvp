@@ -360,6 +360,44 @@ const WEBHOOK_EVENT_TYPE_LABELS = Object.freeze({
   unknown: 'Tipo não identificado',
 })
 
+const CLOUD_TAB_NAMES = Object.freeze(['broadcast', 'conversations', 'webhook'])
+
+export function normalizeCloudTab(value) {
+  const tab = String(value || '').trim().toLowerCase()
+  return CLOUD_TAB_NAMES.includes(tab) ? tab : 'conversations'
+}
+
+function webhookPayloadMessages(payload = {}) {
+  return (Array.isArray(payload?.entry) ? payload.entry : [])
+    .flatMap((entry) => Array.isArray(entry?.changes) ? entry.changes : [])
+    .flatMap((change) => Array.isArray(change?.value?.messages) ? change.value.messages : [])
+}
+
+export function unsupportedWebhookMessageInfo(event = {}) {
+  const summaryTypes = Array.isArray(event?.summary?.messageTypes) ? event.summary.messageTypes : []
+  const eventTypes = Array.isArray(event?.eventTypes) ? event.eventTypes : []
+  const messages = webhookPayloadMessages(event?.payload)
+  const unsupportedMessage = messages.find((message) => (
+    String(message?.type || '').toLowerCase() === 'unsupported'
+    || String(message?.unsupported?.type || '').toLowerCase() === 'unknown'
+    || (Array.isArray(message?.errors) && message.errors.some((error) => Number(error?.code) === 131051))
+  ))
+  const error = unsupportedMessage?.errors?.find((item) => Number(item?.code) === 131051)
+    || unsupportedMessage?.errors?.[0]
+  const unsupported = Boolean(
+    unsupportedMessage
+    || summaryTypes.some((type) => String(type).toLowerCase() === 'unsupported')
+    || eventTypes.some((type) => String(type).toLowerCase() === 'message:unsupported')
+  )
+
+  if (!unsupported) return { unsupported: false, code: null, details: '' }
+  return {
+    unsupported: true,
+    code: Number(error?.code) || 131051,
+    details: String(error?.error_data?.details || error?.message || 'Este tipo de mensagem não é disponibilizado pela API oficial do WhatsApp.'),
+  }
+}
+
 export function humanizeWebhookKey(value) {
   const text = String(value || '').trim()
   if (!text) return 'Evento do webhook'
@@ -383,13 +421,16 @@ export function webhookEventPresentation(event = {}) {
     color: 'grey-7',
     icon: 'help',
   }
+  const unsupported = unsupportedWebhookMessageInfo(event)
   return {
     field,
     fieldLabel: configured.label,
     fieldIcon: configured.icon,
     fieldColor: configured.color,
-    eventTypeLabel: WEBHOOK_EVENT_TYPE_LABELS[event.eventType]
-      || humanizeWebhookKey(event.eventType || event.eventTypes?.[0] || field),
+    eventTypeLabel: unsupported.unsupported
+      ? 'Mensagem não suportada'
+      : WEBHOOK_EVENT_TYPE_LABELS[event.eventType]
+        || humanizeWebhookKey(event.eventType || event.eventTypes?.[0] || field),
     processingStatus,
     statusLabel: status.label,
     statusColor: status.color,
@@ -411,6 +452,10 @@ export function webhookEventFieldOptionsFrom(events = []) {
 }
 
 export function webhookEventSummary(event = {}) {
+  const unsupported = unsupportedWebhookMessageInfo(event)
+  if (unsupported.unsupported) {
+    return `Mensagem não compatível com a API oficial (META_${unsupported.code})`
+  }
   const summary = event.summary || {}
   const description = summary.description || summary.title
   if (description) return String(description)
@@ -534,7 +579,7 @@ import {
 const $q = useQuasar()
 const route = useRoute()
 const router = useRouter()
-const activeTab = ref(route.query.tab === 'broadcast' ? 'broadcast' : 'conversations')
+const activeTab = ref(normalizeCloudTab(route.query.tab))
 const loading = ref(false)
 const sending = ref(false)
 const contactDialog = ref(false)
@@ -576,7 +621,7 @@ function selectCloudTab(value) {
 }
 
 watch(() => route.query.tab, (value) => {
-  activeTab.value = value === 'broadcast' ? 'broadcast' : 'conversations'
+  activeTab.value = normalizeCloudTab(value)
 })
 
 const form = reactive({
@@ -1094,7 +1139,9 @@ onBeforeUnmount(() => {
       title="WhatsApp oficial"
       :description="activeTab === 'conversations'
         ? 'Atenda conversas iniciadas pelos clientes e acompanhe a janela oficial de 24 horas em tempo real.'
-        : 'Envie templates aprovados pela fila, acompanhe elegibilidade e gerencie contatos recebidos pelo webhook.'"
+        : activeTab === 'webhook'
+          ? 'Consulte todos os eventos recebidos da Meta, com classificação, processamento e payload protegido.'
+          : 'Envie templates aprovados pela fila, acompanhe elegibilidade e gerencie contatos recebidos pelo webhook.'"
       icon="cloud_sync"
     >
       <template #actions>
@@ -1102,6 +1149,16 @@ onBeforeUnmount(() => {
           <q-btn outline color="positive" no-caps icon="person_add" label="Cadastrar contato" @click="openCreateContact" />
           <q-btn outline color="positive" no-caps icon="refresh" label="Atualizar" :loading="loading" @click="loadData" />
         </template>
+        <q-btn
+          v-else-if="activeTab === 'webhook'"
+          outline
+          color="positive"
+          no-caps
+          icon="refresh"
+          label="Atualizar eventos"
+          :loading="webhookEventsLoading"
+          @click="loadWebhookEvents()"
+        />
       </template>
     </PageHeader>
 
@@ -1151,12 +1208,14 @@ onBeforeUnmount(() => {
       >
         <q-tab name="broadcast" icon="campaign" label="Disparos em massa" />
         <q-tab name="conversations" icon="forum" label="Conversas" />
+        <q-tab name="webhook" icon="webhook" label="Webhook" />
       </q-tabs>
     </q-card>
 
     <ChatsPage v-if="activeTab === 'conversations'" embedded />
 
-    <div v-show="activeTab === 'broadcast'" class="cloud-broadcast-panel">
+    <div v-show="activeTab !== 'conversations'" class="cloud-broadcast-panel">
+    <div v-show="activeTab === 'broadcast'" class="cloud-broadcast-content">
     <div class="cloud-help-strip q-mb-lg" aria-label="Ajuda das políticas do WhatsApp oficial">
       <span><q-icon name="verified" /> Regras do canal</span>
       <ContextHelp
@@ -1418,7 +1477,9 @@ onBeforeUnmount(() => {
       </q-table>
     </q-card>
 
-    <q-card flat class="glass-card section-card">
+    </div>
+
+    <q-card v-show="activeTab === 'webhook'" flat class="glass-card section-card webhook-events-panel">
       <div class="toolbar-row webhook-events-heading">
         <div class="row items-center q-gutter-xs">
           <h2 class="section-title">Eventos do webhook</h2>
@@ -1430,6 +1491,12 @@ onBeforeUnmount(() => {
         </div>
         <q-badge outline color="primary" :label="`${webhookEventPagination.rowsNumber} evento(s)`" />
       </div>
+
+      <q-banner rounded class="webhook-history-banner q-mt-md">
+        <template #avatar><q-icon name="history" color="positive" /></template>
+        <strong>Histórico persistente da Meta.</strong>
+        Mensagens, status, alertas e tipos não compatíveis permanecem registrados para consulta e auditoria.
+      </q-banner>
 
       <div class="webhook-event-filters q-mt-md">
         <q-select
@@ -1524,13 +1591,21 @@ onBeforeUnmount(() => {
         </template>
         <template #body-cell-eventType="props">
           <q-td :props="props">
-            <strong>{{ webhookEventPresentation(props.row).eventTypeLabel }}</strong>
+            <q-badge
+              v-if="unsupportedWebhookMessageInfo(props.row).unsupported"
+              outline
+              color="warning"
+              text-color="dark"
+              icon="report_problem"
+              :label="`Não suportada · META_${unsupportedWebhookMessageInfo(props.row).code}`"
+            />
+            <strong v-else>{{ webhookEventPresentation(props.row).eventTypeLabel }}</strong>
             <div v-if="props.row.eventTypes?.length > 1" class="event-type-count">+{{ props.row.eventTypes.length - 1 }} tipo(s)</div>
           </q-td>
         </template>
         <template #body-cell-summary="props">
           <q-td :props="props" class="webhook-event-summary">
-            <strong>{{ props.row.summary?.title || webhookEventSummary(props.row) }}</strong>
+            <strong>{{ unsupportedWebhookMessageInfo(props.row).unsupported ? webhookEventSummary(props.row) : (props.row.summary?.title || webhookEventSummary(props.row)) }}</strong>
             <span v-if="props.row.summary?.title && props.row.summary?.description">{{ props.row.summary.description }}</span>
             <div class="webhook-event-counts">
               <q-badge v-if="props.row.summary?.messageCount" outline color="primary" :label="`${props.row.summary.messageCount} mensagem(ns)`" />
@@ -1662,9 +1737,25 @@ onBeforeUnmount(() => {
               <div><span>ID do evento</span><code>{{ recordId(selectedWebhookEvent) || '—' }}</code></div>
             </div>
 
+            <q-banner
+              v-if="unsupportedWebhookMessageInfo(selectedWebhookEvent).unsupported"
+              rounded
+              class="unsupported-message-banner q-mt-md"
+            >
+              <template #avatar><q-icon name="report_problem" color="warning" /></template>
+              <strong>Mensagem recebida, mas não disponibilizada pela API oficial.</strong>
+              <div>
+                A Meta marcou este conteúdo como <code>META_{{ unsupportedWebhookMessageInfo(selectedWebhookEvent).code }}</code>.
+                Isso pode ocorrer com mensagens de sistema, segurança ou verificação de empresa. O Notify Flow preserva o evento e o payload, mas não consegue exibir ou responder ao conteúdo original.
+              </div>
+              <div v-if="unsupportedWebhookMessageInfo(selectedWebhookEvent).details" class="unsupported-message-banner__details">
+                {{ unsupportedWebhookMessageInfo(selectedWebhookEvent).details }}
+              </div>
+            </q-banner>
+
             <section class="webhook-event-dialog__summary">
               <span>Resumo</span>
-              <strong>{{ selectedWebhookEvent.summary?.title || webhookEventSummary(selectedWebhookEvent) }}</strong>
+              <strong>{{ unsupportedWebhookMessageInfo(selectedWebhookEvent).unsupported ? webhookEventSummary(selectedWebhookEvent) : (selectedWebhookEvent.summary?.title || webhookEventSummary(selectedWebhookEvent)) }}</strong>
               <p v-if="selectedWebhookEvent.summary?.description">{{ selectedWebhookEvent.summary.description }}</p>
               <div class="webhook-event-type-list">
                 <q-chip
@@ -2234,6 +2325,47 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(194, 45, 64, 0.18);
   background: rgba(255, 238, 240, 0.76);
   color: #7c2834;
+}
+
+.webhook-history-banner {
+  border: 1px solid rgba(22, 134, 111, 0.16);
+  background: rgba(222, 248, 242, 0.48);
+  color: #315f56;
+}
+
+.webhook-history-banner strong {
+  margin-right: 4px;
+}
+
+.unsupported-message-banner {
+  border: 1px solid rgba(232, 157, 34, 0.28);
+  background: rgba(255, 247, 225, 0.82);
+  color: #684d16;
+}
+
+.unsupported-message-banner strong,
+.unsupported-message-banner > div {
+  display: block;
+}
+
+.unsupported-message-banner__details {
+  margin-top: 6px;
+  color: #7b6536;
+  font-size: 0.78rem;
+}
+
+.webhook-events-panel,
+.webhook-events-table,
+.webhook-events-table :deep(.q-table__middle) {
+  min-width: 0;
+}
+
+.webhook-events-table :deep(.q-table__middle) {
+  overflow-x: auto;
+}
+
+.webhook-events-table :deep(table) {
+  min-width: 980px;
 }
 
 .webhook-events-table :deep(tbody tr) {

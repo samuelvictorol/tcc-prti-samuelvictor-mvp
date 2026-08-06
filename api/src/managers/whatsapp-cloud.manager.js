@@ -38,6 +38,12 @@ const DEFAULT_CLOUD_MESSAGE_LABELS = Object.freeze({
 });
 const BACKUP_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
 
+function isUnsupportedCloudMessage(message = {}) {
+  return String(message.type || '').toLowerCase() === 'unsupported'
+    || (Array.isArray(message.errors)
+      && message.errors.some((error) => Number(error?.code) === 131051));
+}
+
 function isSensitiveProfileAuthUseCase(value) {
   return String(value || '').startsWith('profile_auth');
 }
@@ -657,10 +663,15 @@ async function processCloudWebhookDescriptor(descriptor) {
   const summary = {
     receivedMessages: 0,
     receivedStatuses: 0,
+    unsupportedMessages: 0,
     createdContacts: 0,
     updatedContacts: 0
   };
   for (const message of Array.isArray(value.messages) ? value.messages : []) {
+    if (isUnsupportedCloudMessage(message)) {
+      summary.unsupportedMessages += 1;
+      continue;
+    }
     const result = await processCloudInboundMessage(message, value, descriptor.businessAccountId);
     for (const key of Object.keys(result)) summary[key] += result[key];
   }
@@ -706,6 +717,7 @@ async function webhook(payload, rawBody, signature) {
   const summary = {
     receivedMessages: 0,
     receivedStatuses: 0,
+    unsupportedMessages: 0,
     createdContacts: 0,
     updatedContacts: 0,
     receivedEvents: persisted.events.length,
