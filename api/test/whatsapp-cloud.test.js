@@ -856,29 +856,113 @@ test('botao URL preserva um unico placeholder {{1}} somente no caminho ou query'
   }
 });
 
-test('botao URL exige parametro somente quando possui o sufixo dinamico {{1}}', () => {
-  const cases = [
-    {
-      url: 'https://notify.example/invite',
+test('botao URL recupera configuracao legada de sufixo e exige parametro no contrato dinamico', () => {
+  const normalizedLegacy = normalizeBuilder({
+    version: 1,
+    components: [{
+      type: 'button', subType: 'url', index: 0, text: 'Abrir',
+      url: 'https://notify.example/invite/',
       parameters: [{ type: 'text', key: 'suffix', label: 'Sufixo' }]
+    }]
+  });
+  assert.equal(normalizedLegacy.components[0].url, 'https://notify.example/invite/{{1}}');
+  assert.equal(normalizedLegacy.components[0].parameters[0].contentMode, 'dynamic');
+
+  assert.throws(
+    () => normalizeBuilder({
+      version: 1,
+      components: [{
+        type: 'button', subType: 'url', index: 0, text: 'Abrir',
+        url: 'https://notify.example/invite/{{1}}', parameters: []
+      }]
+    }),
+    (error) => error.code === 'WHATSAPP_TEMPLATE_BUTTON_URL_PARAMETER_MISMATCH'
+  );
+});
+
+test('modos fixo e por disparo persistem para descricao e sufixo sem afetar botao URL fixa', () => {
+  const fixedBuilder = normalizeBuilder({
+    version: 1,
+    category: 'marketing',
+    mode: 'standard',
+    components: [
+      {
+        type: 'body', text: '{{body_description}}', parameters: [{
+          type: 'text', key: 'body_description', parameterName: 'body_description',
+          label: 'Descricao', contentMode: 'fixed', fixedValue: 'Descricao sempre reutilizada'
+        }]
+      },
+      {
+        type: 'button', subType: 'url', index: 0, text: 'Ver convite',
+        url: 'https://notify.example/invite/{{1}}', parameters: [{
+          type: 'text', key: 'invite_slug', label: 'Convite',
+          contentMode: 'fixed', fixedValue: 'grupo-alpha'
+        }]
+      }
+    ]
+  });
+  assert.deepEqual(
+    fixedBuilder.components.map((component) => component.parameters[0].contentMode),
+    ['fixed', 'fixed']
+  );
+  assert.deepEqual(buildCustomTemplateMessage({
+    name: 'convite_fixo', languageCode: 'pt_BR', builder: fixedBuilder
+  }).template.components, [
+    {
+      type: 'body',
+      parameters: [{ type: 'text', text: 'Descricao sempre reutilizada', parameter_name: 'body_description' }]
     },
     {
-      url: 'https://notify.example/invite/{{1}}',
-      parameters: []
+      type: 'button', sub_type: 'url', index: '0',
+      parameters: [{ type: 'text', text: 'grupo-alpha' }]
     }
-  ];
-  for (const input of cases) {
-    assert.throws(
-      () => normalizeBuilder({
-        version: 1,
-        components: [{
-          type: 'button', subType: 'url', index: 0, text: 'Abrir',
-          url: input.url, parameters: input.parameters
+  ]);
+
+  const dynamicBuilder = normalizeBuilder({
+    version: 1,
+    category: 'marketing',
+    mode: 'standard',
+    components: [
+      {
+        type: 'body', text: '{{body_description}}', parameters: [{
+          type: 'text', key: 'body_description', parameterName: 'body_description',
+          label: 'Descricao', contentMode: 'dynamic', example: 'Exemplo'
         }]
-      }),
-      (error) => error.code === 'WHATSAPP_TEMPLATE_BUTTON_URL_PARAMETER_MISMATCH'
-    );
-  }
+      },
+      {
+        type: 'button', subType: 'url', index: 0, text: 'Ver convite',
+        url: 'https://notify.example/invite/{{1}}', parameters: [{
+          type: 'text', key: 'invite_slug', label: 'Convite',
+          contentMode: 'dynamic', example: 'grupo-alpha'
+        }]
+      }
+    ]
+  });
+  assert.throws(
+    () => buildCustomTemplateMessage({
+      name: 'convite_dinamico', languageCode: 'pt_BR', builder: dynamicBuilder
+    }),
+    (error) => error.code === 'WHATSAPP_TEMPLATE_PARAMETERS_REQUIRED'
+  );
+  assert.deepEqual(buildCustomTemplateMessage({
+    name: 'convite_dinamico', languageCode: 'pt_BR', builder: dynamicBuilder,
+    variables: { body_description: 'Descricao do envio', invite_slug: 'grupo-beta' }
+  }).template.components, [
+    {
+      type: 'body',
+      parameters: [{ type: 'text', text: 'Descricao do envio', parameter_name: 'body_description' }]
+    },
+    {
+      type: 'button', sub_type: 'url', index: '0',
+      parameters: [{ type: 'text', text: 'grupo-beta' }]
+    }
+  ]);
+
+  const noButton = buildCustomTemplateMessage({
+    name: 'sem_botao', languageCode: 'pt_BR',
+    builder: { version: 1, category: 'marketing', mode: 'standard', components: [] }
+  });
+  assert.equal(noButton.template.components, undefined);
 });
 
 test('custom oficial torna componentes opcionais e valida rigorosamente os que forem preenchidos', () => {
@@ -1127,6 +1211,7 @@ test('builder preserva a associacao da midia hospedada sem expor metadata no pay
         key: 'imagem_cabecalho',
         label: 'Link da imagem',
         example: 'https://notify.example/api/media/token-assinado',
+        contentMode: 'dynamic',
         mediaSource: 'upload',
         mediaAssetId: '507f1f77bcf86cd799439011',
         mimeType: 'image/png',

@@ -20,6 +20,8 @@ import {
   cloudButtonSuffixParameter,
   cloudButtonUrlMode,
   cloudBuilderFromTemplate,
+  cloudParameterDisplayValue,
+  cloudParameterValueMode,
   cloneCloudComponentsForDraft,
   createCloudParameter,
   createCloudComponent,
@@ -32,16 +34,19 @@ import {
   meaningfulCloudComponents,
   previewCloudButtonUrl,
   previewCloudComponentText,
+  reconcileCloudButtonUrlParameter,
   renameCloudBodyVariable,
   renderWhatsAppPreviewMarkup,
   renderWhatsAppCloudPreview,
   setCloudBodyContentMode,
   setCloudButtonUrlMode,
   setCloudMediaContentMode,
+  setCloudParameterValueMode,
   standardMarketingComponentsFromTemplate,
   templateCopyName,
   updateCloudButtonBaseUrl,
   updateCloudMediaValue,
+  updateCloudParameterValue,
   validateCustomWhatsAppCloudTemplate,
 } from '../src/pages/TemplatesPage.vue'
 
@@ -463,6 +468,42 @@ describe('templates oficiais do WhatsApp Cloud', () => {
     expect(validateCustomWhatsAppCloudTemplate({ templateName: 'corpo_nomeado', components: [body] })).toBeNull()
   })
 
+  it('mantém o parâmetro Meta do corpo ao alternar entre valor salvo e valor por disparo', () => {
+    const body = createCloudComponent({ type: 'body', text: 'Olá!' })
+    setCloudBodyContentMode(body, 'dynamic')
+    const parameter = cloudBodyVariableParameter(body)
+
+    expect(cloudParameterValueMode(parameter)).toBe('dynamic')
+    setCloudParameterValueMode(parameter, 'fixed', 'Mensagem padrão')
+    updateCloudParameterValue(parameter, 'Descrição fixa da campanha')
+
+    expect(cloudParameterValueMode(parameter)).toBe('fixed')
+    expect(cloudParameterDisplayValue(parameter)).toBe('Descrição fixa da campanha')
+    expect(body.text).toContain('{{body_description}}')
+    expect(body.parameters).toHaveLength(1)
+
+    const fixedDefinition = buildCustomWhatsAppCloudDefinition({
+      templateName: 'corpo_valor_fixo',
+      components: [body],
+    })
+    expect(fixedDefinition.variables).toEqual([])
+    expect(fixedDefinition.payload.builder.components[0].parameters[0]).toMatchObject({
+      key: 'body_description',
+      parameterName: 'body_description',
+      fixedValue: 'Descrição fixa da campanha',
+      contentMode: 'fixed',
+    })
+
+    setCloudParameterValueMode(parameter, 'dynamic')
+    expect(body.parameters).toHaveLength(1)
+    expect(parameter.fixedValue).toBe('')
+    expect(parameter.example).toBe('Descrição fixa da campanha')
+    expect(buildCustomWhatsAppCloudDefinition({
+      templateName: 'corpo_valor_dinamico',
+      components: [body],
+    }).variables).toEqual(['body_description'])
+  })
+
   it('preserva corpos legados com vários parâmetros ao usar o editor amigável', () => {
     const body = createCloudComponent({
       type: 'body',
@@ -537,6 +578,73 @@ describe('templates oficiais do WhatsApp Cloud', () => {
       .toContain('exige exatamente um sufixo {{1}}')
     expect(validateCustomWhatsAppCloudTemplate({ templateName: 'invalido', components: [fixedWithParameter] }))
       .toContain('exige exatamente um sufixo {{1}}')
+  })
+
+  it('mantém {{1}} no botão ao alternar o identificador entre salvo e por disparo', () => {
+    const button = createCloudComponent({
+      type: 'button',
+      subType: 'url',
+      index: '0',
+      text: 'Ver convite',
+      url: 'https://notify.example/invite/',
+    })
+    setCloudButtonUrlMode(button, 'dynamic')
+    const suffix = cloudButtonSuffixParameter(button)
+
+    setCloudParameterValueMode(suffix, 'fixed', 'grupo-alpha')
+    updateCloudParameterValue(suffix, 'grupo-fixo')
+    expect(button.url).toBe('https://notify.example/invite/{{1}}')
+    expect(previewCloudButtonUrl(button)).toBe('https://notify.example/invite/grupo-fixo')
+    expect(buildCustomWhatsAppCloudDefinition({
+      templateName: 'link_valor_fixo',
+      components: [button],
+    }).payload.builder.components[0]).toMatchObject({
+      url: 'https://notify.example/invite/{{1}}',
+      parameters: [{ key: 'invite_slug', fixedValue: 'grupo-fixo', contentMode: 'fixed' }],
+    })
+
+    setCloudParameterValueMode(suffix, 'dynamic')
+    expect(button.url).toBe('https://notify.example/invite/{{1}}')
+    expect(suffix.fixedValue).toBe('')
+    expect(suffix.example).toBe('grupo-fixo')
+    expect(buildCustomWhatsAppCloudDefinition({
+      templateName: 'link_valor_dinamico',
+      components: [button],
+    }).payload.builder.components[0].parameters[0]).toMatchObject({
+      key: 'invite_slug',
+      fixedValue: undefined,
+      contentMode: 'dynamic',
+    })
+  })
+
+  it('reconcilia contratos antigos de botão para nunca enviar sufixo em URL fixa', () => {
+    const missingPlaceholder = createCloudComponent({
+      type: 'button', subType: 'url', index: '0', text: 'Convite',
+      url: 'https://notify.example/invite/',
+      parameters: [{ type: 'text', key: 'invite_slug', label: 'Convite', example: 'alpha' }],
+    })
+    reconcileCloudButtonUrlParameter(missingPlaceholder)
+    expect(missingPlaceholder.url).toBe('https://notify.example/invite/{{1}}')
+    expect(missingPlaceholder.parameters).toHaveLength(1)
+
+    const missingParameter = createCloudComponent({
+      type: 'button', subType: 'url', index: '0', text: 'Convite',
+      url: 'https://notify.example/invite/{{1}}',
+      parameters: [],
+    })
+    reconcileCloudButtonUrlParameter(missingParameter)
+    expect(missingParameter.parameters).toEqual([
+      expect.objectContaining({ key: 'invite_slug', contentMode: 'dynamic' }),
+    ])
+    expect(validateCustomWhatsAppCloudTemplate({
+      templateName: 'contrato_corrigido',
+      components: [missingParameter],
+    })).toBeNull()
+
+    expect(validateCustomWhatsAppCloudTemplate({
+      templateName: 'sem_link',
+      components: [createCloudComponent({ type: 'body', text: 'Somente descrição fixa.' })],
+    })).toBeNull()
   })
 
   it('preserva o delimitador da URL ao alternar entre link fixo e sufixo dinâmico', () => {
@@ -668,6 +776,12 @@ describe('templates oficiais do WhatsApp Cloud', () => {
     expect(source).toContain('position: sticky;')
     expect(source.indexOf("{ label: 'Sempre esta mídia', value: 'fixed', icon: 'lock' }"))
       .toBeLessThan(source.indexOf("{ label: 'Em cada disparo', value: 'dynamic', icon: 'sync_alt' }"))
+    expect(source).toContain('Quando a descrição será definida?')
+    expect(source).toContain('Quando o destino será definido?')
+    expect(source.match(/\{ label: 'Sempre este valor', value: 'fixed', icon: 'lock' \}/g)).toHaveLength(2)
+    expect(source.match(/\{ label: 'Definir em cada disparo', value: 'dynamic', icon: 'sync_alt' \}/g)).toHaveLength(2)
+    expect(source).toContain('@update:model-value="onCloudBodyValueChange"')
+    expect(source).toContain('@update:model-value="onCloudButtonValueChange"')
     expect(source).not.toContain('Apenas o título e o nome oficial são obrigatórios no Notify Flow.')
     expect(source).not.toContain('A Meta controla o layout final. A descrição interna não faz parte da mensagem')
     expect(source).toContain('Adicionar ${option.label}')

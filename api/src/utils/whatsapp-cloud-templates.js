@@ -253,7 +253,23 @@ function normalizeBuilder(builder) {
     if (componentUrl && (type !== 'button' || subType !== 'url')) {
       templateError('URL fixa e exclusiva de botao do tipo URL', { componentIndex, type, subType });
     }
-    const normalizedComponentUrl = componentUrl ? buttonUrl(componentUrl, { componentIndex }) : undefined;
+    // Versoes anteriores da interface conseguiam persistir um parametro de
+    // sufixo junto de uma URL sem `{{1}}`. Para a Meta isso e uma URL fixa e
+    // enviar o parametro resulta em
+    // WHATSAPP_TEMPLATE_BUTTON_URL_PARAMETER_MISMATCH. A existencia de um
+    // unico parametro no botao e uma declaracao inequivoca de URL dinamica;
+    // recupere o contrato acrescentando o marcador posicional antes de
+    // validar e persistir. Botoes realmente fixos continuam sem parametros.
+    const legacyDynamicButtonUrl = type === 'button'
+      && subType === 'url'
+      && componentUrl
+      && !componentUrl.includes('{{1}}')
+      && !/[{}]/.test(componentUrl)
+      && component.parameters.length === 1;
+    const effectiveComponentUrl = legacyDynamicButtonUrl ? componentUrl + '{{1}}' : componentUrl;
+    const normalizedComponentUrl = effectiveComponentUrl
+      ? buttonUrl(effectiveComponentUrl, { componentIndex })
+      : undefined;
     const seenParameterIds = new Set();
     const parameters = component.parameters.map((parameter, parameterIndex) => {
       const parameterType = String(parameter.type || '').toLowerCase();
@@ -308,6 +324,35 @@ function normalizeBuilder(builder) {
       };
       const fixedValue = normalizeFixedValue(parameter.fixedValue, { componentIndex, parameterIndex, key });
       if (fixedValue !== undefined) output.fixedValue = fixedValue;
+      const requestedContentMode = parameter.contentMode === undefined || parameter.contentMode === null
+        ? null
+        : String(parameter.contentMode).trim().toLowerCase();
+      if (requestedContentMode && !['fixed', 'dynamic'].includes(requestedContentMode)) {
+        templateError('Modo de preenchimento do parametro invalido', {
+          componentIndex,
+          parameterIndex,
+          key,
+          contentMode: requestedContentMode
+        });
+      }
+      const contentMode = requestedContentMode || (fixedValue !== undefined ? 'fixed' : 'dynamic');
+      if (contentMode === 'fixed' && fixedValue === undefined) {
+        templateError('Parametro configurado como fixo exige um valor salvo', {
+          componentIndex,
+          parameterIndex,
+          key,
+          contentMode
+        }, 'WHATSAPP_TEMPLATE_FIXED_VALUE_REQUIRED');
+      }
+      if (contentMode === 'dynamic' && fixedValue !== undefined) {
+        templateError('Parametro preenchido em cada disparo nao aceita valor fixo', {
+          componentIndex,
+          parameterIndex,
+          key,
+          contentMode
+        }, 'WHATSAPP_TEMPLATE_DYNAMIC_VALUE_CONFLICT');
+      }
+      output.contentMode = contentMode;
       const parameterName = String(parameter.parameterName || parameter.parameter_name || '').trim();
       if (parameterName) {
         if (type === 'button') templateError('Botoes Meta usam parametros posicionais', { componentIndex, parameterIndex });
@@ -622,7 +667,14 @@ function buildCustomTemplatePreview(customTemplate) {
     index: component.index,
     type: component.subType,
     text: component.text || null,
-    url: component.subType === 'url' ? component.url || null : null
+    url: component.subType === 'url'
+      ? String(component.url || '').replace(
+          '{{1}}',
+          component.parameters?.[0]
+            ? String(previewParameterValue(component.parameters[0], variables) || '{{1}}')
+            : '{{1}}'
+        ) || null
+      : null
   }));
   return normalizeTemplatePreview({
     name: customTemplate.name,

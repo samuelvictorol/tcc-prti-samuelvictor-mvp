@@ -39,6 +39,10 @@ const whatsappBuilderParameter = z.object({
   label: z.string().min(1).max(160),
   example: z.union([z.string().max(1000), z.number()]).nullish(),
   fixedValue: whatsappFixedValue.nullish(),
+  // `fixed` reutiliza o valor salvo no template. `dynamic` exige que o
+  // operador informe o valor no disparo. O campo e comum a midia, texto e
+  // sufixo de URL para manter o mesmo contrato em todos os componentes.
+  contentMode: z.enum(['fixed', 'dynamic']).optional(),
   currencyCode: z.string().length(3).regex(/^[A-Za-z]{3}$/).optional(),
   filename: z.string().min(1).max(240).optional(),
   mediaSource: z.enum(['url', 'upload']).optional(),

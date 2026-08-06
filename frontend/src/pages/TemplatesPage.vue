@@ -395,6 +395,22 @@ export function updateCloudButtonBaseUrl(component, value) {
   return component
 }
 
+export function reconcileCloudButtonUrlParameter(component) {
+  if (!component || component.type !== 'button' || component.subType !== 'url') return component
+  const hasSuffix = String(component.url || '').includes('{{1}}')
+  const parameter = cloudButtonSuffixParameter(component)
+  if (parameter && !hasSuffix && String(component.url || '').trim()) {
+    updateCloudButtonBaseUrl(component, component.url)
+  } else if (!parameter && hasSuffix) {
+    component.parameters = [createCloudParameter({
+      type: 'text',
+      ...CLOUD_BUTTON_SUFFIX_DEFAULTS,
+      contentMode: 'dynamic',
+    })]
+  }
+  return component
+}
+
 export function setCloudButtonUrlMode(component, mode) {
   if (!component) return component
   if (mode !== 'dynamic') {
@@ -430,24 +446,11 @@ export function previewCloudComponentText(component = {}) {
 }
 
 export function cloudMediaContentMode(parameter = {}) {
-  if (['fixed', 'dynamic'].includes(parameter.contentMode)) return parameter.contentMode
-  return String(parameter.fixedValue || '').trim() ? 'fixed' : 'dynamic'
+  return cloudParameterValueMode(parameter)
 }
 
 export function setCloudMediaContentMode(parameter, mode) {
-  if (!parameter) return parameter
-  parameter.contentMode = mode === 'fixed' ? 'fixed' : 'dynamic'
-  if (mode === 'dynamic') {
-    if (String(parameter.fixedValue || '').trim()) {
-      parameter.example = parameter.fixedValue
-    }
-    parameter.fixedValue = ''
-    return parameter
-  }
-  if (!String(parameter.fixedValue || '').trim() && String(parameter.example || '').trim()) {
-    parameter.fixedValue = parameter.example
-  }
-  return parameter
+  return setCloudParameterValueMode(parameter, mode)
 }
 
 export function updateCloudMediaValue(parameter, value) {
@@ -458,7 +461,37 @@ export function updateCloudMediaValue(parameter, value) {
 }
 
 export function cloudMediaDisplayValue(parameter = {}) {
-  return cloudMediaContentMode(parameter) === 'fixed'
+  return cloudParameterDisplayValue(parameter)
+}
+
+export function cloudParameterValueMode(parameter = {}) {
+  if (['fixed', 'dynamic'].includes(parameter.contentMode)) return parameter.contentMode
+  return String(parameter.fixedValue || '').trim() ? 'fixed' : 'dynamic'
+}
+
+export function setCloudParameterValueMode(parameter, mode, defaultFixedValue = '') {
+  if (!parameter) return parameter
+  parameter.contentMode = mode === 'fixed' ? 'fixed' : 'dynamic'
+  if (parameter.contentMode === 'dynamic') {
+    if (String(parameter.fixedValue || '').trim()) parameter.example = parameter.fixedValue
+    parameter.fixedValue = ''
+    return parameter
+  }
+  if (!String(parameter.fixedValue || '').trim()) {
+    parameter.fixedValue = String(parameter.example || defaultFixedValue || '')
+  }
+  return parameter
+}
+
+export function updateCloudParameterValue(parameter, value) {
+  if (!parameter) return parameter
+  if (cloudParameterValueMode(parameter) === 'fixed') parameter.fixedValue = value
+  else parameter.example = value
+  return parameter
+}
+
+export function cloudParameterDisplayValue(parameter = {}) {
+  return cloudParameterValueMode(parameter) === 'fixed'
     ? String(parameter.fixedValue || '')
     : String(parameter.example || '')
 }
@@ -549,6 +582,9 @@ export function buildCustomWhatsAppCloudDefinition(input) {
       label: String(parameter.label || `Campo ${parameterIndex + 1}`).trim(),
       fixedValue: String(parameter.fixedValue || '').trim() || undefined,
       example: String(parameter.example || '').trim(),
+      contentMode: ['fixed', 'dynamic'].includes(parameter.contentMode)
+        ? parameter.contentMode
+        : (String(parameter.fixedValue || '').trim() ? 'fixed' : 'dynamic'),
       currencyCode: parameter.type === 'currency' ? String(parameter.currencyCode || 'BRL').toUpperCase() : undefined,
       filename: parameter.type === 'document' ? String(parameter.filename || '').trim() || undefined : undefined,
       mediaSource: isCloudMediaParameter(parameter.type) ? String(parameter.mediaSource || 'url') : undefined,
@@ -682,11 +718,11 @@ export function standardMarketingComponentsFromTemplate(template = {}) {
   }
   if (footer && String(footer.text || '').trim()) restored.push(createCloudComponent(footer))
   if (button && (String(button.text || '').trim() || String(button.url || '').trim() || button.parameters?.length)) {
-    restored.push(createCloudComponent({
+    restored.push(reconcileCloudButtonUrlParameter(createCloudComponent({
       ...button,
       text: button.text || button.parameters?.[0]?.label || '',
       url: button.url || button.parameters?.[0]?.fixedValue || button.parameters?.[0]?.example || '',
-    }))
+    })))
   }
   return restored
 }
@@ -736,6 +772,12 @@ export function validateCustomWhatsAppCloudTemplate(input = {}) {
   if (!/^[a-z0-9_]{1,512}$/.test(templateName)) return 'O nome Meta aceita somente letras minúsculas, números e sublinhado.'
   if (languageCode && !META_LANGUAGE_OPTIONS.some((option) => option.value === languageCode)) return 'Escolha pt_BR ou en_US, conforme o idioma aprovado na Meta.'
   const parameters = components.flatMap((component) => component.parameters || []).filter(cloudParameterHasContent)
+  const incompleteFixedParameter = parameters.find((parameter) => (
+    parameter.contentMode === 'fixed' && !String(parameter.fixedValue || '').trim()
+  ))
+  if (incompleteFixedParameter) {
+    return `Preencha o valor fixo de ${String(incompleteFixedParameter.label || 'este campo').toLowerCase()} ou escolha definir em cada disparo.`
+  }
   const bodies = components.filter((component) => component.type === 'body')
   const footers = components.filter((component) => component.type === 'footer')
   const buttons = components.filter((component) => component.type === 'button')
@@ -927,8 +969,10 @@ const cloudStandardButton = computed(() => form.cloudComponents.find((component)
 const cloudStandardBodyMode = computed(() => cloudBodyContentMode(cloudStandardBody.value || {}))
 const cloudStandardBodyHasAdvancedParameters = computed(() => cloudBodyHasAdvancedParameters(cloudStandardBody.value || {}))
 const cloudStandardBodyVariable = computed(() => cloudBodyVariableParameter(cloudStandardBody.value || {}))
+const cloudStandardBodyValueMode = computed(() => cloudParameterValueMode(cloudStandardBodyVariable.value || {}))
 const cloudStandardButtonMode = computed(() => cloudButtonUrlMode(cloudStandardButton.value || {}))
 const cloudStandardButtonSuffix = computed(() => cloudButtonSuffixParameter(cloudStandardButton.value || {}))
+const cloudStandardButtonValueMode = computed(() => cloudParameterValueMode(cloudStandardButtonSuffix.value || {}))
 const availableCloudStandardComponents = computed(() => OPTIONAL_STANDARD_COMPONENTS.filter((option) => (
   !form.cloudComponents.some((component) => component.type === option.type)
 )))
@@ -1576,15 +1620,43 @@ function onCloudBodyModeChange(mode) {
     })
     return
   }
+  const hadVariable = Boolean(cloudStandardBodyVariable.value)
   setCloudBodyContentMode(cloudStandardBody.value, mode)
+  if (mode === 'dynamic' && !hadVariable && cloudStandardBodyVariable.value) {
+    setCloudParameterValueMode(
+      cloudStandardBodyVariable.value,
+      'fixed',
+      CLOUD_BODY_VARIABLE_DEFAULTS.example,
+    )
+  }
 }
 
 function onCloudBodyVariableChange(value) {
   renameCloudBodyVariable(cloudStandardBody.value, value)
 }
 
+function onCloudBodyValueModeChange(mode) {
+  setCloudParameterValueMode(
+    cloudStandardBodyVariable.value,
+    mode,
+    CLOUD_BODY_VARIABLE_DEFAULTS.example,
+  )
+}
+
+function onCloudBodyValueChange(value) {
+  updateCloudParameterValue(cloudStandardBodyVariable.value, value)
+}
+
 function onCloudButtonModeChange(mode) {
+  const hadSuffix = Boolean(cloudStandardButtonSuffix.value)
   setCloudButtonUrlMode(cloudStandardButton.value, mode)
+  if (mode === 'dynamic' && !hadSuffix && cloudStandardButtonSuffix.value) {
+    setCloudParameterValueMode(
+      cloudStandardButtonSuffix.value,
+      'fixed',
+      CLOUD_BUTTON_SUFFIX_DEFAULTS.example,
+    )
+  }
 }
 
 function onCloudButtonBaseUrlChange(value) {
@@ -1596,6 +1668,18 @@ function onCloudButtonSuffixKeyChange(value) {
   if (!parameter) return
   parameter.key = normalizeCloudVariableKey(value, CLOUD_BUTTON_SUFFIX_DEFAULTS.key)
   parameter.parameterName = ''
+}
+
+function onCloudButtonValueModeChange(mode) {
+  setCloudParameterValueMode(
+    cloudStandardButtonSuffix.value,
+    mode,
+    CLOUD_BUTTON_SUFFIX_DEFAULTS.example,
+  )
+}
+
+function onCloudButtonValueChange(value) {
+  updateCloudParameterValue(cloudStandardButtonSuffix.value, value)
 }
 
 function cloudButtonUrlRule(value) {
@@ -2644,6 +2728,25 @@ onMounted(loadPageData)
                           @update:model-value="onCloudBodyModeChange"
                         />
                       </div>
+                      <div v-if="cloudStandardBodyMode === 'dynamic' && cloudStandardBodyVariable" class="friendly-mode-picker value-mode-picker">
+                        <div>
+                          <strong>Quando a descrição será definida?</strong>
+                          <span>O parâmetro continua igual ao aprovado na Meta; muda apenas se o valor ficará salvo ou será pedido no envio.</span>
+                        </div>
+                        <q-btn-toggle
+                          :model-value="cloudStandardBodyValueMode"
+                          no-caps
+                          unelevated
+                          toggle-color="primary"
+                          color="white"
+                          text-color="primary"
+                          :options="[
+                            { label: 'Sempre este valor', value: 'fixed', icon: 'lock' },
+                            { label: 'Definir em cada disparo', value: 'dynamic', icon: 'sync_alt' },
+                          ]"
+                          @update:model-value="onCloudBodyValueModeChange"
+                        />
+                      </div>
                       <q-banner v-if="cloudStandardBodyHasAdvancedParameters" rounded class="dynamic-component-note">
                         <template #avatar><q-icon name="history" color="primary" /></template>
                         Este template legado usa vários parâmetros no corpo. Eles permanecem intactos; o seletor amigável fica bloqueado para não alterar o contrato aprovado na Meta.
@@ -2681,11 +2784,13 @@ onMounted(loadPageData)
                           class="template-field"
                         />
                         <q-input
-                          v-model="cloudStandardBodyVariable.example"
+                          :model-value="cloudParameterDisplayValue(cloudStandardBodyVariable)"
                           outlined
                           stack-label
-                          label="Descrição"
+                          :label="cloudStandardBodyValueMode === 'fixed' ? 'Descrição usada em todos os disparos' : 'Exemplo para a prévia'"
+                          :hint="cloudStandardBodyValueMode === 'fixed' ? 'Este valor será enviado automaticamente e não será solicitado ao operador.' : 'Este exemplo aparece somente na prévia; o valor real será solicitado no disparo.'"
                           class="template-field full-span"
+                          @update:model-value="onCloudBodyValueChange"
                         />
                       </div>
                     </article>
@@ -2729,6 +2834,25 @@ onMounted(loadPageData)
                             { label: 'Sufixo dinâmico', value: 'dynamic', icon: 'route' },
                           ]"
                           @update:model-value="onCloudButtonModeChange"
+                        />
+                      </div>
+                      <div v-if="cloudStandardButtonMode === 'dynamic' && cloudStandardButtonSuffix" class="friendly-mode-picker value-mode-picker">
+                        <div>
+                          <strong>Quando o destino será definido?</strong>
+                          <span>A URL aprovada continua com {{1}}; escolha se o identificador será reutilizado ou informado no envio.</span>
+                        </div>
+                        <q-btn-toggle
+                          :model-value="cloudStandardButtonValueMode"
+                          no-caps
+                          unelevated
+                          toggle-color="primary"
+                          color="white"
+                          text-color="primary"
+                          :options="[
+                            { label: 'Sempre este valor', value: 'fixed', icon: 'lock' },
+                            { label: 'Definir em cada disparo', value: 'dynamic', icon: 'sync_alt' },
+                          ]"
+                          @update:model-value="onCloudButtonValueModeChange"
                         />
                       </div>
                       <div class="standard-field-grid standard-field-grid--button">
@@ -2785,12 +2909,13 @@ onMounted(loadPageData)
                           class="template-field"
                         />
                         <q-input
-                          v-model="cloudStandardButtonSuffix.example"
+                          :model-value="cloudParameterDisplayValue(cloudStandardButtonSuffix)"
                           outlined
                           stack-label
-                          label="Exemplo do sufixo"
-                          hint="Exemplo: grupo-alpha"
+                          :label="cloudStandardButtonValueMode === 'fixed' ? 'Identificador usado em todos os disparos' : 'Exemplo do identificador'"
+                          :hint="cloudStandardButtonValueMode === 'fixed' ? 'Exemplo: grupo-alpha · será concatenado automaticamente à URL base.' : 'Exemplo: grupo-alpha · o valor real será solicitado no disparo.'"
                           class="template-field"
+                          @update:model-value="onCloudButtonValueChange"
                         />
                         <div class="dynamic-url-result">
                           <q-icon name="open_in_new" color="primary" />
