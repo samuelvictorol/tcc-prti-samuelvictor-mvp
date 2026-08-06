@@ -233,6 +233,28 @@ test('janela fechada bloqueia texto livre antes de chamar a Meta', async (contex
   assert.equal(providerCalled, false);
 });
 
+test('conversa tecnica sem contato permanece somente leitura tambem na API', async (context) => {
+  restoreAfter(context, [[conversationsManager, 'requireOpenCloudServiceWindow']]);
+  conversationsManager.requireOpenCloudServiceWindow = async () => openConversation({
+    conversation: {
+      _id: '507f1f77bcf86cd799439011',
+      channel: 'whatsapp_cloud',
+      contact: null
+    }
+  });
+  let providerCalled = false;
+  global.fetch = async () => {
+    providerCalled = true;
+    throw new Error('nao deveria chamar');
+  };
+
+  await assert.rejects(
+    () => whatsappCloudManager.sendConversationText('507f1f77bcf86cd799439011', 'Ola'),
+    (error) => error.code === 'WHATSAPP_CLOUD_TECHNICAL_CONVERSATION_READ_ONLY'
+  );
+  assert.equal(providerCalled, false);
+});
+
 test('solicitacao de consentimento interpola comando dinamico e registra como outbound', async (context) => {
   restoreAfter(context, [
     [conversationsManager, 'getById'],

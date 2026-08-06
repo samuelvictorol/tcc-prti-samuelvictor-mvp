@@ -28,6 +28,7 @@ import {
   whatsappDispatchTemplatePreview,
   webhookEventFieldOptionsFrom,
   webhookEventPresentation,
+  webhookProviderErrorInfo,
   webhookEventSummary,
 } from '../src/pages/WhatsappCloudPage.vue'
 
@@ -303,6 +304,19 @@ describe('histórico persistente de webhooks da Meta', () => {
     expect(normalizeCloudTab('invalida')).toBe('conversations')
   })
 
+  it('organiza eventos, contatos e falhas na aba webhook com 10 registros por página', () => {
+    const source = readFileSync(fileURLToPath(new URL('../src/pages/WhatsappCloudPage.vue', import.meta.url)), 'utf8')
+
+    expect(source).toContain('<div v-show="activeTab === \'webhook\'" class="cloud-webhook-content">')
+    expect(source).toContain('<h2 class="section-title">Contatos recebidos pelo webhook</h2>')
+    expect(source).toContain('<h2 class="section-title">Contatos ignorados ou com falha</h2>')
+    expect(source).toContain('<h2 class="section-title">Eventos do webhook</h2>')
+    expect(source).toContain('const webhookContactPagination = ref({ page: 1, rowsPerPage: 10 })')
+    expect(source).toContain('const issuePagination = ref({ page: 1, rowsPerPage: 10, rowsNumber: 0 })')
+    expect(source).toContain('const webhookEventPagination = ref({ page: 1, rowsPerPage: 10, rowsNumber: 0 })')
+    expect(source).toMatch(/async function showDispatchIssues\(\)[\s\S]*?activeTab\.value = 'webhook'/)
+  })
+
   it('normaliza a resposta paginada do endpoint dedicado', () => {
     const result = normalizeWebhookEventPage({
       items: [{ id: 'event-1', field: 'messages' }],
@@ -460,9 +474,44 @@ describe('histórico persistente de webhooks da Meta', () => {
     expect(unsupportedWebhookMessageInfo(event)).toEqual({
       unsupported: true,
       code: 131051,
+      codeLabel: 'META_131051',
+      title: '',
+      message: 'Message type unknown',
+      details: 'Message type is currently not supported.',
+    })
+    expect(webhookProviderErrorInfo(event)).toEqual({
+      hasError: true,
+      code: 131051,
+      codeLabel: 'META_131051',
+      title: '',
+      message: 'Message type unknown',
       details: 'Message type is currently not supported.',
     })
     expect(webhookEventPresentation(event).eventTypeLabel).toBe('Mensagem não suportada')
-    expect(webhookEventSummary(event)).toBe('Mensagem não compatível com a API oficial (META_131051)')
+    expect(webhookEventSummary(event)).toBe('Message type unknown (META_131051)')
+  })
+
+  it('mostra código, título, mensagem e detalhes de erros da Meta em qualquer tipo de evento', () => {
+    const event = {
+      field: 'messages',
+      eventType: 'status',
+      summary: {
+        providerErrors: [{
+          code: 145678,
+          title: 'Delivery warning',
+          message: 'Provider rejected this update',
+          details: 'Diagnostic detail returned by Meta.',
+        }],
+      },
+    }
+
+    expect(webhookProviderErrorInfo(event)).toEqual({
+      hasError: true,
+      code: 145678,
+      codeLabel: 'META_145678',
+      title: 'Delivery warning',
+      message: 'Provider rejected this update',
+      details: 'Diagnostic detail returned by Meta.',
+    })
   })
 })

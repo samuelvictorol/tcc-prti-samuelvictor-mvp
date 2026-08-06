@@ -132,6 +132,7 @@ const issueNotificationId = ref(null)
 const issuesSection = ref(null)
 const issuePagination = ref({ page: 1, rowsPerPage: 10, rowsNumber: 0 })
 const deliveryPagination = ref({ page: 1, rowsPerPage: 10, rowsNumber: 0 })
+const webhookPagination = ref({ page: 1, rowsPerPage: 10 })
 const bot = ref(null)
 const realtimeMessages = ref([])
 const selected = ref(null)
@@ -833,6 +834,7 @@ function onDeliveriesRequest({ pagination }) {
 async function showDispatchIssues() {
   if (!lastDispatchId.value) return
   issueNotificationId.value = lastDispatchId.value
+  tab.value = 'webhook'
   await loadDeliveryIssues({ pagination: { ...issuePagination.value, page: 1 } })
   await nextTick()
   const element = issuesSection.value?.$el || issuesSection.value
@@ -1134,30 +1136,6 @@ onBeforeUnmount(() => {
             </q-table>
           </section>
 
-          <section ref="issuesSection" class="bulk-log-section q-mt-xl">
-            <div class="section-title-row">
-              <div><h3 class="section-title">Ignorados e falhas</h3><p class="section-copy">{{ issueNotificationId ? 'Exibindo o disparo selecionado.' : 'Permissões ausentes e erros ficam registrados sem travar os demais envios.' }}</p></div>
-              <div class="row items-center q-gutter-sm"><q-badge color="warning" text-color="dark" :label="`${issuePagination.rowsNumber} ocorrência(s)`" /><q-btn v-if="issueNotificationId" flat color="info" no-caps icon="history" label="Todo o histórico" @click="showAllDeliveryIssues" /></div>
-            </div>
-            <q-table
-              flat
-              :rows="deliveryIssues"
-              :columns="issueColumns"
-              row-key="id"
-              v-model:pagination="issuePagination"
-              :loading="issuesLoading"
-              :rows-per-page-options="[10, 25, 50, 100]"
-              @request="onIssuesRequest"
-            >
-              <template #body-cell-contact="props"><q-td :props="props"><strong>{{ props.row.contact?.displayName || props.row.contact?.name || props.row.contactId }}</strong></q-td></template>
-              <template #body-cell-status="props"><q-td :props="props"><q-badge :color="deliveryStatusColor(props.row.status)" :label="props.row.status" /></q-td></template>
-              <template #body-cell-reason="props"><q-td :props="props" class="bulk-issue-reason">{{ props.row.errorMessage }}</q-td></template>
-              <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt) }}</q-td></template>
-              <template #body-cell-actions="props"><q-td :props="props"><q-btn v-if="props.row.contact" flat dense color="info" no-caps icon="manage_accounts" label="Editar permissão" @click="openBulkContact(props.row.contact)" /></q-td></template>
-              <template #no-data><div class="full-width text-center q-pa-lg text-muted">Nenhuma entrega ignorada ou com falha.</div></template>
-            </q-table>
-          </section>
-
         </q-tab-panel>
 
         <q-tab-panel name="chats" class="q-pa-none">
@@ -1313,6 +1291,7 @@ onBeforeUnmount(() => {
               :rows="webhookActivity"
               :columns="webhookActivityColumns"
               row-key="id"
+              v-model:pagination="webhookPagination"
               :loading="webhookLoading"
               :rows-per-page-options="[10, 25, 50]"
               class="telegram-webhook-table q-mt-lg"
@@ -1338,6 +1317,30 @@ onBeforeUnmount(() => {
               <template #body-cell-message="props"><q-td :props="props" class="telegram-webhook-summary">{{ props.row.message || props.row.summary || 'Evento processado' }}</q-td></template>
               <template #body-cell-actions="props"><q-td :props="props"><q-btn flat round dense color="info" icon="data_object" aria-label="Ver detalhes do evento" @click="openWebhookDetails(props.row)"><q-tooltip>Ver detalhes</q-tooltip></q-btn></q-td></template>
             </q-table>
+
+            <section ref="issuesSection" class="bulk-log-section q-mt-xl">
+              <div class="section-title-row">
+                <div><h3 class="section-title">Ignorados e falhas</h3><p class="section-copy">{{ issueNotificationId ? 'Exibindo o disparo selecionado.' : 'Permissões ausentes e erros ficam registrados sem travar os demais envios.' }}</p></div>
+                <div class="row items-center q-gutter-sm"><q-badge color="warning" text-color="dark" :label="`${issuePagination.rowsNumber} ocorrência(s)`" /><q-btn v-if="issueNotificationId" flat color="info" no-caps icon="history" label="Todo o histórico" @click="showAllDeliveryIssues" /></div>
+              </div>
+              <q-table
+                flat
+                :rows="deliveryIssues"
+                :columns="issueColumns"
+                row-key="id"
+                v-model:pagination="issuePagination"
+                :loading="issuesLoading"
+                :rows-per-page-options="[10, 25, 50, 100]"
+                @request="onIssuesRequest"
+              >
+                <template #body-cell-contact="props"><q-td :props="props"><strong>{{ props.row.contact?.displayName || props.row.contact?.name || props.row.contactId }}</strong></q-td></template>
+                <template #body-cell-status="props"><q-td :props="props"><q-badge :color="deliveryStatusColor(props.row.status)" :label="props.row.status" /></q-td></template>
+                <template #body-cell-reason="props"><q-td :props="props" class="bulk-issue-reason">{{ props.row.errorMessage }}</q-td></template>
+                <template #body-cell-createdAt="props"><q-td :props="props">{{ formatDate(props.row.createdAt) }}</q-td></template>
+                <template #body-cell-actions="props"><q-td :props="props"><q-btn v-if="props.row.contact" flat dense color="info" no-caps icon="manage_accounts" label="Editar permissão" @click="openBulkContact(props.row.contact)" /></q-td></template>
+                <template #no-data><div class="full-width text-center q-pa-lg text-muted">Nenhuma entrega ignorada ou com falha.</div></template>
+              </q-table>
+            </section>
           </section>
         </q-tab-panel>
       </q-tab-panels>

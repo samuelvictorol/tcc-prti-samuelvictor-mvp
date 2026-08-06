@@ -424,6 +424,84 @@ export function canSendCloudChatMode(conversation, mode = 'quick', now = Date.no
   if (mode === 'template') return cloudConsentOf(conversation).authorized
   return canSendCloudServiceMessage(conversation, now)
 }
+
+function asCloudTechnicalErrors(message = {}) {
+  const metadata = message.metadata || {}
+  return [
+    ...(Array.isArray(message.errors) ? message.errors : []),
+    ...(Array.isArray(message.providerErrors) ? message.providerErrors : []),
+    ...(Array.isArray(metadata.providerErrors) ? metadata.providerErrors : []),
+    message.error,
+    message.providerError,
+    metadata.providerError,
+  ].filter((error) => error && typeof error === 'object')
+}
+
+export function cloudTechnicalMessageDiagnostic(message = {}) {
+  const metadata = message?.metadata || {}
+  const type = String(message?.type || metadata.messageType || '').trim().toLowerCase()
+  const error = asCloudTechnicalErrors(message)[0] || {}
+  const rawProviderCode = error.code ?? message?.errorCode ?? metadata.errorCode
+  const providerCode = rawProviderCode === undefined || rawProviderCode === null || rawProviderCode === ''
+    ? null
+    : Number.isFinite(Number(rawProviderCode)) ? Number(rawProviderCode) : String(rawProviderCode)
+  const explicitCode = message?.verificationCode
+    ?? message?.code
+    ?? message?.content?.verificationCode
+    ?? message?.content?.code
+    ?? metadata.verificationCode
+    ?? metadata.code
+    ?? null
+  const discoveredContent = [
+    message?.text?.body,
+    typeof message?.text === 'string' ? message.text : '',
+    message?.body,
+    message?.message,
+    message?.content?.body,
+    message?.content?.text,
+  ].map((value) => String(value || '').trim()).find(Boolean) || ''
+  const title = String(error.title || message?.errorTitle || metadata.errorTitle || '').trim()
+  const providerMessage = String(error.message || message?.errorMessage || metadata.errorMessage || '').trim()
+  const details = String(error.error_data?.details || error.details || message?.errorDetails || metadata.errorDetails || '').trim()
+  const contentProvidedFlag = metadata?.unsupported?.contentProvided
+  const content = contentProvidedFlag === false ? '' : discoveredContent
+  const technical = Boolean(
+    ['unsupported', 'technical', 'system', 'unknown'].includes(type)
+    || message?.unsupported
+    || providerCode !== null
+    || title
+    || providerMessage
+    || details
+  )
+
+  return {
+    technical,
+    type,
+    providerCode,
+    providerCodeLabel: providerCode === null
+      ? ''
+      : /^META_/i.test(String(providerCode)) ? String(providerCode) : `META_${providerCode}`,
+    title,
+    message: providerMessage,
+    details,
+    content,
+    verificationCode: explicitCode === null ? '' : String(explicitCode),
+    originalContentProvided: typeof contentProvidedFlag === 'boolean'
+      ? contentProvidedFlag
+      : Boolean(discoveredContent || explicitCode !== null),
+  }
+}
+
+export function isContactlessTechnicalConversation(conversation = {}) {
+  const contactId = conversation?.contact?.id
+    || conversation?.contact?._id
+    || conversation?.contactId
+  return !contactId && Boolean(
+    conversation?.technicalEvent
+    || conversation?.contactless
+    || cloudTechnicalMessageDiagnostic(conversation?.lastMessage || {}).technical
+  )
+}
 </script>
 
 <script setup>
@@ -485,6 +563,7 @@ const filteredConversations = computed(() => {
   return conversations.value.filter((conversation) => [
     conversation.contact?.displayName,
     conversation.displayName,
+    conversation.externalId,
     conversation.contact?.phone,
     conversation.phone,
     conversation.lastMessage?.text,
@@ -494,13 +573,14 @@ const filteredConversations = computed(() => {
 
 const selectedWindow = computed(() => serviceWindowOf(selected.value, now.value))
 const selectedConsent = computed(() => cloudConsentOf(selected.value))
-const selectedCanSend = computed(() => canSendCloudServiceMessage(selected.value, now.value))
-const selectedCanCompose = computed(() => canSendCloudChatMode(selected.value, sendMode.value, now.value))
-const consentRequestAvailable = computed(() => selectedCanSend.value && !selectedConsent.value.authorized)
 const selectedContactId = computed(() => selected.value?.contact?.id
   || selected.value?.contact?._id
   || selected.value?.contactId
   || null)
+const selectedIsTechnical = computed(() => isContactlessTechnicalConversation(selected.value || {}))
+const selectedCanSend = computed(() => !selectedIsTechnical.value && canSendCloudServiceMessage(selected.value, now.value))
+const selectedCanCompose = computed(() => !selectedIsTechnical.value && canSendCloudChatMode(selected.value, sendMode.value, now.value))
+const consentRequestAvailable = computed(() => !selectedIsTechnical.value && selectedCanSend.value && !selectedConsent.value.authorized)
 const templateOptions = computed(() => templates.value
   .filter((item) => item.active !== false && item.externalTemplateName)
   .map((item) => ({
@@ -552,13 +632,18 @@ function conversationName(conversation) {
   return conversation?.contact?.displayName
     || conversation?.displayName
     || conversation?.contactName
+    || conversation?.externalId
     || conversation?.contact?.phone
     || conversation?.phone
     || 'Contato sem nome'
 }
 
 function conversationPhone(conversation) {
-  return conversation?.contact?.phone || conversation?.phone || conversation?.waId || ''
+  return conversation?.contact?.phone
+    || conversation?.phone
+    || conversation?.waId
+    || conversation?.externalId
+    || ''
 }
 
 function conversationAvatar(conversation) {
@@ -594,6 +679,14 @@ function messagePresentation(message) {
 function previewOf(conversation) {
   const lastMessage = conversation?.lastMessage
   if (typeof lastMessage === 'string') return lastMessage
+  const diagnostic = cloudTechnicalMessageDiagnostic(lastMessage || {})
+  if (diagnostic.technical) {
+    return diagnostic.content
+      || diagnostic.message
+      || diagnostic.title
+      || diagnostic.providerCodeLabel
+      || 'Evento técnico da Meta'
+  }
   return lastMessage?.preview || lastMessage?.text?.body || lastMessage?.text || lastMessage?.body || 'Sem mensagens'
 }
 
@@ -1213,7 +1306,10 @@ onBeforeUnmount(() => {
             <q-item-section>
               <q-item-label class="text-weight-bold ellipsis">{{ conversationName(conversation) }}</q-item-label>
               <q-item-label caption class="ellipsis">{{ previewOf(conversation) }}</q-item-label>
-              <div class="chat-flags">
+              <div v-if="isContactlessTechnicalConversation(conversation)" class="chat-flags">
+                <q-badge outline color="warning" icon="policy" label="Evento técnico" />
+              </div>
+              <div v-else class="chat-flags">
                 <span
                   :class="[
                     'window-flag',
@@ -1275,6 +1371,14 @@ onBeforeUnmount(() => {
               <span>{{ conversationPhone(selected) }}</span>
               <div class="identity-flags">
                 <q-badge
+                  v-if="selectedIsTechnical"
+                  outline
+                  color="warning"
+                  icon="policy"
+                  label="Evento técnico da Meta · contato não cadastrado"
+                />
+                <q-badge
+                  v-else
                   outline
                   :color="selectedConsent.authorized ? 'positive' : 'grey-7'"
                   :icon="selectedConsent.authorized ? 'notifications_active' : 'notifications_off'"
@@ -1301,6 +1405,18 @@ onBeforeUnmount(() => {
           </header>
 
           <q-banner
+            v-if="selectedIsTechnical"
+            rounded
+            class="technical-conversation-banner"
+          >
+            <template #avatar><q-icon name="policy" /></template>
+            <div>
+              <strong>Evento técnico da Meta · contato não cadastrado</strong>
+              <span>Consulta somente leitura. O remetente foi preservado pelo identificador externo e nenhuma autorização ou contato foi criado automaticamente.</span>
+            </div>
+          </q-banner>
+          <q-banner
+            v-else
             rounded
             :class="['service-window-banner', selectedWindow.open ? 'service-window-banner--open' : 'service-window-banner--closed']"
           >
@@ -1420,6 +1536,30 @@ onBeforeUnmount(() => {
                       </div>
                     </div>
                   </template>
+                  <div v-else-if="cloudTechnicalMessageDiagnostic(item).technical" class="technical-message-content">
+                    <div class="technical-message-content__heading">
+                      <q-icon name="policy" />
+                      <strong>{{ cloudTechnicalMessageDiagnostic(item).title || 'Evento técnico da Meta' }}</strong>
+                      <q-badge
+                        v-if="cloudTechnicalMessageDiagnostic(item).providerCodeLabel"
+                        outline
+                        color="warning"
+                        :label="cloudTechnicalMessageDiagnostic(item).providerCodeLabel"
+                      />
+                    </div>
+                    <p v-if="cloudTechnicalMessageDiagnostic(item).content">{{ cloudTechnicalMessageDiagnostic(item).content }}</p>
+                    <p v-if="cloudTechnicalMessageDiagnostic(item).verificationCode">
+                      Código recebido: <strong>{{ cloudTechnicalMessageDiagnostic(item).verificationCode }}</strong>
+                    </p>
+                    <p v-if="cloudTechnicalMessageDiagnostic(item).message">{{ cloudTechnicalMessageDiagnostic(item).message }}</p>
+                    <small v-if="cloudTechnicalMessageDiagnostic(item).details">{{ cloudTechnicalMessageDiagnostic(item).details }}</small>
+                    <small v-if="cloudTechnicalMessageDiagnostic(item).providerCode === 131051 && !cloudTechnicalMessageDiagnostic(item).originalContentProvided">
+                      META_131051 é um código técnico da Meta, não o código de verificação. Conteúdo original não fornecido pela API.
+                    </small>
+                    <small v-else-if="!cloudTechnicalMessageDiagnostic(item).originalContentProvided">
+                      Conteúdo original não fornecido pela API.
+                    </small>
+                  </div>
                   <div v-else>{{ messageBody(item) }}</div>
                   <span class="message-meta">
                     {{ formatTime(item.sentAt || item.createdAt || item.timestamp) }}
@@ -1435,7 +1575,7 @@ onBeforeUnmount(() => {
             </template>
           </div>
 
-          <footer class="message-composer">
+          <footer v-if="!selectedIsTechnical" class="message-composer">
             <div v-if="!selectedConsent.authorized" class="consent-callout">
               <div>
                 <q-icon name="notifications_off" />
@@ -1576,6 +1716,10 @@ onBeforeUnmount(() => {
               <q-icon name="verified" />
               O template será validado e processado pela fila oficial da Meta.
             </div>
+          </footer>
+          <footer v-else class="message-composer technical-readonly-footer">
+            <q-icon name="visibility" />
+            <span>Evento técnico disponível somente para consulta. Nenhuma mensagem pode ser enviada e nenhum contato foi cadastrado.</span>
           </footer>
         </template>
       </section>
@@ -1737,6 +1881,23 @@ onBeforeUnmount(() => {
   color: #6d4c1f;
 }
 
+.technical-conversation-banner {
+  margin: 10px 16px 0;
+  border: 1px solid rgba(180, 115, 24, 0.26);
+  background: rgba(255, 248, 228, 0.94);
+  color: #6d4c1f;
+}
+
+.technical-conversation-banner strong,
+.technical-conversation-banner span {
+  display: block;
+}
+
+.technical-conversation-banner span {
+  margin-top: 3px;
+  font-size: 0.78rem;
+}
+
 .message-stream {
   max-height: 490px;
   padding: 24px;
@@ -1793,6 +1954,30 @@ onBeforeUnmount(() => {
 .message-row--mine .message-bubble {
   border-radius: 15px 5px 15px 15px;
   background: #d8fff7;
+}
+
+.technical-message-content {
+  display: grid;
+  gap: 7px;
+  min-width: min(420px, 62vw);
+}
+
+.technical-message-content__heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: #6d4c1f;
+}
+
+.technical-message-content p,
+.technical-message-content small {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.technical-message-content small {
+  color: #6d6352;
 }
 
 .message-meta {
@@ -1932,6 +2117,14 @@ onBeforeUnmount(() => {
   padding: 10px 16px 12px;
   border-top: 1px solid rgba(3, 21, 21, 0.08);
   background: rgba(255, 255, 255, 0.78);
+}
+
+.technical-readonly-footer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #665d4d;
+  font-size: 0.78rem;
 }
 
 .consent-callout {

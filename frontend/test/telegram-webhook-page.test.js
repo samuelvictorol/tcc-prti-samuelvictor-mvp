@@ -31,6 +31,23 @@ describe('aba Webhook do Telegram', () => {
     expect(pageSource).not.toContain('<h3 class="section-title">Logs da fila</h3>')
   })
 
+  it('mantém ignorados e falhas na aba Webhook e inicia as tabelas com 10 registros', () => {
+    const broadcastStart = pageSource.indexOf('<q-tab-panel name="broadcast"')
+    const chatsStart = pageSource.indexOf('<q-tab-panel name="chats"')
+    const webhookStart = pageSource.indexOf('<q-tab-panel name="webhook"')
+    const webhookEnd = pageSource.indexOf('</q-tab-panel>', webhookStart)
+    const broadcastPanel = pageSource.slice(broadcastStart, chatsStart)
+    const webhookPanel = pageSource.slice(webhookStart, webhookEnd)
+
+    expect(broadcastPanel).not.toContain('Ignorados e falhas')
+    expect(webhookPanel).toContain('Ignorados e falhas')
+    expect(webhookPanel).toContain('v-model:pagination="webhookPagination"')
+    expect(webhookPanel).toContain('v-model:pagination="issuePagination"')
+    expect(pageSource).toContain("const webhookPagination = ref({ page: 1, rowsPerPage: 10 })")
+    expect(pageSource).toContain("const issuePagination = ref({ page: 1, rowsPerPage: 10, rowsNumber: 0 })")
+    expect(pageSource).toContain("tab.value = 'webhook'")
+  })
+
   it('combina eventos em tempo real e logs persistentes em ordem decrescente', () => {
     const rows = normalizeTelegramWebhookActivity(
       [{ id: 'log-1', channel: 'telegram', action: 'message.received', createdAt: '2026-08-06T12:00:00.000Z' }],

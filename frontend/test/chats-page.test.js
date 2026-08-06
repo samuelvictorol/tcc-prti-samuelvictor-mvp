@@ -15,12 +15,14 @@ import {
   cloudChatTemplatePreview,
   cloudChatTemplateVariablesForSend,
   cloudChatTemplateParameters,
+  cloudTechnicalMessageDiagnostic,
   cloudConsentOf,
   cloudConsentSourceLabel,
   cloudConversationId,
   formatServiceWindow,
   isValidCloudTemplateMediaUrl,
   mergeCloudMessages,
+  isContactlessTechnicalConversation,
   serviceWindowOf,
   upsertCloudConversation,
 } from '../src/pages/ChatsPage.vue'
@@ -104,6 +106,49 @@ describe('Chats oficiais do WhatsApp Cloud', () => {
       buttons: [],
       hasRichContent: false,
     })
+  })
+
+  it('exibe evento técnico contactless em modo somente leitura sem inventar código de verificação', () => {
+    const message = {
+      type: 'unsupported',
+      body: '[Conteúdo original não fornecido pela Meta]\nErro técnico da Meta META_131051: Message type unknown',
+      metadata: {
+        unsupported: { type: 'unknown', rawType: 'unknown', contentProvided: false },
+        providerErrors: [{
+          code: 131051,
+          title: 'Message type unknown',
+          message: 'Message type unknown',
+          details: 'Message type is currently not supported.',
+        }],
+      },
+    }
+    const conversation = {
+      id: 'technical-1',
+      externalId: '447900000000',
+      displayName: '447900000000',
+      contactId: null,
+      lastMessage: message,
+    }
+
+    expect(cloudTechnicalMessageDiagnostic(message)).toEqual({
+      technical: true,
+      type: 'unsupported',
+      providerCode: 131051,
+      providerCodeLabel: 'META_131051',
+      title: 'Message type unknown',
+      message: 'Message type unknown',
+      details: 'Message type is currently not supported.',
+      content: '',
+      verificationCode: '',
+      originalContentProvided: false,
+    })
+    expect(isContactlessTechnicalConversation(conversation)).toBe(true)
+
+    const chats = source('pages/ChatsPage.vue')
+    expect(chats).toContain('Evento técnico da Meta · contato não cadastrado')
+    expect(chats).toContain('META_131051 é um código técnico da Meta, não o código de verificação.')
+    expect(chats).toContain('<footer v-if="!selectedIsTechnical" class="message-composer">')
+    expect(chats).toContain('conversation?.externalId')
   })
 
   it('apresenta o contrato estável do template como uma mensagem semelhante ao WhatsApp', () => {

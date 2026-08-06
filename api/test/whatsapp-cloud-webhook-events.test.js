@@ -157,7 +157,46 @@ test('classifica mensagem unsupported 131051 e expoe apenas diagnostico seguro n
     details: 'Message type is currently not supported.'
   }]);
   assert.match(summary.description, /mensagem nao suportada/);
+  assert.match(summary.description, /META_131051: Message type unknown/);
   assert.doesNotMatch(JSON.stringify(summary), /441234567890|GB\.1234567890123456|wamid\.unsupported/);
+
+  const unknownPayload = unsupportedMessagePayload();
+  const unknownMessage = unknownPayload.entry[0].changes[0].value.messages[0];
+  unknownMessage.type = 'unknown';
+  delete unknownMessage.errors;
+  const unknownEvent = webhookEventsManager.extractEvents(unknownPayload)[0];
+  assert.equal(
+    webhookEventsManager.eventTypeFor(unknownEvent.field, unknownEvent.value),
+    'unsupported_message'
+  );
+});
+
+test('coleta codigo e mensagem de erros Meta mesmo quando estao aninhados em outro tipo', () => {
+  const payload = fictitiousMessagePayload();
+  payload.entry[0].changes[0].value.messages[0].diagnostic = {
+    delivery: {
+      errors: [{
+        code: 139999,
+        title: 'Falha aninhada ficticia',
+        message: 'Mensagem diagnostica ficticia',
+        error_data: { details: 'Detalhe fornecido pelo provedor.' }
+      }]
+    }
+  };
+  const event = webhookEventsManager.extractEvents(payload)[0];
+  const summary = webhookEventsManager.buildSummary(event.field, event.value);
+
+  assert.deepEqual(summary.providerErrors, [{
+    code: 139999,
+    title: 'Falha aninhada ficticia',
+    message: 'Mensagem diagnostica ficticia',
+    details: 'Detalhe fornecido pelo provedor.'
+  }]);
+  assert.deepEqual(
+    webhookEventsManager.eventTypesFor(event.field, event.value),
+    ['message:text', 'error', 'error:139999']
+  );
+  assert.match(summary.description, /META_139999: Falha aninhada ficticia/);
 });
 
 test('dedupe semantico ignora ordem e envelope, mas preserva transicoes de status', () => {
@@ -548,12 +587,13 @@ test('webhook assinado persiste campo Meta desconhecido e o marca como processad
   assert.equal(result.receivedStatuses, 0);
 });
 
-test('webhook unsupported 131051 e preservado e processado sem criar contato ou conversa', async (context) => {
+test('webhook unsupported 131051 abre conversa tecnica sem cadastrar contato', async (context) => {
   restoreAfter(context, [
     [settingsManager, 'getValue'],
     [contactsManager, 'findByChannelAddress'],
     [contactsManager, 'findByChannelOrPhone'],
     [contactsManager, 'upsertFromChannel'],
+    [logsManager, 'create'],
     [conversationsManager, 'recordInbound'],
     [webhookEventsManager, 'persistPayload'],
     [webhookEventsManager, 'claimEvent'],
@@ -569,7 +609,20 @@ test('webhook unsupported 131051 e preservado e processado sem criar contato ou 
   contactsManager.findByChannelOrPhone = async () => { contactOperations += 1; return null; };
   contactsManager.upsertFromChannel = async () => { contactOperations += 1; return null; };
   let conversationWrites = 0;
-  conversationsManager.recordInbound = async () => { conversationWrites += 1; return null; };
+  let conversationInput;
+  conversationsManager.recordInbound = async (input) => {
+    conversationWrites += 1;
+    conversationInput = input;
+    return {
+      conversation: {
+        id: '507f1f77bcf86cd799439188',
+        contactId: null
+      },
+      message: { id: '507f1f77bcf86cd799439189', metadata: input.metadata }
+    };
+  };
+  let diagnosticLog;
+  logsManager.create = async (input) => { diagnosticLog = input; return {}; };
 
   const payload = unsupportedMessagePayload();
   const descriptor = webhookEventsManager.extractEvents(payload)[0];
@@ -597,15 +650,56 @@ test('webhook unsupported 131051 e preservado e processado sem criar contato ou 
 
   assert.equal(result.received, true);
   assert.equal(result.unsupportedMessages, 1);
-  assert.equal(result.receivedMessages, 0);
+  assert.equal(result.receivedMessages, 1);
   assert.equal(result.createdContacts, 0);
   assert.equal(result.updatedContacts, 0);
   assert.equal(contactOperations, 0);
-  assert.equal(conversationWrites, 0);
+  assert.equal(conversationWrites, 1);
+  assert.equal(conversationInput.contactId, undefined);
+  assert.equal(conversationInput.externalId, '441234567890');
+  assert.equal(conversationInput.type, 'unsupported');
+  assert.match(conversationInput.body, /Conteudo original nao fornecido pela Meta/);
+  assert.match(conversationInput.body, /Erro tecnico da Meta META_131051/);
+  assert.match(conversationInput.body, /Message type unknown/);
+  assert.match(conversationInput.body, /Message type is currently not supported/);
+  assert.equal(conversationInput.metadata.unsupported.contentProvided, false);
+  assert.deepEqual(conversationInput.metadata.providerErrors, [{
+    code: 131051,
+    title: 'Message type unknown',
+    message: 'Message type unknown',
+    details: 'Message type is currently not supported.'
+  }]);
+  assert.equal(diagnosticLog.action, 'message.unsupported');
+  assert.equal(diagnosticLog.context.providerErrors[0].code, 131051);
   assert.deepEqual(processedClaim, {
     id: '507f1f77bcf86cd799439077',
     token: 'claim-unsupported'
   });
+});
+
+test('mensagem unsupported preserva codigo explicito que realmente veio no payload', () => {
+  const payload = unsupportedMessagePayload();
+  const message = payload.entry[0].changes[0].value.messages[0];
+  message.unsupported.verification_code = '654321';
+
+  const body = whatsappCloudManager.cloudMessageBody(message);
+  const metadata = whatsappCloudManager.cloudConversationMetadata(
+    message,
+    payload.entry[0].changes[0].value,
+    payload.entry[0].id
+  );
+
+  assert.match(body, /^654321\n/);
+  assert.doesNotMatch(body, /Conteudo original nao fornecido/);
+  assert.match(body, /Erro tecnico da Meta META_131051/);
+  assert.equal(metadata.unsupported.contentProvided, true);
+
+  delete message.unsupported.verification_code;
+  message.unsupported.payload = { body: 'Codigo explicito em payload aninhado: 112233' };
+  assert.match(
+    whatsappCloudManager.cloudMessageBody(message),
+    /^Codigo explicito em payload aninhado: 112233\n/
+  );
 });
 
 test('webhook identifica desafio ativo e pede redacao do codigo antes da persistencia', async (context) => {

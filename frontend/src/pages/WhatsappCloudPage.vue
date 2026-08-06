@@ -373,6 +373,59 @@ function webhookPayloadMessages(payload = {}) {
     .flatMap((change) => Array.isArray(change?.value?.messages) ? change.value.messages : [])
 }
 
+function webhookPayloadErrors(payload = {}) {
+  return (Array.isArray(payload?.entry) ? payload.entry : [])
+    .flatMap((entry) => Array.isArray(entry?.changes) ? entry.changes : [])
+    .flatMap((change) => {
+      const value = change?.value || {}
+      return [
+        ...(Array.isArray(value.errors) ? value.errors : []),
+        ...(Array.isArray(value.messages) ? value.messages : [])
+          .flatMap((message) => Array.isArray(message?.errors) ? message.errors : []),
+      ]
+    })
+}
+
+function normalizedProviderError(error = {}) {
+  const rawCode = error?.code
+  const code = rawCode === undefined || rawCode === null || rawCode === ''
+    ? null
+    : Number.isFinite(Number(rawCode)) ? Number(rawCode) : String(rawCode)
+  return {
+    code,
+    title: String(error?.title || '').trim(),
+    message: String(error?.message || '').trim(),
+    details: String(error?.error_data?.details || error?.details || '').trim(),
+  }
+}
+
+export function webhookProviderErrorInfo(event = {}) {
+  const payloadErrors = webhookPayloadErrors(event?.payload)
+  const summaryErrors = Array.isArray(event?.summary?.providerErrors) ? event.summary.providerErrors : []
+  const error = [...payloadErrors, ...summaryErrors]
+    .map(normalizedProviderError)
+    .find((item) => item.code !== null || item.title || item.message || item.details)
+
+  if (!error) {
+    return {
+      hasError: false,
+      code: null,
+      codeLabel: '',
+      title: '',
+      message: '',
+      details: '',
+    }
+  }
+
+  return {
+    hasError: true,
+    ...error,
+    codeLabel: error.code === null
+      ? ''
+      : /^META_/i.test(String(error.code)) ? String(error.code) : `META_${error.code}`,
+  }
+}
+
 export function unsupportedWebhookMessageInfo(event = {}) {
   const summaryTypes = Array.isArray(event?.summary?.messageTypes) ? event.summary.messageTypes : []
   const eventTypes = Array.isArray(event?.eventTypes) ? event.eventTypes : []
@@ -382,19 +435,32 @@ export function unsupportedWebhookMessageInfo(event = {}) {
     || String(message?.unsupported?.type || '').toLowerCase() === 'unknown'
     || (Array.isArray(message?.errors) && message.errors.some((error) => Number(error?.code) === 131051))
   ))
-  const error = unsupportedMessage?.errors?.find((item) => Number(item?.code) === 131051)
-    || unsupportedMessage?.errors?.[0]
+  const providerError = webhookProviderErrorInfo(event)
   const unsupported = Boolean(
     unsupportedMessage
+    || Number(event?.summary?.unsupportedCount) > 0
     || summaryTypes.some((type) => String(type).toLowerCase() === 'unsupported')
     || eventTypes.some((type) => String(type).toLowerCase() === 'message:unsupported')
+    || String(event?.eventType || '').toLowerCase() === 'unsupported_message'
   )
 
-  if (!unsupported) return { unsupported: false, code: null, details: '' }
+  if (!unsupported) {
+    return {
+      unsupported: false,
+      code: null,
+      codeLabel: '',
+      title: '',
+      message: '',
+      details: '',
+    }
+  }
   return {
     unsupported: true,
-    code: Number(error?.code) || 131051,
-    details: String(error?.error_data?.details || error?.message || 'Este tipo de mensagem não é disponibilizado pela API oficial do WhatsApp.'),
+    code: providerError.code,
+    codeLabel: providerError.codeLabel,
+    title: providerError.title,
+    message: providerError.message,
+    details: providerError.details || 'Este tipo de mensagem não é disponibilizado pela API oficial do WhatsApp.',
   }
 }
 
@@ -454,7 +520,8 @@ export function webhookEventFieldOptionsFrom(events = []) {
 export function webhookEventSummary(event = {}) {
   const unsupported = unsupportedWebhookMessageInfo(event)
   if (unsupported.unsupported) {
-    return `Mensagem não compatível com a API oficial (META_${unsupported.code})`
+    const message = unsupported.message || unsupported.title || 'Mensagem não suportada pela API oficial'
+    return unsupported.codeLabel ? `${message} (${unsupported.codeLabel})` : message
   }
   const summary = event.summary || {}
   const description = summary.description || summary.title
@@ -474,7 +541,7 @@ export function normalizeWebhookEventPage(payload = {}) {
     ? value.items
     : Array.isArray(value.events) ? value.events : []
   const page = Math.max(1, Number(value.page) || 1)
-  const limit = Math.max(1, Number(value.limit) || 20)
+  const limit = Math.max(1, Number(value.limit) || 10)
   const total = Math.max(0, Number(value.total ?? items.length) || 0)
   return {
     items: items.filter(Boolean),
@@ -603,7 +670,8 @@ const events = ref([])
 const deliveryIssues = ref([])
 const issueNotificationId = ref(null)
 const issuePagination = ref({ page: 1, rowsPerPage: 10, rowsNumber: 0 })
-const webhookEventPagination = ref({ page: 1, rowsPerPage: 20, rowsNumber: 0 })
+const webhookContactPagination = ref({ page: 1, rowsPerPage: 10 })
+const webhookEventPagination = ref({ page: 1, rowsPerPage: 10, rowsNumber: 0 })
 const issuesSection = ref(null)
 const cloudStatus = ref({})
 const lastDispatch = ref(null)
@@ -843,6 +911,7 @@ function onIssuesRequest({ pagination }) {
 async function showDispatchIssues() {
   if (!lastDispatchId.value) return
   issueNotificationId.value = lastDispatchId.value
+  activeTab.value = 'webhook'
   await loadDeliveryIssues({
     pagination: { ...issuePagination.value, page: 1 },
     notificationId: issueNotificationId.value,
@@ -878,7 +947,7 @@ async function loadWebhookEvents({
 } = {}) {
   const requestId = ++webhookEventRequestSequence
   const page = Math.max(1, Number(pagination?.page) || 1)
-  const limit = Math.max(1, Number(pagination?.rowsPerPage || pagination?.limit) || 20)
+  const limit = Math.max(1, Number(pagination?.rowsPerPage || pagination?.limit) || 10)
   webhookEventsLoading.value = true
   webhookEventsError.value = ''
   try {
@@ -1114,6 +1183,14 @@ function onWebhookSummary(summary = {}) {
   }, 650)
 }
 
+async function refreshWebhookTab() {
+  await Promise.allSettled([
+    loadWebhookContacts(),
+    loadDeliveryIssues(),
+    loadWebhookEvents(),
+  ])
+}
+
 onMounted(() => {
   loadData()
   const socket = connectSocket()
@@ -1155,9 +1232,9 @@ onBeforeUnmount(() => {
           color="positive"
           no-caps
           icon="refresh"
-          label="Atualizar eventos"
-          :loading="webhookEventsLoading"
-          @click="loadWebhookEvents()"
+          label="Atualizar webhook"
+          :loading="loading || issuesLoading || webhookEventsLoading"
+          @click="refreshWebhookTab"
         />
       </template>
     </PageHeader>
@@ -1412,6 +1489,10 @@ onBeforeUnmount(() => {
       </div>
     </q-card>
 
+    </div>
+
+    <div v-show="activeTab === 'webhook'" class="cloud-webhook-content">
+
     <q-card flat class="glass-card section-card q-mb-lg webhook-contacts-card">
       <div class="section-title-row">
         <div class="row items-center q-gutter-xs">
@@ -1426,7 +1507,16 @@ onBeforeUnmount(() => {
       </div>
       <q-banner rounded class="webhook-contact-banner q-mb-md"><template #avatar><q-icon name="auto_awesome" color="primary" /></template><strong>Cadastro automático ativo.</strong> Você pode atualizar, editar consentimento ou remover cada contato abaixo.</q-banner>
       <EmptyState v-if="!loading && !webhookContacts.length" icon="person_search" title="Nenhum contato recebido ainda" description="Quando alguém enviar uma mensagem ao número oficial, o contato aparecerá aqui." />
-      <q-table v-else flat :rows="webhookContacts" :columns="webhookContactColumns" row-key="id" :loading="loading" :rows-per-page-options="[5, 10, 25]">
+      <q-table
+        v-else
+        flat
+        :rows="webhookContacts"
+        :columns="webhookContactColumns"
+        row-key="id"
+        v-model:pagination="webhookContactPagination"
+        :loading="loading"
+        :rows-per-page-options="[10, 25, 50]"
+      >
         <template #body-cell-contact="props"><q-td :props="props"><div class="contact-name"><q-avatar rounded size="38px" color="teal-1" text-color="primary" icon="person" class="table-row-icon" /><div><strong>{{ props.row.displayName || 'Sem nome' }}</strong><q-badge outline color="positive" icon="auto_awesome" :label="`Cadastro automático: ${cloudRegistration(props.row).label}`" /></div></div></q-td></template>
         <template #body-cell-ids="props">
           <q-td :props="props">
@@ -1477,9 +1567,7 @@ onBeforeUnmount(() => {
       </q-table>
     </q-card>
 
-    </div>
-
-    <q-card v-show="activeTab === 'webhook'" flat class="glass-card section-card webhook-events-panel">
+    <q-card flat class="glass-card section-card webhook-events-panel">
       <div class="toolbar-row webhook-events-heading">
         <div class="row items-center q-gutter-xs">
           <h2 class="section-title">Eventos do webhook</h2>
@@ -1592,12 +1680,12 @@ onBeforeUnmount(() => {
         <template #body-cell-eventType="props">
           <q-td :props="props">
             <q-badge
-              v-if="unsupportedWebhookMessageInfo(props.row).unsupported"
+              v-if="webhookProviderErrorInfo(props.row).hasError"
               outline
               color="warning"
               text-color="dark"
               icon="report_problem"
-              :label="`Não suportada · META_${unsupportedWebhookMessageInfo(props.row).code}`"
+              :label="`${unsupportedWebhookMessageInfo(props.row).unsupported ? 'Não suportada' : 'Erro Meta'} · ${webhookProviderErrorInfo(props.row).codeLabel || 'sem código'}`"
             />
             <strong v-else>{{ webhookEventPresentation(props.row).eventTypeLabel }}</strong>
             <div v-if="props.row.eventTypes?.length > 1" class="event-type-count">+{{ props.row.eventTypes.length - 1 }} tipo(s)</div>
@@ -1605,8 +1693,19 @@ onBeforeUnmount(() => {
         </template>
         <template #body-cell-summary="props">
           <q-td :props="props" class="webhook-event-summary">
-            <strong>{{ unsupportedWebhookMessageInfo(props.row).unsupported ? webhookEventSummary(props.row) : (props.row.summary?.title || webhookEventSummary(props.row)) }}</strong>
-            <span v-if="props.row.summary?.title && props.row.summary?.description">{{ props.row.summary.description }}</span>
+            <strong v-if="webhookProviderErrorInfo(props.row).hasError">
+              {{ webhookProviderErrorInfo(props.row).message || webhookProviderErrorInfo(props.row).title || webhookEventSummary(props.row) }}
+            </strong>
+            <strong v-else>{{ unsupportedWebhookMessageInfo(props.row).unsupported ? webhookEventSummary(props.row) : (props.row.summary?.title || webhookEventSummary(props.row)) }}</strong>
+            <span
+              v-if="webhookProviderErrorInfo(props.row).hasError && webhookProviderErrorInfo(props.row).title && webhookProviderErrorInfo(props.row).title !== webhookProviderErrorInfo(props.row).message"
+            >
+              {{ webhookProviderErrorInfo(props.row).title }}
+            </span>
+            <span v-if="webhookProviderErrorInfo(props.row).hasError && webhookProviderErrorInfo(props.row).details">
+              {{ webhookProviderErrorInfo(props.row).details }}
+            </span>
+            <span v-else-if="props.row.summary?.title && props.row.summary?.description">{{ props.row.summary.description }}</span>
             <div class="webhook-event-counts">
               <q-badge v-if="props.row.summary?.messageCount" outline color="primary" :label="`${props.row.summary.messageCount} mensagem(ns)`" />
               <q-badge v-if="props.row.summary?.statusCount" outline color="info" :label="`${props.row.summary.statusCount} status`" />
@@ -1632,6 +1731,7 @@ onBeforeUnmount(() => {
         <template #loading><q-inner-loading showing color="primary"><q-spinner-dots size="42px" /></q-inner-loading></template>
       </q-table>
     </q-card>
+    </div>
 
     <ContactDialog v-model="contactDialog" :contact="editingContact" @saved="loadData" />
 
@@ -1738,18 +1838,26 @@ onBeforeUnmount(() => {
             </div>
 
             <q-banner
-              v-if="unsupportedWebhookMessageInfo(selectedWebhookEvent).unsupported"
+              v-if="unsupportedWebhookMessageInfo(selectedWebhookEvent).unsupported || webhookProviderErrorInfo(selectedWebhookEvent).hasError"
               rounded
               class="unsupported-message-banner q-mt-md"
             >
               <template #avatar><q-icon name="report_problem" color="warning" /></template>
-              <strong>Mensagem recebida, mas não disponibilizada pela API oficial.</strong>
-              <div>
-                A Meta marcou este conteúdo como <code>META_{{ unsupportedWebhookMessageInfo(selectedWebhookEvent).code }}</code>.
-                Isso pode ocorrer com mensagens de sistema, segurança ou verificação de empresa. O Notify Flow preserva o evento e o payload, mas não consegue exibir ou responder ao conteúdo original.
+              <strong>
+                {{ webhookProviderErrorInfo(selectedWebhookEvent).title || (unsupportedWebhookMessageInfo(selectedWebhookEvent).unsupported ? 'Mensagem não suportada pela API oficial' : 'Erro informado pela Meta') }}
+              </strong>
+              <div v-if="webhookProviderErrorInfo(selectedWebhookEvent).hasError">
+                <code v-if="webhookProviderErrorInfo(selectedWebhookEvent).codeLabel">{{ webhookProviderErrorInfo(selectedWebhookEvent).codeLabel }}</code>
+                <span v-if="webhookProviderErrorInfo(selectedWebhookEvent).message"> {{ webhookProviderErrorInfo(selectedWebhookEvent).message }}</span>
               </div>
-              <div v-if="unsupportedWebhookMessageInfo(selectedWebhookEvent).details" class="unsupported-message-banner__details">
-                {{ unsupportedWebhookMessageInfo(selectedWebhookEvent).details }}
+              <div
+                v-if="webhookProviderErrorInfo(selectedWebhookEvent).details || unsupportedWebhookMessageInfo(selectedWebhookEvent).details"
+                class="unsupported-message-banner__details"
+              >
+                {{ webhookProviderErrorInfo(selectedWebhookEvent).details || unsupportedWebhookMessageInfo(selectedWebhookEvent).details }}
+              </div>
+              <div v-if="unsupportedWebhookMessageInfo(selectedWebhookEvent).unsupported" class="unsupported-message-banner__details">
+                O Notify Flow preserva e exibe exatamente o diagnóstico recebido. Se a Meta não incluir o texto ou o código de verificação no payload, esse conteúdo não pode ser reconstruído pela aplicação.
               </div>
             </q-banner>
 

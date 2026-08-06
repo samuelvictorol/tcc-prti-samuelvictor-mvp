@@ -39,9 +39,10 @@ const DEFAULT_CLOUD_MESSAGE_LABELS = Object.freeze({
 const BACKUP_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
 
 function isUnsupportedCloudMessage(message = {}) {
-  return String(message.type || '').toLowerCase() === 'unsupported'
-    || (Array.isArray(message.errors)
-      && message.errors.some((error) => Number(error?.code) === 131051));
+  const type = String(message.type || '').toLowerCase();
+  return ['unsupported', 'unknown'].includes(type)
+    || webhookEventsManager.providerErrorsFor(message)
+      .some((error) => Number(error?.code) === 131051);
 }
 
 function isSensitiveProfileAuthUseCase(value) {
@@ -236,10 +237,41 @@ function matchingCloudContact(contacts = [], message = {}) {
   )) || null;
 }
 
-function cloudMessageBody(message = {}) {
+function cleanCloudMessageValue(value, max = conversationsManager.MAX_BODY_LENGTH) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'object') {
+    const nested = value.body
+      ?? value.text?.body
+      ?? value.text
+      ?? value.message
+      ?? value.code
+      ?? value.verification_code
+      ?? value.verificationCode
+      ?? value.otp;
+    if (nested === undefined || nested === null || nested === value) return null;
+    return cleanCloudMessageValue(nested, max);
+  }
+  const normalized = String(value).replace(/\r\n?/g, '\n').trim();
+  return normalized ? normalized.slice(0, max) : null;
+}
+
+function cloudMessageErrorLines(message = {}) {
+  return webhookEventsManager.providerErrorsFor(message).map((error) => {
+    const code = error.code === null ? null : `META_${error.code}`;
+    const diagnostics = [...new Set([
+      error.title,
+      error.message,
+      error.details
+    ].filter(Boolean))];
+    const label = code ? `Erro tecnico da Meta ${code}` : 'Erro tecnico informado pela Meta';
+    return [label, diagnostics.join(' - ')].filter(Boolean).join(': ');
+  }).filter(Boolean);
+}
+
+function cloudMessageBody(message = {}, options = {}) {
   const type = String(message.type || 'unknown');
   const candidates = [
-    message.text?.body,
+    options.textBody ?? message.text?.body,
     message.button?.text,
     message.button?.payload,
     message.interactive?.button_reply?.title,
@@ -251,10 +283,32 @@ function cloudMessageBody(message = {}) {
     message.reaction?.emoji,
     message.location?.name,
     message.location?.address,
-    message.errors?.[0]?.title
+    message.code,
+    message.verification_code,
+    message.otp,
+    message.body,
+    message.content,
+    message.unsupported?.text?.body,
+    message.unsupported?.text,
+    message.unsupported?.body,
+    message.unsupported?.content,
+    message.unsupported?.message,
+    message.unsupported?.code,
+    message.unsupported?.verification_code,
+    message.unsupported?.otp,
+    message.unsupported?.payload
   ];
-  const body = candidates.find((value) => typeof value === 'string' && value.trim());
-  return String(body || DEFAULT_CLOUD_MESSAGE_LABELS[type] || `[${type}]`).slice(0, conversationsManager.MAX_BODY_LENGTH);
+  const content = candidates.map((value) => cleanCloudMessageValue(value)).find(Boolean);
+  const diagnosticLines = cloudMessageErrorLines(message);
+  const fallback = DEFAULT_CLOUD_MESSAGE_LABELS[type]
+    || (type === 'unsupported' ? '[Mensagem nao suportada pela Meta]' : `[${type}]`);
+  const missingContentNotice = !content && diagnosticLines.length
+    ? '[Conteudo original nao fornecido pela Meta]'
+    : null;
+  return [content || (!diagnosticLines.length ? fallback : null), missingContentNotice, ...diagnosticLines]
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, conversationsManager.MAX_BODY_LENGTH);
 }
 
 function cloudMessageSentAt(message = {}) {
@@ -264,6 +318,7 @@ function cloudMessageSentAt(message = {}) {
 
 function cloudConversationMetadata(message, value, businessAccountId, providerContact = {}) {
   const templatePreview = templatePreviewFromMetaTemplate(message.template, cloudMessageBody(message));
+  const providerErrors = webhookEventsManager.providerErrorsFor(message);
   return {
     provider: 'meta_whatsapp_cloud',
     businessAccountId: businessAccountId || null,
@@ -279,6 +334,26 @@ function cloudConversationMetadata(message, value, businessAccountId, providerCo
       ? message[message.type] || null
       : null,
     interactive: message.interactive || null,
+    providerErrors,
+    unsupported: isUnsupportedCloudMessage(message) ? {
+      type: message.unsupported?.type || null,
+      rawType: message.unsupported?.raw_type || null,
+      contentProvided: Boolean([
+        message.text?.body,
+        message.code,
+        message.verification_code,
+        message.otp,
+        message.body,
+        message.content,
+        message.unsupported?.body,
+        message.unsupported?.content,
+        message.unsupported?.message,
+        message.unsupported?.code,
+        message.unsupported?.verification_code,
+        message.unsupported?.otp,
+        message.unsupported?.payload
+      ].some((value) => cleanCloudMessageValue(value)))
+    } : null,
     ...(templatePreview ? {
       template: { name: templatePreview.name, languageCode: templatePreview.languageCode },
       templatePreview
@@ -437,7 +512,9 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
     displayName: cloudProfile({ ...matchedProviderContact, ...message }).displayName || contact.displayName || address,
     avatarUrl: cloudProfile({ ...matchedProviderContact, ...message }).avatarUrl || contact.avatarUrl || null,
     providerMessageId: message.id || null,
-    body: message.type === 'text' ? safeInboundText : cloudMessageBody(message),
+    body: message.type === 'text'
+      ? cloudMessageBody(message, { textBody: safeInboundText })
+      : cloudMessageBody(message),
     type: message.type || 'unknown',
     hasMedia: CLOUD_MESSAGE_TYPES_WITH_MEDIA.has(message.type),
     sentAt,
@@ -455,6 +532,7 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
       contactId: contact.id,
       providerMessageId: message.id,
       type: message.type,
+      providerErrors: webhookEventsManager.providerErrorsFor(message),
       ...(permissionGranted ? {
         permissionChannels: ['whatsapp_cloud'],
         permissionCommand,
@@ -470,6 +548,7 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
     text: message.text?.body
       ? String(safeInboundText).slice(0, 2000)
         : null,
+    providerErrors: webhookEventsManager.providerErrorsFor(message),
     ...(invitationInvocation ? {
       text: permissionCommand,
       inviteAttributed: Boolean(invitationAttribution)
@@ -622,6 +701,64 @@ async function processCloudInboundMessage(message, value, businessAccountId) {
   return resultSummary;
 }
 
+async function processUnsupportedCloudInboundMessage(message, value, businessAccountId) {
+  const resultSummary = {
+    receivedMessages: 1,
+    receivedStatuses: 0,
+    unsupportedMessages: 1,
+    createdContacts: 0,
+    updatedContacts: 0
+  };
+  const address = cloudIdentity(message);
+  if (!address) return resultSummary;
+  const providerContact = matchingCloudContact(value.contacts || [], message) || {};
+  const body = cloudMessageBody(message);
+  const providerErrors = webhookEventsManager.providerErrorsFor(message);
+  const metadata = cloudConversationMetadata(message, value, businessAccountId, providerContact);
+  const sentAt = cloudMessageSentAt(message);
+  const recordedInbound = await conversationsManager.recordInbound({
+    channel: 'whatsapp_cloud',
+    externalId: address,
+    // Mensagens tecnicas/unsupported nunca criam nem associam um contato novo.
+    // Se a conversa ja existia, o vinculo previamente salvo e preservado pelo upsert.
+    displayName: cloudProfile({ ...providerContact, ...message }).displayName || address,
+    avatarUrl: cloudProfile({ ...providerContact, ...message }).avatarUrl || null,
+    providerMessageId: message.id || null,
+    body,
+    type: message.type || 'unsupported',
+    hasMedia: false,
+    sentAt,
+    metadata
+  });
+  await logsManager.create({
+    level: 'warn',
+    channel: 'whatsapp_cloud',
+    action: 'message.unsupported',
+    message: providerErrors.length
+      ? 'Mensagem tecnica recebida com diagnostico da Meta'
+      : 'Mensagem nao suportada recebida pelo WhatsApp Cloud',
+    context: {
+      conversationId: recordedInbound?.conversation?.id || null,
+      providerMessageId: message.id || null,
+      type: message.type || 'unsupported',
+      unsupportedType: message.unsupported?.raw_type || message.unsupported?.type || null,
+      providerErrors,
+      contentProvided: Boolean(metadata.unsupported?.contentProvided)
+    }
+  });
+  emit('whatsapp_cloud:message', {
+    contactId: recordedInbound?.conversation?.contactId || null,
+    conversationId: recordedInbound?.conversation?.id || null,
+    providerMessageId: message.id || null,
+    from: address,
+    type: message.type || 'unsupported',
+    text: body.slice(0, 2000),
+    providerErrors,
+    sentAt: sentAt.toISOString()
+  });
+  return resultSummary;
+}
+
 async function processCloudReceipt(receipt) {
   const notificationsManager = require('./notifications.manager');
   const storedReceipt = await notificationsManager.storeCloudReceipt(receipt);
@@ -669,7 +806,12 @@ async function processCloudWebhookDescriptor(descriptor) {
   };
   for (const message of Array.isArray(value.messages) ? value.messages : []) {
     if (isUnsupportedCloudMessage(message)) {
-      summary.unsupportedMessages += 1;
+      const result = await processUnsupportedCloudInboundMessage(
+        message,
+        value,
+        descriptor.businessAccountId
+      );
+      for (const key of Object.keys(result)) summary[key] += result[key];
       continue;
     }
     const result = await processCloudInboundMessage(message, value, descriptor.businessAccountId);
@@ -1144,6 +1286,14 @@ async function sendConversationText(id, text, options = {}) {
     );
   }
   const openConversation = await conversationsManager.requireOpenCloudServiceWindow(id);
+  if (!openConversation.conversation.contact) {
+    throw new ApiError(
+      409,
+      'Evento tecnico disponivel somente para consulta; nenhum contato foi cadastrado',
+      null,
+      'WHATSAPP_CLOUD_TECHNICAL_CONVERSATION_READ_ONLY'
+    );
+  }
   const destination = normalizeMetaDestination(openConversation.externalId);
   const contactId = openConversation.conversation.contact
     ? String(openConversation.conversation.contact._id || openConversation.conversation.contact)

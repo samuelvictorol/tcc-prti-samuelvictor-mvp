@@ -76,8 +76,9 @@ function unique(values) {
 }
 
 function isUnsupportedMessage(message = {}) {
-  return String(message.type || '').toLowerCase() === 'unsupported'
-    || asArray(message.errors).some((error) => Number(error?.code) === 131051);
+  const type = String(message.type || '').toLowerCase();
+  return ['unsupported', 'unknown'].includes(type)
+    || providerErrorsFor(message).some((error) => Number(error?.code) === 131051);
 }
 
 function safeProviderError(error = {}) {
@@ -94,11 +95,51 @@ function safeProviderError(error = {}) {
   };
 }
 
+function rawProviderErrorsFor(value = {}) {
+  const found = [];
+  const seen = new WeakSet();
+  const visitedErrors = new WeakSet();
+
+  function add(error) {
+    if (!error || typeof error !== 'object' || visitedErrors.has(error)) return;
+    visitedErrors.add(error);
+    found.push(error);
+  }
+
+  function visit(node, depth = 0) {
+    if (!node || typeof node !== 'object' || depth > 12 || seen.has(node)) return;
+    seen.add(node);
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, depth + 1);
+      return;
+    }
+    for (const [key, child] of Object.entries(node)) {
+      const normalizedKey = String(key).toLowerCase();
+      if (normalizedKey === 'errors' && Array.isArray(child)) {
+        for (const error of child) add(error);
+      } else if (
+        normalizedKey === 'error'
+        && child
+        && typeof child === 'object'
+        && ('code' in child || 'title' in child || 'message' in child || 'error_data' in child)
+      ) {
+        add(child);
+      }
+      visit(child, depth + 1);
+    }
+  }
+
+  visit(value);
+  return found;
+}
+
 function providerErrorsFor(value = {}) {
-  return [
-    ...asArray(value.errors),
-    ...asArray(value.messages).flatMap((message) => asArray(message?.errors))
-  ].map(safeProviderError);
+  const uniqueErrors = new Map();
+  for (const error of rawProviderErrorsFor(value).map(safeProviderError)) {
+    const key = stableStringify(error);
+    if (!uniqueErrors.has(key)) uniqueErrors.set(key, error);
+  }
+  return [...uniqueErrors.values()];
 }
 
 function eventTypeFor(field, value = {}) {
@@ -106,7 +147,7 @@ function eventTypeFor(field, value = {}) {
   const messages = asArray(value.messages);
   const hasMessages = messages.length > 0;
   const hasStatuses = Array.isArray(value.statuses) && value.statuses.length > 0;
-  const hasErrors = Array.isArray(value.errors) && value.errors.length > 0;
+  const hasErrors = providerErrorsFor(value).length > 0;
   if (hasMessages && hasStatuses) return 'message_and_status';
   if (hasMessages && messages.every(isUnsupportedMessage)) return 'unsupported_message';
   if (hasMessages) return 'message';
@@ -169,6 +210,12 @@ function buildSummary(field, value = {}) {
   if (statuses.length) parts.push(statuses.length + (statuses.length === 1 ? ' status' : ' status'));
   if (contacts.length) parts.push(contacts.length + (contacts.length === 1 ? ' contato' : ' contatos'));
   if (providerErrors.length) parts.push(providerErrors.length + (providerErrors.length === 1 ? ' erro informado' : ' erros informados'));
+  const primaryError = providerErrors[0];
+  if (primaryError) {
+    const code = primaryError.code === null ? null : 'META_' + primaryError.code;
+    const diagnostic = unique([primaryError.title, primaryError.message, primaryError.details]).join(' - ');
+    if (code || diagnostic) parts.push([code, diagnostic].filter(Boolean).join(': '));
+  }
   if (!parts.length) parts.push('Atualização recebida da Meta');
   return {
     title: 'WhatsApp Cloud · ' + humanizeField(field),
@@ -566,5 +613,6 @@ module.exports = {
   dedupeKeyFor,
   stableStringify,
   payloadWithRedactedMessages,
+  providerErrorsFor,
   toListItem
 };
